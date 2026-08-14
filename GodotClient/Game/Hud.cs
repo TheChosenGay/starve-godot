@@ -51,15 +51,31 @@ public partial class Hud : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         MouseFilter = MouseFilterEnum.Ignore;
 
-        _status = new Label
-        {
-            Position = new Vector2(16, 12),
-            Modulate = new Color(1f, 0.95f, 0.8f),
-        };
-        AddChild(_status);
+        // 全屏容器布局：左右两列，随窗口缩放自适应
+        var root = new MarginContainer();
+        root.SetAnchorsPreset(LayoutPreset.FullRect);
+        root.AddThemeConstantOverride("margin_left", 16);
+        root.AddThemeConstantOverride("margin_top", 12);
+        root.AddThemeConstantOverride("margin_right", 16);
+        root.AddThemeConstantOverride("margin_bottom", 12);
+        AddChild(root);
+
+        var main = new HBoxContainer();
+        main.AddThemeConstantOverride("separation", 24);
+        root.AddChild(main);
+
+        // 左列：状态 / 操作 / 背包 / 日志（日志弹性占满剩余高度）
+        var left = new VBoxContainer();
+        left.AddThemeConstantOverride("separation", 8);
+        left.CustomMinimumSize = new Vector2(420, 0);
+        left.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        main.AddChild(left);
+
+        _status = new Label { Modulate = new Color(1f, 0.95f, 0.8f) };
+        left.AddChild(_status);
 
         // 操作按钮行
-        var actionBar = new HBoxContainer { Position = new Vector2(16, 108) };
+        var actionBar = new HBoxContainer();
         actionBar.AddChild(MakeButton("采集", () => GatherPressed?.Invoke()));
         actionBar.AddChild(MakeButton("攻击", () => AttackPressed?.Invoke()));
         actionBar.AddChild(MakeButton("拾取", () => PickupPressed?.Invoke()));
@@ -67,10 +83,11 @@ public partial class Hud : Control
         actionBar.AddChild(MakeButton("建火堆", () => BuildPressed?.Invoke(1)));
         actionBar.AddChild(MakeButton("建木墙", () => BuildPressed?.Invoke(2)));
         actionBar.AddChild(MakeButton("睡眠", () => SleepPressed?.Invoke()));
-        AddChild(actionBar);
+        left.AddChild(actionBar);
 
         // 背包
-        var bagPanel = new VBoxContainer { Position = new Vector2(16, 152) };
+        var bagPanel = new VBoxContainer();
+        bagPanel.AddThemeConstantOverride("separation", 4);
         bagPanel.AddChild(new Label { Text = "背包" });
         _bag = new GridContainer { Columns = 6 };
         bagPanel.AddChild(_bag);
@@ -84,29 +101,40 @@ public partial class Hud : Control
         bagBar.AddChild(_bagDrop);
         bagBar.AddChild(_bagSplit);
         bagPanel.AddChild(bagBar);
-        AddChild(bagPanel);
+        left.AddChild(bagPanel);
+
+        _log = new RichTextLabel
+        {
+            BbcodeEnabled = true,
+            Modulate = new Color(0.95f, 0.9f, 0.8f, 0.9f),
+            CustomMinimumSize = new Vector2(0, 120),
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        left.AddChild(_log);
 
         // 制作
-        var craftPanel = new VBoxContainer { Position = new Vector2(420, 12) };
+        var right = new VBoxContainer();
+        right.AddThemeConstantOverride("separation", 8);
+        right.CustomMinimumSize = new Vector2(420, 0);
+        right.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        main.AddChild(right);
+
+        var craftPanel = new VBoxContainer();
+        craftPanel.AddThemeConstantOverride("separation", 4);
         craftPanel.AddChild(new Label { Text = "制作" });
-        var scroll = new ScrollContainer { CustomMinimumSize = new Vector2(400, 300) };
+        var scroll = new ScrollContainer
+        {
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0, 160),
+        };
         _craftList = new VBoxContainer();
+        _craftList.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         scroll.AddChild(_craftList);
-        _craftList.SetAnchorsPreset(LayoutPreset.TopWide);
         craftPanel.AddChild(scroll);
         _craftCancel = MakeButton("取消制作", () => CancelCraftPressed?.Invoke());
         _craftCancel.Disabled = true;
         craftPanel.AddChild(_craftCancel);
-        AddChild(craftPanel);
-
-        _log = new RichTextLabel
-        {
-            Position = new Vector2(16, 540),
-            Size = new Vector2(390, 190),
-            BbcodeEnabled = true,
-            Modulate = new Color(0.95f, 0.9f, 0.8f, 0.9f),
-        };
-        AddChild(_log);
+        right.AddChild(craftPanel);
     }
 
     public void SetStatus(string text)
