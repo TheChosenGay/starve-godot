@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
+using Google.Protobuf;
 using Starve.Core;
 using Starve.Game.V1;
 using Starve.Protocol;
@@ -31,6 +33,7 @@ public partial class GameRoot : Node
     private EntityLayer? _entityLayer;
     private ParallaxView? _parallax;
     private WeatherView? _weather;
+    private FogGrid? _fogGrid;
     private MinimapView? _minimap;
     private LightingPass? _lighting;
     private LutPass? _lut;
@@ -44,6 +47,7 @@ public partial class GameRoot : Node
     private (ulong EntityId, int Kind, int W, int H, bool Ok)? _buildPreview;
     private System.Numerics.Vector2? _mouseWorld;
     private long _lastBuildCheckAt;
+    private long _lightningAmbientUntil;
 
     private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
     private static string? CapturePath => OS.GetCmdlineUserArgs()
@@ -55,6 +59,15 @@ public partial class GameRoot : Node
     {
         ActorNode.Preload();
 
+        // Godot 内建 Bloom（辉光）：2D 也生效，配合光照 pass 的亮部
+        var env = new Godot.Environment();
+        env.GlowEnabled = true;
+        env.GlowIntensity = 0.7f;
+        env.GlowStrength = 0.9f;
+        env.GlowBloom = 0.1f;
+        env.GlowHdrThreshold = 0.85f;
+        AddChild(new WorldEnvironment { Environment = env });
+
         _parallax = new ParallaxView { Name = "Parallax" };
         AddChild(_parallax);
         _world = new Node2D { Name = "World" };
@@ -63,10 +76,13 @@ public partial class GameRoot : Node
         _world.AddChild(_mapView);
         _entityLayer = new EntityLayer { Name = "EntityLayer" };
         _world.AddChild(_entityLayer);
+        _fogGrid = new FogGrid { Name = "FogGrid" };
+        _world.AddChild(_fogGrid);
         _ghost = new GhostNode { Name = "Ghost", ZIndex = 4096, Visible = false };
         _world.AddChild(_ghost);
 
         _weather = new WeatherView { Name = "Weather" };
+        _weather.OnLightning += () => _lightningAmbientUntil = NowMs() + 350;
         AddChild(_weather);
         _lighting = new LightingPass { Name = "Lighting" };
         AddChild(_lighting);
@@ -106,6 +122,25 @@ public partial class GameRoot : Node
         hud.PickupPressed += () => WithSelected(id => _client?.Commands.Pickup(id));
         hud.DemolishPressed += () => WithSelected(id => _client?.Commands.Demolish(id));
         hud.BuildPressed += kind => _ = DoBuildAsync(kind);
+        hud.BagUsePressed += slot => WithBagSlot(slot, kind => _client?.Commands.Use(kind));
+        hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
+        {
+            var equipped = OwnComponent("Equipped", Equipped.Parser)?.Kind ?? 0;
+            _client?.Commands.Equip((int)equipped == kind ? 0 : kind);
+        });
+        hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
+        {
+            var count = OwnItemCount(slot);
+            if (count > 0) _client?.Commands.Drop(kind, count);
+        });
+        hud.BagSplitPressed += slot => WithBagSlot(slot, kind =>
+        {
+            var count = OwnItemCount(slot);
+            if (count > 1) _client?.Commands.Split(slot, count / 2);
+        });
+        hud.CraftPressed += recipeId => _ = DoCraftAsync(recipeId);
+        hud.CancelCraftPressed += () => _client?.Commands.CancelCraft();
+        hud.SleepPressed += () => _hud?.Log("睡眠：服务端暂无 world.sleep 接口，待实现后接入");
     }
 
     private async Task StartAsync()
@@ -175,9 +210,11 @@ public partial class GameRoot : Node
             _lastWeatherRevision = client.World.Revision;
             var w = client.World.Weather;
             _weather!.SetWeather(w?.Rain ?? 0, w?.Fog ?? 0, client.World.Season, viewport);
+            if (_tilemap is not null) _fogGrid!.SetFog(client.World.WeatherFrame, _tilemap);
             UpdateLut(client.World.DayLight);
         }
 
+        _weather!.Tick(delta, viewport);
         UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
         _lighting!.Size = viewport;
         _lut!.Size = viewport;
@@ -193,6 +230,7 @@ public partial class GameRoot : Node
         var dark = Mathf.Max(0, 1 - dayLight * 2);
         var sunT = 1 - dark;
         var ambient = 0.92f - dark * 0.3f;
+        if (NowMs() < _lightningAmbientUntil) ambient += 0.5f;
         var sunColor = new Color(
             0.3f * (0.33f + 0.67f * sunT),
             0.29f * (0.41f + 0.59f * sunT),
@@ -300,6 +338,104 @@ public partial class GameRoot : Node
         }
 
         _entityLayer!.SyncEntities(world.Entities);
+        UpdateBagAndCraft(world);
+    }
+
+    private void UpdateBagAndCraft(WorldService world)
+    {
+        if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
+        var inv = own.Get("Inventory", Inventory.Parser);
+        var equipped = own.Get("Equipped", Equipped.Parser);
+        var crafting = own.Get("Crafting", Crafting.Parser);
+        var cfg = world.Config;
+
+        var items = (inv?.Items ?? new()).Select(it =>
+            new ItemView((int)it.Kind, ItemName(cfg, (int)it.Kind), it.Count, ItemColor(cfg, (int)it.Kind))).ToList();
+        _hud.RenderInventory(items, (int)(equipped?.Kind ?? 0), cfg?.InventorySlots ?? 12);
+
+        if (cfg is null) return;
+        var ownPos = own.Get("Position", Position.Parser);
+        var near = StationNear(world, ownPos);
+        var materials = (inv?.Items ?? new())
+            .Where(i => (int)i.Kind > 0)
+            .ToDictionary(i => (int)i.Kind, i => i.Count);
+        var recipes = cfg.Recipes.Select(r =>
+        {
+            var stationOk = (int)r.Workstation == 0 || near.Contains((int)r.Workstation);
+            var can = stationOk && r.Ingredients.All(i => materials.GetValueOrDefault((int)i.Kind) >= i.Count);
+            return new RecipeView(
+                r.Id,
+                ItemName(cfg, (int)r.Output.Kind),
+                r.Ticks,
+                (int)r.Workstation == 0 ? "徒手可做" : stationOk ? "工作站附近 ✓" : "需要工作站",
+                can,
+                r.Ingredients.Select(i =>
+                    new IngredientView(ItemName(cfg, (int)i.Kind), materials.GetValueOrDefault((int)i.Kind), i.Count)).ToList());
+        }).ToList();
+        var total = crafting is null
+            ? 0
+            : (long)(cfg.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0);
+        _hud.RenderCraft(
+            recipes,
+            crafting is null ? null : new CraftingView(crafting.RecipeId, (long)crafting.TicksLeft, total));
+    }
+
+    private static HashSet<int> StationNear(WorldService world, Position? ownPos)
+    {
+        var set = new HashSet<int>();
+        if (ownPos is null) return set;
+        foreach (var view in world.Entities.Values)
+        {
+            var ws = view.Get("Workstation", Workstation.Parser);
+            var p = view.Get("Position", Position.Parser);
+            if (ws is null || p is null) continue;
+            if (Math.Abs(p.X - ownPos.X) + Math.Abs(p.Y - ownPos.Y) <= 3) set.Add((int)ws.Type);
+        }
+        return set;
+    }
+
+    private static string ItemName(GameConfig? cfg, int kind)
+    {
+        var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
+        return t?.Name ?? kind.ToString();
+    }
+
+    private static Color ItemColor(GameConfig? cfg, int kind)
+    {
+        var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
+        if (t is not null && t.Color.StartsWith("#") && int.TryParse(t.Color.AsSpan(1), NumberStyles.HexNumber, null, out var v))
+        {
+            return new Color(((v >> 16) & 0xff) / 255f, ((v >> 8) & 0xff) / 255f, (v & 0xff) / 255f);
+        }
+        return Colors.White;
+    }
+
+    private void WithBagSlot(int slot, Action<int> act)
+    {
+        var inv = OwnComponent("Inventory", Inventory.Parser);
+        if (inv is null || slot < 0 || slot >= inv.Items.Count) return;
+        var kind = (int)inv.Items[slot].Kind;
+        if (kind > 0) act(kind);
+    }
+
+    private int OwnItemCount(int slot)
+    {
+        var inv = OwnComponent("Inventory", Inventory.Parser);
+        return inv is not null && slot >= 0 && slot < inv.Items.Count ? inv.Items[slot].Count : 0;
+    }
+
+    private T? OwnComponent<T>(string name, MessageParser<T> parser) where T : class, IMessage<T> =>
+        _client is not null && _client.World.Entities.TryGetValue(_ownId, out var view)
+            ? view.Get(name, parser)
+            : null;
+
+    private async Task DoCraftAsync(string recipeId)
+    {
+        if (_client is null) return;
+        var resp = await _client.Commands.CraftAsync(recipeId);
+        _hud?.Log(resp is { Started: true }
+            ? $"开始制作 {recipeId}（{resp.Ticks} ticks）"
+            : $"制作失败: {resp?.Message ?? "超时"}");
     }
 
     private static Texture2D BakeNormalTexture(TileMap tm)

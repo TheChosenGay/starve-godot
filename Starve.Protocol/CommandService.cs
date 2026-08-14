@@ -43,6 +43,17 @@ public sealed class CommandService
     public void CancelCraft() =>
         Notify(Routes.CancelCraft, new PlayerCancelCraft());
 
+    /// <summary>制作（request/response）：服务端校验材料/工作站并返回是否开始。</summary>
+    public async Task<CraftResponse?> CraftAsync(string recipeId, CancellationToken ct = default)
+    {
+        var resp = await _session.RequestAsync(
+            Routes.Craft,
+            new PlayerCraft { RecipeId = recipeId }.ToByteArray(),
+            5000,
+            ct);
+        return resp is null ? null : CraftResponse.Parser.ParseFrom(resp);
+    }
+
     public void Split(int fromSlot, int count) =>
         Notify(Routes.Split, new PlayerSplit { FromSlot = fromSlot, Count = count });
 

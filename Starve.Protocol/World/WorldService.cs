@@ -48,6 +48,9 @@ public sealed class WorldService
     /// <summary>最近一帧天气（平均雨/雾 + 风向风速），null = 还没收到。</summary>
     public WeatherSummary? Weather { get; private set; }
 
+    /// <summary>原始天气帧（含按格雨/雾），供渲染层做按格雾/雨。</summary>
+    public WeatherFrame? WeatherFrame { get; private set; }
+
     /// <summary>世界版本号：任何快照/增量/配置变化都会 +1（渲染层轮询用）。</summary>
     public int Revision => Volatile.Read(ref _revision);
 
@@ -91,7 +94,8 @@ public sealed class WorldService
         }
         else if (msg.Route == Routes.WeatherFrame)
         {
-            var frame = WeatherFrame.Parser.ParseFrom(msg.Data);
+            var frame = Starve.Game.V1.WeatherFrame.Parser.ParseFrom(msg.Data);
+            WeatherFrame = frame;
             Weather = frame.Cells.Count > 0
                 ? new WeatherSummary(
                     (float)frame.Cells.Average(c => c.Rain),
