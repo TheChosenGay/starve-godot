@@ -1,0 +1,13 @@
+<Project Sdk="Godot.NET.Sdk/4.7.1">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GodotClient</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Starve.Core/Starve.Core.csproj" />
+    <ProjectReference Include="../Starve.Protocol/Starve.Protocol.csproj" />
+  </ItemGroup>
+</Project>
