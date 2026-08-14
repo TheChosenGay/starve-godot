@@ -15,7 +15,7 @@ public partial class MinimapView : Control
     public override void _Ready()
     {
         _tex.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        _tex.Position = new Vector2(-170, 20);
+        _tex.Position = new Vector2(-170, 36);
         AddChild(_tex);
     }
 

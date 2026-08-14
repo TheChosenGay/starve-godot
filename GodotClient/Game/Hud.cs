@@ -45,11 +45,23 @@ public partial class Hud : Control
     private VBoxContainer? _craftList;
     private Button? _craftCancel;
     private int _selectedSlot = -1;
+    private Label? _fps;
+    private double _fpsTimer;
 
     public override void _Ready()
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
         MouseFilter = MouseFilterEnum.Ignore;
+
+        _fps = new Label
+        {
+            Modulate = new Color(0.6f, 1f, 0.7f),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Text = "FPS --",
+            Position = new Vector2(0, 6),
+            CustomMinimumSize = new Vector2(80, 22),
+        };
+        // FPS 标签最后加（最上层），避免被右侧容器盖住
 
         // 全屏容器布局：左右两列，随窗口缩放自适应
         var root = new MarginContainer();
@@ -135,7 +147,22 @@ public partial class Hud : Control
         _craftCancel.Disabled = true;
         craftPanel.AddChild(_craftCancel);
         right.AddChild(craftPanel);
+
+        AddChild(_fps);
     }
+
+    public override void _Process(double delta)
+    {
+        _fpsTimer += delta;
+        if (_fpsTimer >= 0.3 && _fps is not null)
+        {
+            _fpsTimer = 0;
+            _fps.Text = $"FPS {Engine.GetFramesPerSecond()}";
+            // 右上角：随窗口宽度定位（不依赖锚点，最稳）
+            _fps.Position = new Vector2(GetViewportRect().Size.X - 96, 6);
+        }
+    }
+
 
     public void SetStatus(string text)
     {
