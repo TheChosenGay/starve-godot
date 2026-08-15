@@ -13,6 +13,18 @@ try
     Console.WriteLine($"[连接成功] uid={info.UserId} entity={info.EntityId}");
     Console.WriteLine($"[世界] 实体数 = {client.World.Count}");
 
+    var stations = client.World.Entities.Values
+        .Select(v => (v, ws: v.Get("Workstation", Workstation.Parser), b: v.Get("Building", Building.Parser)))
+        .Where(x => x.ws is not null || x.b is not null)
+        .Select(x =>
+        {
+            var p = x.v.Get("Position", Position.Parser);
+            var kind = x.ws is not null ? $"工作站#{x.ws.Type}" : $"建筑#{x.b!.Kind}";
+            return $"{kind} @({p?.X},{p?.Y})";
+        })
+        .ToList();
+    Console.WriteLine("[工作站/建筑] " + (stations.Count == 0 ? "无" : string.Join(", ", stations)));
+
     var n = 0;
     foreach (var (id, view) in client.World.Entities)
     {

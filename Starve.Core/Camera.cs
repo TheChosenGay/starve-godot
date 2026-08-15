@@ -80,6 +80,15 @@ public sealed class Camera
         _panY += (a - b) / 2;
     }
 
+    /// <summary>调试/演示：把相机瞬移到世界坐标（自由视角 + 跟随时叠加平移）。</summary>
+    public void Teleport(float x, float y)
+    {
+        _panX = x;
+        _panY = y;
+        _smoothX = x;
+        _smoothY = y;
+    }
+
     public float CenterX() => _following ? _smoothX + _panX : _panX;
     public float CenterY() => _following ? _smoothY + _panY : _panY;
 

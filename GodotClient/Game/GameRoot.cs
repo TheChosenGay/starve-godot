@@ -38,6 +38,7 @@ public partial class GameRoot : Node
     private MinimapView? _minimap;
     private LightingPass? _lighting;
     private LutPass? _lut;
+    private VolumetricView? _volumetric;
     private GhostNode? _ghost;
     private Hud? _hud;
     private int _lastRevision = -1;
@@ -49,10 +50,15 @@ public partial class GameRoot : Node
     private System.Numerics.Vector2? _mouseWorld;
     private long _lastBuildCheckAt;
     private long _lightningAmbientUntil;
+    private readonly bool _freeCamera = CameraArg is not null;
 
     private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
     private static string? CapturePath => OS.GetCmdlineUserArgs()
         .SkipWhile(a => a != "--capture")
+        .Skip(1)
+        .FirstOrDefault();
+    private static string? CameraArg => OS.GetCmdlineUserArgs()
+        .SkipWhile(a => a != "--cam")
         .Skip(1)
         .FirstOrDefault();
 
@@ -92,6 +98,8 @@ public partial class GameRoot : Node
         _lut = new LutPass { Name = "Lut" };
         _lut.SetAtlas(LutBuilder.Build().Atlas);
         AddChild(_lut);
+        _volumetric = new VolumetricView { Name = "Volumetric" };
+        AddChild(_volumetric);
 
         var ui = new CanvasLayer { Layer = 10 };
         AddChild(ui);
@@ -164,6 +172,11 @@ public partial class GameRoot : Node
             var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
             var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
             _ownId = info.EntityId;
+            if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
+                float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
+            {
+                _camera.Teleport(cx, cy);
+            }
             _hud?.Log($"[已连接] uid={info.UserId} entity={info.EntityId}");
         }
         catch (Exception ex)
@@ -198,7 +211,7 @@ public partial class GameRoot : Node
 
         var now = NowMs();
         System.Numerics.Vector2? own = _smoothers.TryGetValue(_ownId, out var sm) ? sm.Current(now) : null;
-        _camera.Follow(own?.X, own?.Y);
+        if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
         _camera.Tick((float)(delta * 1000));
 
         var viewport = GetViewport().GetVisibleRect().Size;
@@ -231,6 +244,23 @@ public partial class GameRoot : Node
         UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
         _lighting!.Size = viewport;
         _lut!.Size = viewport;
+        var fires = new List<Vector2>();
+        var seeds = new List<long>();
+        foreach (var view in client.World.Entities.Values)
+        {
+            var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+            if (p is null) continue;
+            var ws = view.Get("Workstation", Workstation.Parser);
+            var bld = view.Get("Building", Building.Parser);
+            var isFire = (ws is not null && (int)ws.Type == 1) ||
+                         (bld is not null && bld.Placed && (int)bld.Kind == 1);
+            if (isFire)
+            {
+                fires.Add(new Vector2(p.X, p.Y));
+                seeds.Add((long)view.EntityId);
+            }
+        }
+        _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.Scale);
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
         _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now);
