@@ -122,6 +122,16 @@ public partial class GameRoot : Node
             _entityLayer?.PlayAction(id, "attack");
             _client?.Commands.Attack(id);
         });
+        hud.ChopPressed += () => WithSelected(id =>
+        {
+            _entityLayer?.PlayAction(id, "attack");
+            _client?.Commands.Chop(id);
+        });
+        hud.MinePressed += () => WithSelected(id =>
+        {
+            _entityLayer?.PlayAction(id, "attack");
+            _client?.Commands.Mine(id);
+        });
         hud.PickupPressed += () => WithSelected(id => _client?.Commands.Pickup(id));
         hud.DemolishPressed += () => WithSelected(id => _client?.Commands.Demolish(id));
         hud.BuildPressed += kind => _ = DoBuildAsync(kind);

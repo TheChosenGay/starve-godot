@@ -23,6 +23,8 @@ public partial class Hud : Control
 {
     public event Action? GatherPressed;
     public event Action? AttackPressed;
+    public event Action? ChopPressed;
+    public event Action? MinePressed;
     public event Action? PickupPressed;
     public event Action? DemolishPressed;
     public event Action<int>? BuildPressed;
@@ -90,6 +92,8 @@ public partial class Hud : Control
         var actionBar = new HBoxContainer();
         actionBar.AddChild(MakeButton("采集", () => GatherPressed?.Invoke()));
         actionBar.AddChild(MakeButton("攻击", () => AttackPressed?.Invoke()));
+        actionBar.AddChild(MakeButton("砍伐", () => ChopPressed?.Invoke()));
+        actionBar.AddChild(MakeButton("挖掘", () => MinePressed?.Invoke()));
         actionBar.AddChild(MakeButton("拾取", () => PickupPressed?.Invoke()));
         actionBar.AddChild(MakeButton("拆除", () => DemolishPressed?.Invoke()));
         actionBar.AddChild(MakeButton("建火堆", () => BuildPressed?.Invoke(1)));
