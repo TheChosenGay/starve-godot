@@ -31,6 +31,7 @@ public partial class GameRoot : Node
     private Node2D? _world;
     private MapView? _mapView;
     private EntityLayer? _entityLayer;
+    private CloudShadowView? _clouds;
     private ParallaxView? _parallax;
     private WeatherView? _weather;
     private FogGrid? _fogGrid;
@@ -74,6 +75,8 @@ public partial class GameRoot : Node
         AddChild(_world);
         _mapView = new MapView { Name = "MapView" };
         _world.AddChild(_mapView);
+        _clouds = new CloudShadowView { Name = "CloudShadows" };
+        _world.AddChild(_clouds);
         _entityLayer = new EntityLayer { Name = "EntityLayer" };
         _world.AddChild(_entityLayer);
         _fogGrid = new FogGrid { Name = "FogGrid" };
@@ -221,6 +224,12 @@ public partial class GameRoot : Node
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
         _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now);
+        _entityLayer.SetDayLight(client.World.DayLight);
+        _minimap!.SetView(
+            client.World.Entities,
+            new Vector2(_camera.CenterX(), _camera.CenterY()),
+            _camera.ZoomLevel,
+            viewport);
         UpdateHud();
     }
 
@@ -231,6 +240,7 @@ public partial class GameRoot : Node
         var sunT = 1 - dark;
         var ambient = 0.92f - dark * 0.3f;
         if (NowMs() < _lightningAmbientUntil) ambient += 0.5f;
+        if (world.Weather is { Rain: > 0.15f }) ambient *= 0.93f;
         var sunColor = new Color(
             0.3f * (0.33f + 0.67f * sunT),
             0.29f * (0.41f + 0.59f * sunT),

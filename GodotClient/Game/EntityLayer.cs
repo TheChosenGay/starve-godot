@@ -9,19 +9,21 @@ using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
-public readonly record struct EntityStyle(Color Color, float Radius, bool IsFire);
+public readonly record struct EntityStyle(Color Color, float Radius, bool IsFire, bool IsTree = false);
 
-/// <summary>实体层：世界实体 → 彩色菱形占位（阶段 1 简化；阶段 2 换骨骼/贴图）。</summary>
+/// <summary>实体层：世界实体 → 菱形占位（带投影/血条/受击闪白）或骨骼角色。</summary>
 public partial class EntityLayer : Node2D
 {
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
 	private readonly Dictionary<ulong, ActorNode> _actors = new();
 	private TileMap? _tilemap;
 	private long _lastNow;
+	private float _sunT = 1f;
 
 	public void SetTilemap(TileMap? tm) => _tilemap = tm;
 
-	/// <summary>按世界表增删实体并刷新颜色（阶段 1 每次世界变更全量同步，量小够用）。</summary>
+	public void SetDayLight(float dayLight) => _sunT = 1f - Mathf.Max(0, 1f - dayLight * 2f);
+
 	public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
 		var ids = _nodes.Keys.Concat(_actors.Keys).Distinct().ToList();
@@ -71,11 +73,11 @@ public partial class EntityLayer : Node2D
 				AddChild(node);
 			}
 			node.Visible = true;
-			node.Configure(StyleFor(view));
+			var hp = view.Get("Health", Health.Parser);
+			node.Configure(StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0);
 		}
 	}
 
-	/// <summary>每帧用平滑位置更新实体本地坐标 + 画家排序。</summary>
 	public void UpdatePositions(
 		IReadOnlyDictionary<ulong, PositionSmoother> smoothers,
 		Func<ulong, bool> isMoving,
@@ -92,6 +94,7 @@ public partial class EntityLayer : Node2D
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			node.Position = new Vector2(local.X, local.Y);
 			node.ZIndex = (int)local.Y;
+			node.Tick(now, _sunT);
 		}
 
 		foreach (var (id, actor) in _actors)
@@ -103,10 +106,10 @@ public partial class EntityLayer : Node2D
 			actor.Position = new Vector2(local.X, local.Y);
 			actor.ZIndex = (int)local.Y;
 			actor.Update(deltaMs, isMoving(id));
+			actor.SetSunT(_sunT);
 		}
 	}
 
-	/// <summary>触发动作动画（攻击/采集）。</summary>
 	public void PlayAction(ulong id, string action)
 	{
 		if (_actors.TryGetValue(id, out var actor)) actor.Play(action);
@@ -146,12 +149,12 @@ public partial class EntityLayer : Node2D
 		{
 			return new EntityStyle((int)workable.Kind switch
 			{
-				1 => new Color(0.89f, 0.34f, 0.30f), // berry
-				2 => new Color(0.60f, 0.42f, 0.25f), // wood
-				3 => new Color(0.60f, 0.63f, 0.66f), // flint
-				4 => new Color(0.85f, 0.42f, 0.31f), // meat
+				1 => new Color(0.89f, 0.34f, 0.30f),
+				2 => new Color(0.60f, 0.42f, 0.25f),
+				3 => new Color(0.60f, 0.63f, 0.66f),
+				4 => new Color(0.85f, 0.42f, 0.31f),
 				_ => new Color(0.71f, 0.54f, 0.85f),
-			}, 7, false);
+			}, (int)workable.Kind == 2 ? 16 : 7, false, (int)workable.Kind == 2);
 		}
 
 		var creature = view.Get("Creature", Creature.Parser);
@@ -178,18 +181,53 @@ public partial class EntityLayer : Node2D
 	}
 }
 
-/// <summary>单个实体占位：彩色菱形 + 描边（自绘）。</summary>
+/// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 可选火堆点光。</summary>
 public partial class EntityNode : Node2D
 {
 	private Color _color = Colors.White;
 	private float _radius = 8;
 	private PointLight2D? _light;
 	private static Texture2D? _glowTexture;
+	private static Texture2D? _treeTexture;
+	private Sprite2D? _treeSprite;
+	private bool _isTree;
+	private int _healthCur;
+	private int _healthMax;
+	private bool _showBar;
+	private int _lastHealth = -1;
+	private long _flashUntil;
+	private float _sunT = 1f;
 
-	public void Configure(EntityStyle style)
+	public void Configure(EntityStyle style, int healthCur, int healthMax, bool showBar)
 	{
 		_color = style.Color;
 		_radius = style.Radius;
+		_isTree = style.IsTree;
+		_healthCur = healthCur;
+		_healthMax = healthMax;
+		_showBar = showBar;
+		if (_lastHealth >= 0 && healthCur < _lastHealth)
+		{
+			_flashUntil = (long)Time.GetTicksMsec() + 300;
+		}
+		_lastHealth = healthCur;
+		if (_isTree)
+		{
+			_treeTexture ??= GD.Load<Texture2D>("res://assets/tiles/tile_001.png");
+			_treeSprite ??= new Sprite2D
+			{
+				Texture = _treeTexture,
+				Centered = true,
+				Position = new Vector2(0, -27),
+				Scale = new Vector2(34f / _treeTexture.GetWidth(), 54f / _treeTexture.GetHeight()),
+			};
+			if (_treeSprite.GetParent() is null) AddChild(_treeSprite);
+			_treeSprite.Visible = true;
+		}
+		else if (_treeSprite is not null)
+		{
+			_treeSprite.Visible = false;
+		}
 		QueueRedraw();
 		if (style.IsFire)
 		{
@@ -202,15 +240,64 @@ public partial class EntityNode : Node2D
 		}
 	}
 
+	public void Tick(long now, float sunT)
+	{
+		_sunT = sunT;
+		if (_treeSprite is not null && _isTree)
+		{
+			_treeSprite.Rotation = Mathf.Sin(now / 560f + GetInstanceId() * 0.001f) * 0.045f;
+		}
+		if (now < _flashUntil) QueueRedraw();
+	}
+
 	public override void _Draw()
 	{
-		DrawColoredPolygon(
-			new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0) },
-			_color);
-		DrawPolyline(
-			new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0), new Vector2(0, -_radius) },
-			new Color(0.1f, 0.1f, 0.1f, 0.7f),
-			1.5f);
+		// 方向投影：太阳越高越短、越淡；影子朝太阳反方向偏移
+		var len = 0.35f + (1f - _sunT) * 1.0f;
+		var shadowW = Mathf.Max(7, _radius * 1.1f);
+		DrawEllipsePoly(
+			new Vector2(-shadowW * 0.5f * len, _radius * 0.15f),
+			shadowW * len,
+			shadowW * 0.35f,
+			new Color(0, 0, 0, 0.16f + 0.16f * _sunT));
+
+		if (!_isTree)
+		{
+			DrawColoredPolygon(
+				new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0) },
+				_color);
+			DrawPolyline(
+				new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0), new Vector2(0, -_radius) },
+				new Color(0.1f, 0.1f, 0.1f, 0.7f),
+				1.5f);
+		}
+
+		if (_showBar && _healthMax > 0)
+		{
+			var ratio = Mathf.Clamp(_healthCur / (float)_healthMax, 0, 1);
+			DrawRect(new Rect2(-11, -_radius - 12, 22, 4), new Color(0.2f, 0.2f, 0.2f, 0.9f));
+			DrawRect(new Rect2(-11, -_radius - 12, 22 * ratio, 4), ratio > 0.3f ? new Color(0.31f, 0.75f, 0.37f) : new Color(0.89f, 0.34f, 0.30f));
+		}
+
+		// 受击闪白
+		if (!_isTree && (long)Time.GetTicksMsec() < _flashUntil)
+		{
+			DrawColoredPolygon(
+				new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0) },
+				new Color(1, 1, 1, 0.6f));
+		}
+	}
+
+	private void DrawEllipsePoly(Vector2 center, float rx, float ry, Color color)
+	{
+		const int n = 24;
+		var pts = new Vector2[n];
+		for (var i = 0; i < n; i++)
+		{
+			var a = Mathf.Tau * i / n;
+			pts[i] = center + new Vector2(Mathf.Cos(a) * rx, Mathf.Sin(a) * ry);
+		}
+		DrawColoredPolygon(pts, color);
 	}
 
 	private static PointLight2D MakeLight()
@@ -225,7 +312,6 @@ public partial class EntityNode : Node2D
 		};
 	}
 
-	/// <summary>柔和径向光斑（白心 → 透明边缘），PointLight2D 用它做软光。</summary>
 	private static Texture2D CreateGlowTexture()
 	{
 		const int s = 64;

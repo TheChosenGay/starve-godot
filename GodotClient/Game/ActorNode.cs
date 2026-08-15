@@ -16,8 +16,9 @@ public partial class ActorNode : Node2D
     private readonly Dictionary<string, Node2D> _joints = new();
     private double _elapsed;
     private double _actionElapsed;
-    private bool _moving;
-    private string? _action;
+	private bool _moving;
+	private string? _action;
+	private float _sunT = 1f;
 
     public static void Preload()
     {
@@ -34,11 +35,17 @@ public partial class ActorNode : Node2D
         Build();
     }
 
-    public void Play(string action)
+	public void Play(string action)
     {
         _action = action;
         _actionElapsed = 0;
-    }
+	}
+
+	public void SetSunT(float sunT)
+	{
+		_sunT = sunT;
+		QueueRedraw();
+	}
 
     public void Update(double deltaMs, bool moving)
     {
@@ -90,7 +97,7 @@ public partial class ActorNode : Node2D
         PartAt(5, _pose, 50, 62, 62, 4, 0.48f);
     }
 
-    private void UpdatePose(float phase, bool moving, float impact)
+	private void UpdatePose(float phase, bool moving, float impact)
     {
         var stride = moving ? 0.38f : 0.05f;
         var leftArm = JointRef("leftArm");
@@ -125,6 +132,18 @@ public partial class ActorNode : Node2D
             rightHand.Rotation = rightArm.Rotation * 0.7f;
             head.Rotation = -0.08f * i;
         }
+    }
+
+    public override void _Draw()
+    {
+        var len = 0.35f + (1f - _sunT) * 1.0f;
+        var pts = new Vector2[24];
+        for (var k = 0; k < 24; k++)
+        {
+            var a = Mathf.Tau * k / 24;
+            pts[k] = new Vector2(-18f * len + Mathf.Cos(a) * 42f * len, 150f + Mathf.Sin(a) * 16f);
+        }
+        DrawColoredPolygon(pts, new Color(0, 0, 0, 0.14f + 0.14f * _sunT));
     }
 
     private Sprite2D Part(int idx, float x, float y, float scale, Node2D? parent = null, float anchorX = 0.5f, float anchorY = 0.5f)
