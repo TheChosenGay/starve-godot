@@ -14,6 +14,9 @@ using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
+/// <summary>客户端可发起的交互意图（输入路由与服务端一致）。</summary>
+public enum Intent { Gather, Chop, Mine, Pickup, Attack }
+
 /// <summary>
 /// 游戏主节点：分层编排——
 /// 协议层（StarveClient）→ Core 逻辑（相机/地形/平滑/法线）→ 渲染层。
@@ -120,34 +123,18 @@ public partial class GameRoot : Node
 
     private void WireHud(Hud hud)
     {
-        hud.GatherPressed += () => WithSelected(id =>
-        {
-            _entityLayer?.PlayAction(id, "gather");
-            _client?.Commands.Gather(id);
-        });
-        hud.AttackPressed += () => WithSelected(id =>
-        {
-            _entityLayer?.PlayAction(id, "attack");
-            _client?.Commands.Attack(id);
-        });
-        hud.ChopPressed += () => WithSelected(id =>
-        {
-            _entityLayer?.PlayAction(id, "attack");
-            _client?.Commands.Chop(id);
-        });
-        hud.MinePressed += () => WithSelected(id =>
-        {
-            _entityLayer?.PlayAction(id, "attack");
-            _client?.Commands.Mine(id);
-        });
-        hud.PickupPressed += () => WithSelected(id => _client?.Commands.Pickup(id));
+        hud.GatherPressed += () => WithSelected(id => TryAct(id, Intent.Gather));
+        hud.AttackPressed += () => WithSelected(id => TryAct(id, Intent.Attack));
+        hud.ChopPressed += () => WithSelected(id => TryAct(id, Intent.Chop));
+        hud.MinePressed += () => WithSelected(id => TryAct(id, Intent.Mine));
+        hud.PickupPressed += () => WithSelected(id => TryAct(id, Intent.Pickup));
         hud.DemolishPressed += () => WithSelected(id => _client?.Commands.Demolish(id));
         hud.BuildPressed += kind => _ = DoBuildAsync(kind);
         hud.BagUsePressed += slot => WithBagSlot(slot, kind => _client?.Commands.Use(kind));
         hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
         {
-            var equipped = OwnComponent("Equipped", Equipped.Parser)?.Kind ?? 0;
-            _client?.Commands.Equip((int)equipped == kind ? 0 : kind);
+            // M7：Equipped 下线，改用 Equip 槽位 + 玩家身上复制的主动能力组件。
+            _client?.Commands.Equip(EquippedKind() == kind ? 0 : kind);
         });
         hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
         {
@@ -391,17 +378,179 @@ public partial class GameRoot : Node
         UpdateBagAndCraft(world);
     }
 
+    /// <summary>取目标受激能力组件（Choppable/Minable/Pickable 共用 WorkTarget 载荷）。</summary>
+    private static WorkTarget? WorkTargetOf(EntityView view) =>
+        view.Get("Choppable", WorkTarget.Parser)
+        ?? view.Get("Minable", WorkTarget.Parser)
+        ?? view.Get("Pickable", WorkTarget.Parser);
+
+    /// <summary>玩家是否持有指定主动能力（服务端把工具能力复制到玩家身上）。</summary>
+    private bool HasOwnCapability(string component) =>
+        OwnComponent<Capability>(component, Capability.Parser) is not null;
+
+    /// <summary>当前手持工具的物品 kind（0 = 徒手）。</summary>
+    private int EquippedKind()
+    {
+        if (HasOwnCapability("Chopper")) return (int)ItemKind.Axe;
+        if (HasOwnCapability("Miner")) return (int)ItemKind.Pickaxe;
+        return 0;
+    }
+
+    private string EquippedName() => EquippedKind() switch
+    {
+        (int)ItemKind.Axe => "斧头",
+        (int)ItemKind.Pickaxe => "镐",
+        _ => "徒手",
+    };
+
+    /// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
+    private void TryAct(ulong id, Intent intent)
+    {
+        if (_client is null || !_client.World.Entities.TryGetValue(id, out var view))
+        {
+            _hud?.Log("目标已消失");
+            return;
+        }
+        if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
+            own.Get("Position", Position.Parser) is not { } mePos ||
+            view.Get("Position", Position.Parser) is not { } tPos)
+        {
+            _hud?.Log("目标不可达");
+            return;
+        }
+        var dx = mePos.X - tPos.X;
+        var dy = mePos.Y - tPos.Y;
+        if (MathF.Sqrt(dx * dx + dy * dy) > 2.5f)
+        {
+            _hud?.Log("距离不够，请靠近后再操作");
+            return;
+        }
+
+        switch (intent)
+        {
+            case Intent.Gather:
+                if (view.Get("Pickable", WorkTarget.Parser) is null)
+                {
+                    _hud?.Log("目标不可采集（不是浆果丛）");
+                    return;
+                }
+                _client.Commands.Gather(id);
+                break;
+            case Intent.Chop:
+                if (view.Get("Choppable", WorkTarget.Parser) is null)
+                {
+                    _hud?.Log("目标不可砍伐（不是树木）");
+                    return;
+                }
+                if (!HasOwnCapability("Chopper"))
+                {
+                    _hud?.Log("徒手无法砍伐，请先装备斧头");
+                    return;
+                }
+                _client.Commands.Chop(id);
+                break;
+            case Intent.Mine:
+                if (view.Get("Minable", WorkTarget.Parser) is null)
+                {
+                    _hud?.Log("目标不可挖掘（不是矿脉）");
+                    return;
+                }
+                if (!HasOwnCapability("Miner"))
+                {
+                    _hud?.Log("徒手无法挖掘，请先装备镐");
+                    return;
+                }
+                _client.Commands.Mine(id);
+                break;
+            case Intent.Pickup:
+                if (view.Get("Loot", Loot.Parser) is null)
+                {
+                    _hud?.Log("目标没有掉落物");
+                    return;
+                }
+                _client.Commands.Pickup(id);
+                break;
+            case Intent.Attack:
+                if (view.Get("Health", Health.Parser) is null ||
+                    view.Get("Dead", Dead.Parser) is not null)
+                {
+                    _hud?.Log("目标不可攻击");
+                    return;
+                }
+                _client.Commands.Attack(id);
+                break;
+        }
+        _entityLayer?.PlayAction(_ownId, intent switch
+        {
+            Intent.Chop or Intent.Mine or Intent.Attack => "attack",
+            Intent.Pickup => "gather",
+            _ => intent.ToString().ToLowerInvariant(),
+        });
+    }
+
+    /// <summary>选中实体的可读描述（名称/血量/工作量/可用动作）。</summary>
+    private string DescribeSelected()
+    {
+        if (_selected is not { } id || _client is null ||
+            !_client.World.Entities.TryGetValue(id, out var view))
+        {
+            return "无";
+        }
+        var cfg = _client.World.Config;
+        if (view.Get("Player", Player.Parser) is not null)
+            return $"玩家 #{id}";
+        if (view.Get("Dead", Dead.Parser) is not null)
+            return $"尸体 #{id}";
+        var loot = view.Get("Loot", Loot.Parser);
+        if (loot is not null)
+        {
+            var names = loot.Items.Select(i => $"{ItemName(cfg, (int)i.Kind)}×{i.Count}");
+            return $"掉落物 #{id}：{string.Join("、", names)} [拾取]";
+        }
+        var wt = WorkTargetOf(view);
+        if (wt is not null)
+        {
+            var action = view.Get("Choppable", WorkTarget.Parser) is not null ? "砍伐"
+                : view.Get("Minable", WorkTarget.Parser) is not null ? "挖掘"
+                : "采集";
+            return $"{ItemName(cfg, (int)wt.Kind)} #{id} 工作量 {wt.WorkLeft}/{wt.MaxWork} [{action}]";
+        }
+        var ws = view.Get("Workstation", Workstation.Parser);
+        if (ws is not null)
+            return $"工作站#{ws.Type} #{id}";
+        var bld = view.Get("Building", Building.Parser);
+        if (bld is not null)
+            return $"{((int)bld.Kind == 1 ? "火堆" : "木墙")} #{id}" + (bld.Placed ? "" : " [未放置]");
+        var cr = view.Get("Creature", Creature.Parser);
+        if (cr is not null)
+        {
+            var hp = view.Get("Health", Health.Parser);
+            var hpTxt = hp is null ? "" : $" hp={hp.Cur}/{hp.Max}";
+            var name = (int)cr.Kind switch
+            {
+                1 => "兔子",
+                2 => "狼",
+                3 => "野猪",
+                4 => "鹿",
+                5 => "蜘蛛",
+                _ => "生物",
+            };
+            return $"{name} #{id}{hpTxt} [攻击]";
+        }
+        return $"实体 #{id}";
+    }
+
     private void UpdateBagAndCraft(WorldService world)
     {
         if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
         var inv = own.Get("Inventory", Inventory.Parser);
-        var equipped = own.Get("Equipped", Equipped.Parser);
         var crafting = own.Get("Crafting", Crafting.Parser);
         var cfg = world.Config;
 
         var items = (inv?.Items ?? new()).Select(it =>
             new ItemView((int)it.Kind, ItemName(cfg, (int)it.Kind), it.Count, ItemColor(cfg, (int)it.Kind))).ToList();
-        _hud.RenderInventory(items, (int)(equipped?.Kind ?? 0), cfg?.InventorySlots ?? 12);
+        // M7：Equipped 下线，手持看玩家身上复制的主动能力组件。
+        _hud.RenderInventory(items, EquippedKind(), cfg?.InventorySlots ?? 12);
 
         if (cfg is null) return;
         var ownPos = own.Get("Position", Position.Parser);
@@ -516,6 +665,24 @@ public partial class GameRoot : Node
             var viewport = GetViewport().GetVisibleRect().Size;
             var w = _camera.ScreenToWorld(mb.Position.X, mb.Position.Y, viewport.X, viewport.Y);
             _selected = FindNearest(new System.Numerics.Vector2(w.X, w.Y));
+            // 点击实体 = 选中并直接执行对应动作（掉落物→拾取、浆果→采集、树→砍伐、矿→挖掘、生物→攻击）。
+            if (_selected is { } sel &&
+                sel != _ownId &&
+                _client is not null &&
+                _client.World.Entities.TryGetValue(sel, out var selView))
+            {
+                if (selView.Get("Loot", Loot.Parser) is not null)
+                    TryAct(sel, Intent.Pickup);
+                else if (selView.Get("Pickable", WorkTarget.Parser) is not null)
+                    TryAct(sel, Intent.Gather);
+                else if (selView.Get("Choppable", WorkTarget.Parser) is not null)
+                    TryAct(sel, Intent.Chop);
+                else if (selView.Get("Minable", WorkTarget.Parser) is not null)
+                    TryAct(sel, Intent.Mine);
+                else if (selView.Get("Health", Health.Parser) is not null &&
+                         selView.Get("Dead", Dead.Parser) is null)
+                    TryAct(sel, Intent.Attack);
+            }
         }
     }
 
@@ -606,13 +773,13 @@ public partial class GameRoot : Node
         var pos = own?.Get("Position", Starve.Game.V1.Position.Parser);
         var hp = own?.Get("Health", Health.Parser);
         var hunger = own?.Get("Hunger", Hunger.Parser);
-        var selected = _selected is not null && w.Entities.TryGetValue(_selected.Value, out _)
-            ? $"#{_selected.Value}"
-            : "无";
+        var defense = hp?.DefensePercent ?? 0;
+        var defTxt = defense > 0 ? $" 防御{defense}%" : "";
         _hud.SetStatus(
             $"实体数 {w.Count} | 昼夜 {w.DayLight:0.00} | 季节 {SeasonName(w.Season)}\n" +
-            $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level}\n" +
-            $"选中: {selected}");
+            $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} 手持 {EquippedName()}{defTxt}\n" +
+            $"选中: {DescribeSelected()}");
+        _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
     }
 
     private static string SeasonName(int season) => season switch

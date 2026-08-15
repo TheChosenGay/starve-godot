@@ -32,12 +32,14 @@ try
         var pos = view.Get("Position", Position.Parser);
         var hp = view.Get("Health", Health.Parser);
         var player = view.Get("Player", Player.Parser);
-        var workable = view.Get("Workable", Workable.Parser);
+        var reactive = view.Get("Choppable", WorkTarget.Parser)
+            ?? view.Get("Minable", WorkTarget.Parser)
+            ?? view.Get("Pickable", WorkTarget.Parser);
         Console.WriteLine(
             $"  #{id} @({pos?.X},{pos?.Y})" +
             $" hp={hp?.Cur}/{hp?.Max}" +
             (player is not null ? " [玩家]" : "") +
-            (workable is not null ? $" [可采集 kind={workable.Kind}]" : ""));
+            (reactive is not null ? $" [资源 kind={reactive.Kind} 工作={reactive.WorkLeft}/{reactive.MaxWork}]" : ""));
     }
 
     Console.WriteLine("阶段 0 冒烟测试通过：协议层已通。");
@@ -49,9 +51,12 @@ try
         var hasPlayer = own.Get("Player", Player.Parser) is not null;
         var hasHealth = own.Get("Health", Health.Parser) is not null;
         var hasPos = own.Get("Position", Starve.Game.V1.Position.Parser) is not null;
+        var hasChopper = own.Get("Chopper", Capability.Parser) is not null;
+        var hasMiner = own.Get("Miner", Capability.Parser) is not null;
+        var equip = own.Get("Equip", Equip.Parser);
         Console.WriteLine(
             $"[增量合并] entity={info.EntityId} Player={hasPlayer} Health={hasHealth} Position={hasPos} " +
-            $"组件数={own.Components.Count}");
+            $"Chopper={hasChopper} Miner={hasMiner} Equip.Hand={equip?.Hand} 组件数={own.Components.Count}");
         if (!hasPlayer || !hasPos) Environment.ExitCode = 1;
     }
 }

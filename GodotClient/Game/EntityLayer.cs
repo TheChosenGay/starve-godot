@@ -144,6 +144,26 @@ public partial class EntityLayer : Node2D
 				? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, true)
 				: new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false);
 
+		// M7 交互重构：受激能力拆成 Choppable/Minable/Pickable（载荷都是 WorkTarget），
+		// 树/矿/浆果按组件名区分，不再用旧的 Workable。
+		var reactive = view.Get("Choppable", WorkTarget.Parser)
+			?? view.Get("Minable", WorkTarget.Parser)
+			?? view.Get("Pickable", WorkTarget.Parser);
+		if (reactive is not null)
+		{
+			var kind = (int)reactive.Kind;
+			var isTree = view.Get("Choppable", WorkTarget.Parser) is not null;
+			return new EntityStyle(kind switch
+			{
+				1 => new Color(0.89f, 0.34f, 0.30f),
+				2 => new Color(0.60f, 0.42f, 0.25f),
+				3 => new Color(0.60f, 0.63f, 0.66f),
+				4 => new Color(0.85f, 0.42f, 0.31f),
+				_ => new Color(0.71f, 0.54f, 0.85f),
+			}, isTree ? 16 : 7, false, isTree);
+		}
+
+		// 兼容旧档/旧协议：仍下发 Workable 时兜底。
 		var workable = view.Get("Workable", Workable.Parser);
 		if (workable is not null)
 		{

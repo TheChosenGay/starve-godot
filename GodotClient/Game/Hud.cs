@@ -46,6 +46,8 @@ public partial class Hud : Control
     private Button? _bagSplit;
     private VBoxContainer? _craftList;
     private Button? _craftCancel;
+    private Button? _chopBtn;
+    private Button? _mineBtn;
     private int _selectedSlot = -1;
     private Label? _fps;
     private double _fpsTimer;
@@ -92,8 +94,10 @@ public partial class Hud : Control
         var actionBar = new HBoxContainer();
         actionBar.AddChild(MakeButton("采集", () => GatherPressed?.Invoke()));
         actionBar.AddChild(MakeButton("攻击", () => AttackPressed?.Invoke()));
-        actionBar.AddChild(MakeButton("砍伐", () => ChopPressed?.Invoke()));
-        actionBar.AddChild(MakeButton("挖掘", () => MinePressed?.Invoke()));
+        _chopBtn = MakeButton("砍伐", () => ChopPressed?.Invoke());
+        actionBar.AddChild(_chopBtn);
+        _mineBtn = MakeButton("挖掘", () => MinePressed?.Invoke());
+        actionBar.AddChild(_mineBtn);
         actionBar.AddChild(MakeButton("拾取", () => PickupPressed?.Invoke()));
         actionBar.AddChild(MakeButton("拆除", () => DemolishPressed?.Invoke()));
         actionBar.AddChild(MakeButton("建火堆", () => BuildPressed?.Invoke(1)));
@@ -176,6 +180,13 @@ public partial class Hud : Control
     public void Log(string line)
     {
         if (_log is not null) _log.AppendText(line + "\n");
+    }
+
+    /// <summary>按玩家主动能力置灰操作按钮：徒手只能采集/攻击，砍伐/挖掘需斧头/镐。</summary>
+    public void SetToolState(bool canChop, bool canMine)
+    {
+        if (_chopBtn is not null) _chopBtn.Disabled = !canChop;
+        if (_mineBtn is not null) _mineBtn.Disabled = !canMine;
     }
 
     public void RenderInventory(IReadOnlyList<ItemView> items, int equippedKind, int slots)

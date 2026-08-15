@@ -30,6 +30,7 @@ message MoveDir {
 message Health {
   int32 cur = 1;
   int32 max = 2;
+  int32 defense_percent = 3; // 防御百分比（装备叠加；攻击时按此减免）
 }
 
 message Hunger {
@@ -98,12 +99,20 @@ message Building {
   bool placed = 4;
 }
 
+// Block 阻挡组件：实体占据格子（有碰撞，参与移动/寻路阻挡）。
+// 未放置建筑（蓝图）不挂；Place 成功时才挂，宽高与 Building 一致。
+message Block {
+  int32 width = 1;
+  int32 height = 2;
+}
+
 // WorkAction 可交互动作（目标声明能被什么动作处理，工具声明做什么动作）。
 enum WorkAction {
   WORK_ACTION_UNSPECIFIED = 0;
   WORK_ACTION_CHOP = 1; // 砍伐（树）
   WORK_ACTION_MINE = 2; // 挖掘（矿）
   WORK_ACTION_PICK = 3; // 采集（浆果丛）
+  WORK_ACTION_ATTACK = 4; // 攻击（作用在 Health 上）
 }
 
 // Workable 可交互环境物（树/矿/浆果丛）：动作 + 剩余工作量。
@@ -164,6 +173,49 @@ message AOI {
 // Equipped 玩家当前手持的工具（kind=0 表示徒手）。
 message Equipped {
   ItemKind kind = 1;
+}
+
+// Equip 装备组件：三个槽位各持有一个装备实体（0 = 空槽）。
+// 只记录槽位；装备能力的复制/覆盖/恢复由世界层在能力组件落地后实现。
+message Equip {
+  uint64 head = 1;
+  uint64 hand = 2;
+  uint64 body = 3;
+}
+
+// Capability 主动能力组件（Chop/Mine 等共用同一形状）：
+// efficiency 每次工作强度、range 作用距离、durability 当前耐久（-1 = 无耐久）。
+message Capability {
+  int32 efficiency = 1;
+  int32 range = 2;
+  int32 durability = 3;
+}
+
+// Attacker 主动攻击能力（-er）：伤害/距离/冷却。攻击作用于目标 Health，由 Health 减免。
+message Attacker {
+  int32 attack_damage = 1;
+  int32 attack_range = 2;
+  int32 attack_cooldown = 3; // 攻击间隔（tick）
+}
+
+// Defense 防御属性（装备携带）：装备时叠加到穿戴者 Health.defense_percent。
+message Defense {
+  int32 percent = 1;
+}
+
+// WorkTarget 受激能力组件（Choppable/Minable/Pickable 共用同一形状）：
+// kind 资源类型 + work_left 剩余工作量 + max_work 总工作量。
+message WorkTarget {
+  ItemKind kind = 1;
+  int32 work_left = 2;
+  int32 max_work = 3;
+}
+
+// Respawnable 可重生（受激 -able）：采空/砍挖完后到点恢复工作量。
+// 与具体工作能力（Choppable/Minable/Pickable）解耦，是否重生只看本组件。
+message Respawnable {
+  int32 ticks = 1; // 重生间隔（tick）
+  int32 ticks_left = 2; // 剩余倒计时（0 = 未在计数）
 }
 
 // Respawn 重生标记：有该组件的环境物在耗尽后会自动恢复（如浆果丛重新长出）。
