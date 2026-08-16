@@ -72,10 +72,10 @@ public partial class GameRoot : Node
         // Godot 内建 Bloom（辉光）：2D 也生效，配合光照 pass 的亮部
         var env = new Godot.Environment();
         env.GlowEnabled = true;
-        env.GlowIntensity = 0.7f;
-        env.GlowStrength = 0.9f;
-        env.GlowBloom = 0.1f;
-        env.GlowHdrThreshold = 0.85f;
+        env.GlowIntensity = 0.9f;
+        env.GlowStrength = 1.1f;
+        env.GlowBloom = 0.12f;
+        env.GlowHdrThreshold = 0.55f; // 2D HDR 下让火堆加法亮部真正泛光
         AddChild(new WorldEnvironment { Environment = env });
 
         _parallax = new ParallaxView { Name = "Parallax" };
@@ -247,7 +247,7 @@ public partial class GameRoot : Node
                 seeds.Add((long)view.EntityId);
             }
         }
-        _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.Scale);
+        _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
         _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now);
@@ -291,8 +291,8 @@ public partial class GameRoot : Node
             if (isFire)
             {
                 lightPos.Add(new Vector2(p.X, p.Y));
-                lightColor.Add(new Color(1.35f, 0.85f, 0.4f));
-                lightRadius.Add(8f);
+                lightColor.Add(new Color(1.65f, 0.95f, 0.45f));
+                lightRadius.Add(9f);
             }
         }
         if (own is { } ownPos)

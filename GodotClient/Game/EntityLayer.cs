@@ -201,15 +201,12 @@ public partial class EntityLayer : Node2D
 	}
 }
 
-/// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 可选火堆点光。</summary>
+/// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 可选火堆视觉（FireView）。</summary>
 public partial class EntityNode : Node2D
 {
 	private Color _color = Colors.White;
 	private float _radius = 8;
-	private PointLight2D? _light;
-	private GpuParticles2D? _fire;
-	private static Texture2D? _glowTexture;
-	private static Texture2D? _particleDot;
+	private FireView? _fireView;
 	private static Texture2D? _treeTexture;
 	private Sprite2D? _treeSprite;
 	private bool _isTree;
@@ -253,15 +250,12 @@ public partial class EntityNode : Node2D
 		QueueRedraw();
 		if (style.IsFire)
 		{
-			_light ??= MakeLight();
-			_light.Enabled = true;
-			_fire ??= MakeFire();
-			_fire.Emitting = true;
+			_fireView ??= AddFireView();
+			_fireView.Visible = true;
 		}
-		else
+		else if (_fireView is not null)
 		{
-			if (_light is not null) _light.Enabled = false;
-			if (_fire is not null) _fire.Emitting = false;
+			_fireView.Visible = false;
 		}
 	}
 
@@ -325,74 +319,10 @@ public partial class EntityNode : Node2D
 		DrawColoredPolygon(pts, color);
 	}
 
-	private static PointLight2D MakeLight()
+	private FireView AddFireView()
 	{
-		_glowTexture ??= CreateGlowTexture();
-		return new PointLight2D
-		{
-			Texture = _glowTexture,
-			Color = new Color(1f, 0.63f, 0.29f),
-			Energy = 1.5f,
-			TextureScale = 2.5f,
-		};
-	}
-
-	/// <summary>火堆粒子：向上飘散的火花/余烬（Godot 内建 GPUParticles2D）。</summary>
-	private GpuParticles2D MakeFire()
-	{
-		_particleDot ??= CreateParticleDot();
-		var mat = new ParticleProcessMaterial
-		{
-			Direction = new Vector3(0, -1, 0),
-			InitialVelocityMin = 30,
-			InitialVelocityMax = 80,
-			Gravity = new Vector3(0, -24, 0),
-			EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
-			EmissionSphereRadius = 5,
-			ScaleMin = 0.5f,
-			ScaleMax = 1.3f,
-		};
-		var p = new GpuParticles2D
-		{
-			Texture = _particleDot,
-			ProcessMaterial = mat,
-			Amount = 22,
-			Lifetime = 0.9,
-			Emitting = true,
-			Modulate = new Color(1f, 0.72f, 0.35f),
-			Position = new Vector2(0, -4),
-		};
-		AddChild(p);
-		return p;
-	}
-
-	private static Texture2D CreateGlowTexture()
-	{
-		const int s = 64;
-		var img = Image.CreateEmpty(s, s, false, Image.Format.Rgba8);
-		for (var y = 0; y < s; y++)
-		{
-			for (var x = 0; x < s; x++)
-			{
-				var d = new Vector2(x - s / 2, y - s / 2).Length() / (s / 2);
-				img.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp(1 - d, 0, 1)));
-			}
-		}
-		return ImageTexture.CreateFromImage(img);
-	}
-
-	private static Texture2D CreateParticleDot()
-	{
-		const int s = 16;
-		var img = Image.CreateEmpty(s, s, false, Image.Format.Rgba8);
-		for (var y = 0; y < s; y++)
-		{
-			for (var x = 0; x < s; x++)
-			{
-				var d = new Vector2(x - s / 2, y - s / 2).Length() / (s / 2);
-				img.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp(1 - d, 0, 1)));
-			}
-		}
-		return ImageTexture.CreateFromImage(img);
+		var fv = new FireView();
+		AddChild(fv);
+		return fv;
 	}
 }
