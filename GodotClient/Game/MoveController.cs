@@ -14,6 +14,8 @@ public partial class MoveController : Node
 {
     /// <summary>方向变化回调（(0,0) = 停止）。</summary>
     public Action<(int Dx, int Dy)>? OnMove;
+    /// <summary>本地预测意图：按下/松开/转弯都通知（与是否发服务端命令无关）。</summary>
+    public Action<(int Dx, int Dy)>? OnIntent;
 
     private readonly HashSet<string> _held = new();
     private readonly Dictionary<string, long> _keyDownAt = new();
@@ -40,8 +42,10 @@ public partial class MoveController : Node
             _keyDownAt.Remove(name);
             if (_held.Count == 0)
             {
-                // 只有长按才发停止：短按的命令已入队，走一步后自然停（web 端同款）
                 _lastDir = (0, 0);
+                // 本地预测：松开立即停（短按的命令已入队，服务端走完后自然停）
+                OnIntent?.Invoke((0, 0));
+                // 服务端命令：只有长按才发停止（web 端同款，避免清掉刚入队的步）
                 if (heldMs >= HoldStopMs) OnMove?.Invoke((0, 0));
             }
         }
@@ -74,8 +78,10 @@ public partial class MoveController : Node
         if (_lastDir is { } prev && prev != (0, 0) && dir != (0, 0) && prev != dir)
         {
             OnMove?.Invoke((0, 0));
+            OnIntent?.Invoke((0, 0));
         }
         _lastDir = dir;
         OnMove?.Invoke(dir);
+        OnIntent?.Invoke(dir);
     }
 }

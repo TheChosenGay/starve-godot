@@ -82,7 +82,10 @@ public sealed class OwnMovementSim
         }
     }
 
-    /// <summary>服务端快照校正：大误差瞬移，小误差按比例缓合。</summary>
+    /// <summary>
+    /// 服务端快照校正：只有真正的瞬移/传送（>4 格）才硬跳；
+    /// 其余误差按比例快速平滑合拢（不再有 1.5 格硬切导致的“来回晃”）。
+    /// </summary>
     public void Reconcile(float serverX, float serverY)
     {
         if (!_has)
@@ -93,7 +96,7 @@ public sealed class OwnMovementSim
         var ex = serverX - _x;
         var ey = serverY - _y;
         var err = MathF.Sqrt(ex * ex + ey * ey);
-        if (err > 1.5f)
+        if (err > 4f)
         {
             SnapTo(serverX, serverY);
             return;
@@ -101,8 +104,15 @@ public sealed class OwnMovementSim
         // 移动中服务端一般落后（tick 对齐差 ≤1 格），只对“服务端在我们前面”
         // 或已停止的误差做缓合，避免把正常的预测领先也拉回去。
         var k = 0f;
-        if (!Moving) k = err > 0.02f ? 0.15f : 0f;
-        else if (err > 0.45f) k = 0.3f;
+        if (!Moving)
+        {
+            // 停止时：误差越大合得越快（最快 50%/快照），但始终保持平滑
+            k = err > 0.02f ? MathF.Min(0.5f, 0.08f + err * 0.14f) : 0f;
+        }
+        else if (err > 0.6f)
+        {
+            k = 0.25f;
+        }
         if (k <= 0) return;
         _x += ex * k;
         _y += ey * k;

@@ -117,9 +117,9 @@ public partial class GameRoot : Node
         AddChild(new CameraController { Camera = _camera });
         var move = new MoveController();
         _ownSim = new OwnMovementSim(IsWalkable);
-        move.OnMove += dir =>
+        move.OnMove += dir => _client?.Commands.Move(dir.Dx, dir.Dy);
+        move.OnIntent += dir =>
         {
-            _client?.Commands.Move(dir.Dx, dir.Dy);
             _ownSim?.SetIntent(dir.Dx, dir.Dy);
             // 本地预测先行：走路动画立即播放，不等服务端确认
             if (dir.Dx != 0 || dir.Dy != 0) _movingUntil[_ownId] = NowMs() + 240;
