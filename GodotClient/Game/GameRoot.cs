@@ -26,6 +26,8 @@ public partial class GameRoot : Node
 {
     private readonly Camera _camera = new();
     private readonly Dictionary<ulong, PositionSmoother> _smoothers = new();
+    private OwnMovementSim? _ownSim;
+    private readonly HashSet<(int X, int Y)> _blocked = new();
     private readonly Dictionary<ulong, long> _movingUntil = new();
     private readonly Dictionary<ulong, (float X, float Y)> _lastServerPos = new();
 
@@ -114,7 +116,15 @@ public partial class GameRoot : Node
 
         AddChild(new CameraController { Camera = _camera });
         var move = new MoveController();
-        move.OnMove += dir => _client?.Commands.Move(dir.Dx, dir.Dy);
+        _ownSim = new OwnMovementSim(IsWalkable);
+        move.OnMove += dir =>
+        {
+            _client?.Commands.Move(dir.Dx, dir.Dy);
+            _ownSim?.SetIntent(dir.Dx, dir.Dy);
+            // 本地预测先行：走路动画立即播放，不等服务端确认
+            if (dir.Dx != 0 || dir.Dy != 0) _movingUntil[_ownId] = NowMs() + 240;
+            else _movingUntil.Remove(_ownId);
+        };
         AddChild(move);
 
         _hud.Log("连接中…");
@@ -159,6 +169,7 @@ public partial class GameRoot : Node
             var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
             var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
             _ownId = info.EntityId;
+            _entityLayer?.SetOwnId(_ownId);
             if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
                 float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
             {
@@ -197,7 +208,10 @@ public partial class GameRoot : Node
         }
 
         var now = NowMs();
-        System.Numerics.Vector2? own = _smoothers.TryGetValue(_ownId, out var sm) ? sm.Current(now) : null;
+        _ownSim?.Tick((float)(delta * 1000));
+        System.Numerics.Vector2? own = _ownSim is { Has: true } sim
+            ? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
+            : null;
         if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
         _camera.Tick((float)(delta * 1000));
 
@@ -250,7 +264,7 @@ public partial class GameRoot : Node
         _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
-        _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now);
+        _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now, own);
         _entityLayer.SetDayLight(client.World.DayLight);
         _minimap!.SetView(
             client.World.Entities,
@@ -356,16 +370,27 @@ public partial class GameRoot : Node
         }
 
         var now = NowMs();
+        var tick = world.WorldTick;
+        RebuildBlocked(world.Entities);
         foreach (var (id, view) in world.Entities)
         {
             var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
             if (pos is null) continue;
-            if (!_smoothers.TryGetValue(id, out var smoother))
+            if (id == _ownId)
             {
-                smoother = new PositionSmoother(id == _ownId ? 60 : 160);
-                _smoothers[id] = smoother;
+                // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
+                _ownSim?.Reconcile(pos.X, pos.Y);
             }
-            smoother.Update(pos.X, pos.Y, now);
+            else if (!_smoothers.TryGetValue(id, out var smoother))
+            {
+                smoother = new PositionSmoother();
+                _smoothers[id] = smoother;
+                smoother.Update(pos.X, pos.Y, tick, now);
+            }
+            else
+            {
+                smoother.Update(pos.X, pos.Y, tick, now);
+            }
             if (_lastServerPos.TryGetValue(id, out var prev) &&
                 (MathF.Abs(prev.X - pos.X) > 0.001f || MathF.Abs(prev.Y - pos.Y) > 0.001f))
             {
@@ -376,6 +401,33 @@ public partial class GameRoot : Node
 
         _entityLayer!.SyncEntities(world.Entities);
         UpdateBagAndCraft(world);
+    }
+
+    /// <summary>从快照重建动态阻挡层（树/矿/建筑等 Block 组件），本地预测墙停用。</summary>
+    private void RebuildBlocked(IReadOnlyDictionary<ulong, EntityView> entities)
+    {
+        _blocked.Clear();
+        foreach (var view in entities.Values)
+        {
+            var b = view.Get("Block", Block.Parser);
+            var p = view.Get("Position", Position.Parser);
+            if (b is null || p is null) continue;
+            for (var dy = 0; dy < b.Height; dy++)
+            {
+                for (var dx = 0; dx < b.Width; dx++)
+                {
+                    _blocked.Add((p.X + dx, p.Y + dy));
+                }
+            }
+        }
+    }
+
+    /// <summary>与服务端 Walkable 一致：非水 + 无动态阻挡。</summary>
+    private bool IsWalkable(int x, int y)
+    {
+        if (_tilemap is null) return true;
+        if (_blocked.Contains((x, y))) return false;
+        return _tilemap.CornerType(x, y) != (int)TerrainType.Water;
     }
 
     /// <summary>取目标受激能力组件（Choppable/Minable/Pickable 共用 WorkTarget 载荷）。</summary>

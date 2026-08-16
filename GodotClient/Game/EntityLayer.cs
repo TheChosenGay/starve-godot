@@ -17,12 +17,15 @@ public partial class EntityLayer : Node2D
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
 	private readonly Dictionary<ulong, ActorNode> _actors = new();
 	private TileMap? _tilemap;
+	private ulong _ownId;
 	private long _lastNow;
 	private float _sunT = 1f;
 
 	public void SetTilemap(TileMap? tm) => _tilemap = tm;
 
 	public void SetDayLight(float dayLight) => _sunT = 1f - Mathf.Max(0, 1f - dayLight * 2f);
+
+	public void SetOwnId(ulong id) => _ownId = id;
 
 	public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
@@ -81,7 +84,8 @@ public partial class EntityLayer : Node2D
 	public void UpdatePositions(
 		IReadOnlyDictionary<ulong, PositionSmoother> smoothers,
 		Func<ulong, bool> isMoving,
-		long now)
+		long now,
+		System.Numerics.Vector2? ownPos = null)
 	{
 		var deltaMs = _lastNow == 0 ? 16 : now - _lastNow;
 		_lastNow = now;
@@ -99,8 +103,19 @@ public partial class EntityLayer : Node2D
 
 		foreach (var (id, actor) in _actors)
 		{
-			if (!smoothers.TryGetValue(id, out var sm)) continue;
-			var p = sm.Current(now);
+			System.Numerics.Vector2 p;
+			if (id == _ownId && ownPos is { } op)
+			{
+				p = new System.Numerics.Vector2(op.X, op.Y);
+			}
+			else if (smoothers.TryGetValue(id, out var sm))
+			{
+				p = sm.Current(now);
+			}
+			else
+			{
+				continue;
+			}
 			var h = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			actor.Position = new Vector2(local.X, local.Y);

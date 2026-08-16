@@ -42,6 +42,9 @@ public sealed class WorldService
     /// <summary>昼夜光照（0..1，来自 DayCycle.Light）。</summary>
     public float DayLight { get; private set; } = 0.5f;
 
+    /// <summary>世界 tick（来自 DayCycle.Phase，每 tick +1；位置插值/预测对齐用）。</summary>
+    public long WorldTick { get; private set; }
+
     /// <summary>季节（Season 枚举值，来自 WeatherState）。</summary>
     public int Season { get; private set; }
 
@@ -110,7 +113,11 @@ public sealed class WorldService
 
     private void ApplyWorldState(DayCycle? dayCycle, WeatherState? weather)
     {
-        if (dayCycle is not null) DayLight = dayCycle.Light;
+        if (dayCycle is not null)
+        {
+            DayLight = dayCycle.Light;
+            WorldTick = dayCycle.Phase;
+        }
         if (weather is not null) Season = (int)weather.Season;
     }
 

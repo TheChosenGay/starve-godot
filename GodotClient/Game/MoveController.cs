@@ -51,7 +51,7 @@ public partial class MoveController : Node
     {
         if (_held.Count == 0) return;
         _accum += delta;
-        if (_accum >= 0.05)
+        if (_accum >= 0.08) // 服务端每 100ms 消费一步：80ms 发送略快于消费，队列不饥饿也不积压
         {
             _accum = 0;
             SendHeld();

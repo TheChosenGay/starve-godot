@@ -56,11 +56,11 @@ public sealed class Camera
         _followY = y.Value;
     }
 
-    /// <summary>每帧推进跟随平滑（帧率无关的指数衰减，时间常数 ~90ms）。</summary>
+    /// <summary>每帧推进跟随平滑（帧率无关的指数衰减，时间常数 ~40ms，降低视觉滞后）。</summary>
     public void Tick(float dtMs)
     {
         if (!_following) return;
-        var k = 1 - MathF.Exp(-dtMs / 90);
+        var k = 1 - MathF.Exp(-dtMs / 40);
         _smoothX += (_followX - _smoothX) * k;
         _smoothY += (_followY - _smoothY) * k;
     }
