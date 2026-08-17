@@ -56,6 +56,8 @@ public partial class GameRoot : Node
     private long _lastBuildCheckAt;
     private long _lightningAmbientUntil;
     private readonly bool _freeCamera = CameraArg is not null;
+    private bool _autoHeld;
+    private long _autoNextAt;
 
     private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
     private static string? CapturePath => OS.GetCmdlineUserArgs()
@@ -208,6 +210,11 @@ public partial class GameRoot : Node
         }
 
         var now = NowMs();
+        if (_autoHeld && now >= _autoNextAt)
+        {
+            _autoNextAt = now + 150; // 按住空格：每 150ms 评估一次（服务端就近匹配/寻路）
+            _client?.Commands.Automate();
+        }
         _ownSim?.Tick((float)(delta * 1000));
         System.Numerics.Vector2? own = _ownSim is { Has: true } sim
             ? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
@@ -699,6 +706,19 @@ public partial class GameRoot : Node
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (@event is InputEventKey ak && !ak.Echo && OS.GetKeycodeString(ak.Keycode) == "Space")
+        {
+            if (ak.Pressed)
+            {
+                _autoHeld = true;
+                _autoNextAt = NowMs() + 150;
+                _client?.Commands.Automate(); // 按下立即触发一次
+            }
+            else
+            {
+                _autoHeld = false;
+            }
+        }
         if (@event is InputEventMouseMotion mm)
         {
             var viewport = GetViewport().GetVisibleRect().Size;

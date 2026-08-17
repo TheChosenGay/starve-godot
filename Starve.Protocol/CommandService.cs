@@ -37,6 +37,10 @@ public sealed class CommandService
     public void Mine(ulong target) =>
         Notify(Routes.Mine, new PlayerMine { TargetEntity = target });
 
+    /// <summary>空格自动行为：服务端在 AOI 内就近匹配目标执行（或寻路走过去）。</summary>
+    public void Automate() =>
+        Notify(Routes.Automate, new PlayerAutomate());
+
     public void Drop(int kind, int count) =>
         Notify(Routes.Drop, new PlayerDrop { Kind = kind, Count = count });
 

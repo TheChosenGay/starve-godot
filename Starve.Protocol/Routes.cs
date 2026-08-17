@@ -12,6 +12,7 @@ public static class Routes
     public const string Equip = "world.player.equip";
     public const string Chop = "world.player.chop";
     public const string Mine = "world.player.mine";
+    public const string Automate = "world.player.automate";
     public const string Craft = "world.player.craft";
     public const string CancelCraft = "world.player.craft.cancel";
     public const string Split = "world.player.split";
