@@ -623,7 +623,8 @@ public partial class GameRoot : Node
         var near = StationNear(world, ownPos);
         var materials = (inv?.Items ?? new())
             .Where(i => (int)i.Kind > 0)
-            .ToDictionary(i => (int)i.Kind, i => i.Count);
+            .GroupBy(i => (int)i.Kind)
+            .ToDictionary(g => g.Key, g => g.Sum(i => i.Count)); // 同种多堆合并，否则重复键抛异常
         var recipes = cfg.Recipes.Select(r =>
         {
             var stationOk = (int)r.Workstation == 0 || near.Contains((int)r.Workstation);
