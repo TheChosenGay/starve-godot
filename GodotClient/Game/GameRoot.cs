@@ -50,6 +50,7 @@ public partial class GameRoot : Node
     private int _lastWeatherRevision = -1;
     private long? _captureAt;
     private ulong _ownId;
+    private string _ownUid = "";
     private ulong? _selected;
     private (ulong EntityId, int Kind, int W, int H, bool Ok)? _buildPreview;
     private System.Numerics.Vector2? _mouseWorld;
@@ -169,6 +170,7 @@ public partial class GameRoot : Node
         try
         {
             var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
+            _ownUid = uid;
             var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
             _ownId = info.EntityId;
             _entityLayer?.SetOwnId(_ownId);
@@ -434,6 +436,8 @@ public partial class GameRoot : Node
     private bool IsWalkable(int x, int y)
     {
         if (_tilemap is null) return true;
+        // 地图边界：越界不可走（否则本地预测会走出地图到负坐标，角色跑到角外“消失”）
+        if (x < 0 || y < 0 || x >= _tilemap.Width || y >= _tilemap.Height) return false;
         if (_blocked.Contains((x, y))) return false;
         return _tilemap.CornerType(x, y) != (int)TerrainType.Water;
     }
@@ -664,7 +668,9 @@ public partial class GameRoot : Node
     /// <summary>世界实体标签：资源带动作/掉落/工具提示，掉落物带数量，生物/建筑带中文名。</summary>
     private string? EntityName(EntityView view)
     {
-        if (view.Get("Player", Player.Parser) is not null) return null;
+        var pl = view.Get("Player", Player.Parser);
+        if (pl is not null)
+            return pl.Uid == _ownUid ? "我" : $"玩家 {pl.Uid}";
         if (view.LootOf() is { } lt)
             return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
         if (view.Get("Choppable", WorkTarget.Parser) is not null)
