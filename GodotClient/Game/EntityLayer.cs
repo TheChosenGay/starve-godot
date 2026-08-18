@@ -18,6 +18,7 @@ public partial class EntityLayer : Node2D
 	private readonly Dictionary<ulong, ActorNode> _actors = new();
 	private TileMap? _tilemap;
 	private ulong _ownId;
+	private Func<EntityView, string?>? _nameProvider;
 	private long _lastNow;
 	private float _sunT = 1f;
 
@@ -26,6 +27,9 @@ public partial class EntityLayer : Node2D
 	public void SetDayLight(float dayLight) => _sunT = 1f - Mathf.Max(0, 1f - dayLight * 2f);
 
 	public void SetOwnId(ulong id) => _ownId = id;
+
+	/// <summary>实体名字提供器（GameRoot 注入：资源/掉落/生物/建筑的中文名）。</summary>
+	public void SetNameProvider(Func<EntityView, string?> provider) => _nameProvider = provider;
 
 	public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
@@ -77,7 +81,8 @@ public partial class EntityLayer : Node2D
 			}
 			node.Visible = true;
 			var hp = view.Get("Health", Health.Parser);
-			node.Configure(StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0);
+			node.Configure(StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0,
+				_nameProvider?.Invoke(view) ?? "");
 		}
 	}
 
@@ -226,6 +231,7 @@ public partial class EntityNode : Node2D
 	private FireView? _fireView;
 	private static Texture2D? _treeTexture;
 	private Sprite2D? _treeSprite;
+	private Label? _nameLabel;
 	private bool _isTree;
 	private int _healthCur;
 	private int _healthMax;
@@ -234,11 +240,12 @@ public partial class EntityNode : Node2D
 	private long _flashUntil;
 	private float _sunT = 1f;
 
-	public void Configure(EntityStyle style, int healthCur, int healthMax, bool showBar)
+	public void Configure(EntityStyle style, int healthCur, int healthMax, bool showBar, string name = "")
 	{
 		_color = style.Color;
 		_radius = style.Radius;
 		_isTree = style.IsTree;
+		UpdateNameLabel(name);
 		_healthCur = healthCur;
 		_healthMax = healthMax;
 		_showBar = showBar;
@@ -274,6 +281,32 @@ public partial class EntityNode : Node2D
 		{
 			_fireView.Visible = false;
 		}
+	}
+
+	private void UpdateNameLabel(string name)
+	{
+		if (string.IsNullOrEmpty(name))
+		{
+			if (_nameLabel is not null) _nameLabel.Visible = false;
+			return;
+		}
+		_nameLabel ??= new Label
+		{
+			CustomMinimumSize = new Vector2(140, 20),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			ZIndex = 100,
+			LabelSettings = new LabelSettings
+			{
+				FontSize = 12,
+				FontColor = Colors.White,
+				OutlineSize = 4,
+				OutlineColor = new Color(0, 0, 0, 0.85f),
+			},
+		};
+		_nameLabel.Text = name;
+		_nameLabel.Position = new Vector2(-70, -_radius - 38);
+		_nameLabel.Visible = true;
+		if (_nameLabel.GetParent() is null) AddChild(_nameLabel);
 	}
 
 	public void Tick(long now, float sunT)

@@ -172,6 +172,7 @@ public partial class GameRoot : Node
             var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
             _ownId = info.EntityId;
             _entityLayer?.SetOwnId(_ownId);
+            _entityLayer?.SetNameProvider(EntityName);
             if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
                 float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
             {
@@ -658,6 +659,38 @@ public partial class GameRoot : Node
     {
         var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
         return t?.Name ?? kind.ToString();
+    }
+
+    /// <summary>世界实体标签：资源带动作/掉落/工具提示，掉落物带数量，生物/建筑带中文名。</summary>
+    private string? EntityName(EntityView view)
+    {
+        if (view.Get("Player", Player.Parser) is not null) return null;
+        if (view.Get("Loot", Loot.Parser) is { } lt)
+            return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
+        if (view.Get("Choppable", WorkTarget.Parser) is not null)
+            return HasOwnCapability("Chopper") ? "树·砍伐→木头" : "树·需斧头";
+        if (view.Get("Minable", WorkTarget.Parser) is not null)
+            return HasOwnCapability("Miner") ? "矿石·挖掘→燧石" : "矿石·需镐";
+        if (view.Get("Pickable", WorkTarget.Parser) is not null)
+            return "浆果丛·采集→浆果";
+        if (view.Get("Creature", Creature.Parser) is { } cr)
+        {
+            var name = (int)cr.Kind switch
+            {
+                1 => "兔子",
+                2 => "狼",
+                3 => "野猪",
+                4 => "鹿",
+                5 => "蜘蛛",
+                _ => "生物",
+            };
+            return view.Get("Dead", Dead.Parser) is not null ? name + "尸体" : name;
+        }
+        if (view.Get("Workstation", Workstation.Parser) is { } ws)
+            return (int)ws.Type == 1 ? "火堆工作站" : "工作台";
+        if (view.Get("Building", Building.Parser) is { } bld)
+            return (int)bld.Kind == 1 ? "火堆" : "木墙";
+        return null;
     }
 
     private static Color ItemColor(GameConfig? cfg, int kind)
