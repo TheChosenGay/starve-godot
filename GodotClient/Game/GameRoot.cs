@@ -479,7 +479,9 @@ public partial class GameRoot : Node
         }
         var dx = mePos.X - tPos.X;
         var dy = mePos.Y - tPos.Y;
-        if (MathF.Sqrt(dx * dx + dy * dy) > 2.5f)
+        // 与服务端 withinRange 一致：曼哈顿距离 ≤2（客户端曾用欧氏 2.5，
+        // 对角 2 格会被服务端静默拒绝，造成“点了没反应”）
+        if (Math.Abs(dx) + Math.Abs(dy) > 2)
         {
             _hud?.Log("距离不够，请靠近后再操作");
             return;
