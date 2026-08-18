@@ -155,7 +155,7 @@ public partial class EntityLayer : Node2D
 			return new EntityStyle(new Color(0.31f, 0.75f, 0.37f), 10, false);
 		// 掉落物优先于 Dead：挖完的矿/树是 Dead+Loot，应显示成可拾取的黄色，
 		// 而不是尸体的灰色（否则看不出能捡）。
-		if (view.Get("Loot", Loot.Parser) is not null)
+		if (view.LootOf() is not null)
 			return new EntityStyle(new Color(1f, 0.85f, 0.31f), 6, false);
 		if (view.Components.ContainsKey("Dead"))
 			return new EntityStyle(new Color(0.47f, 0.47f, 0.47f), 8, false);

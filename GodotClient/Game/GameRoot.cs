@@ -525,7 +525,7 @@ public partial class GameRoot : Node
                 _client.Commands.Mine(id);
                 break;
             case Intent.Pickup:
-                if (view.Get("Loot", Loot.Parser) is null)
+                if (view.LootOf() is null)
                 {
                     _hud?.Log("目标没有掉落物");
                     return;
@@ -563,7 +563,7 @@ public partial class GameRoot : Node
             return $"玩家 #{id}";
         if (view.Get("Dead", Dead.Parser) is not null)
             return $"尸体 #{id}";
-        var loot = view.Get("Loot", Loot.Parser);
+        var loot = view.LootOf();
         if (loot is not null)
         {
             var names = loot.Items.Select(i => $"{ItemName(cfg, (int)i.Kind)}×{i.Count}");
@@ -665,7 +665,7 @@ public partial class GameRoot : Node
     private string? EntityName(EntityView view)
     {
         if (view.Get("Player", Player.Parser) is not null) return null;
-        if (view.Get("Loot", Loot.Parser) is { } lt)
+        if (view.LootOf() is { } lt)
             return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
         if (view.Get("Choppable", WorkTarget.Parser) is not null)
             return HasOwnCapability("Chopper") ? "树·砍伐→木头" : "树·需斧头";
@@ -778,7 +778,7 @@ public partial class GameRoot : Node
                 _client is not null &&
                 _client.World.Entities.TryGetValue(sel, out var selView))
             {
-                if (selView.Get("Loot", Loot.Parser) is not null)
+                if (selView.LootOf() is not null)
                     TryAct(sel, Intent.Pickup);
                 else if (selView.Get("Pickable", WorkTarget.Parser) is not null)
                     TryAct(sel, Intent.Gather);
