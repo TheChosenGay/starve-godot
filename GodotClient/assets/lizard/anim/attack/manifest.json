@@ -1,0 +1,18 @@
+{
+  "source": "lizard-attack-sheet.jpg",
+  "columns": 4,
+  "rows": 2,
+  "frame_width": 256,
+  "frame_height": 512,
+  "order": "row-major",
+  "frames": [
+    "attack/attack_0.png",
+    "attack/attack_1.png",
+    "attack/attack_2.png",
+    "attack/attack_3.png",
+    "attack/attack_4.png",
+    "attack/attack_5.png",
+    "attack/attack_6.png",
+    "attack/attack_7.png"
+  ]
+}

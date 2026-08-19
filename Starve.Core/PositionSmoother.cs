@@ -22,10 +22,10 @@ public sealed class PositionSmoother
     private long _lastUpdateWall;
     private bool _has;
 
-    /// <param name="delayTicks">渲染延迟（tick）：2 = 100ms（覆盖 100ms 格步）。</param>
+    /// <param name="delayTicks">渲染延迟（tick）：M7 起服务端每 tick 广播子格偏移，1 = 50ms 即可平滑。</param>
     /// <param name="maxExtrapTicks">超出最后样本时的外推上限（tick），1 = 50ms。</param>
     /// <param name="snapDistance">超过该距离视为瞬移，直接贴目标。</param>
-    public PositionSmoother(float delayTicks = 2, float maxExtrapTicks = 1, float snapDistance = 12)
+    public PositionSmoother(float delayTicks = 1, float maxExtrapTicks = 1, float snapDistance = 12)
     {
         _delayTicks = delayTicks;
         _maxExtrapTicks = maxExtrapTicks;

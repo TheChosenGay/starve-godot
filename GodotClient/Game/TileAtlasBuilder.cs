@@ -22,6 +22,18 @@ public sealed class TileAtlasBuilder
         [5] = new[] { 61, 64, 67, 72 }, // 雪
     };
 
+    /// <summary>
+    /// 无缝地形贴图（1024² 无缝纹理 → 缩到 128² 作为菱形变体）。
+    /// 每类只用一张：随机变体会让相邻格子出现拼缝、看起来像方块地图；
+    /// 单张无缝纹理 + 高度/坡度/AO 顶点色足够出变化。岩/水仍走旧切图/程序贴图。
+    /// </summary>
+    private static readonly Dictionary<int, string[]> SeamlessFiles = new()
+    {
+        [2] = new[] { "desert/desert_1" },
+        [3] = new[] { "grass/grass_1" },
+        [5] = new[] { "snow/snow_1" },
+    };
+
     public ImageTexture Atlas { get; private set; } = null!;
 
     /// <summary>类型 → 变体 UV 矩形（图集内）。</summary>
@@ -35,6 +47,24 @@ public sealed class TileAtlasBuilder
         var idx = 0;
         for (var k = 0; k < 6; k++)
         {
+            if (SeamlessFiles.TryGetValue(k, out var seamless))
+            {
+                var seamlessRects = new List<Rect2>();
+                foreach (var file in seamless)
+                {
+                    var img = LoadSeamless(file);
+                    var cell = new Vector2I((idx % AtlasCols) * TileSize, (idx / AtlasCols) * TileSize);
+                    atlas.BlitRect(img, new Rect2I(0, 0, TileSize, TileSize), cell);
+                    seamlessRects.Add(new Rect2(
+                        cell.X / (float)atlas.GetWidth(),
+                        cell.Y / (float)atlas.GetHeight(),
+                        TileSize / (float)atlas.GetWidth(),
+                        TileSize / (float)atlas.GetHeight()));
+                    idx++;
+                }
+                builder.TypeVariants[k] = seamlessRects.ToArray();
+                continue;
+            }
             var files = VariantFiles.TryGetValue(k, out var f) ? f : new[] { -1 };
             var rects = new List<Rect2>();
             foreach (var file in files)
@@ -53,6 +83,16 @@ public sealed class TileAtlasBuilder
         }
         builder.Atlas = ImageTexture.CreateFromImage(atlas);
         return builder;
+    }
+
+    /// <summary>加载 1024² 无缝贴图并缩到 128²（菱形 UV 直接采样整幅图）。</summary>
+    private static Image LoadSeamless(string path)
+    {
+        var tex = GD.Load<Texture2D>($"res://assets/terrain_seamless/{path}.png");
+        var img = tex.GetImage();
+        img.Convert(Image.Format.Rgba8); // 源是 RGB，图集是 RGBA8，BlitRect 要求同格式
+        img.Resize(TileSize, TileSize);
+        return img;
     }
 
     /// <summary>源菱形四角（各边中点）→ 128×128 画布四角（与 web 端矩阵一致）。</summary>

@@ -7,7 +7,9 @@ using Starve.Core;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 移动输入：WASD/方向键按住即走、每 50ms 重复、松开发停。
+/// 移动输入：WASD/方向键按住即走、每 100ms 重发方向、松开发停。
+/// M7 连续速度契约：方向保持——按住持续发当前方向（最后一条输入生效，无队列），
+/// 松开发 (0,0) 清方向停止；转弯直接发新方向，无需先清队列。
 /// 按键 → 世界方向的映射在 Core.MoveInput，这里只做输入采集。
 /// </summary>
 public partial class MoveController : Node
@@ -18,12 +20,10 @@ public partial class MoveController : Node
     public Action<(int Dx, int Dy)>? OnIntent;
 
     private readonly HashSet<string> _held = new();
-    private readonly Dictionary<string, long> _keyDownAt = new();
     private double _accum;
     private (int Dx, int Dy)? _lastDir;
-    private const long HoldStopMs = 220; // 与 web 端一致：短按视为单步，不取消队列
 
-    public override void _UnhandledInput(InputEvent @event)
+    public override void _Input(InputEvent @event)
     {
         if (@event is not InputEventKey key || key.Echo) return;
         var name = OS.GetKeycodeString(key.Keycode);
@@ -32,21 +32,16 @@ public partial class MoveController : Node
         if (key.Pressed)
         {
             _held.Add(name);
-            _keyDownAt[name] = (long)Time.GetTicksMsec();
             SendHeld();
         }
         else
         {
             _held.Remove(name);
-            var heldMs = (long)Time.GetTicksMsec() - _keyDownAt.GetValueOrDefault(name);
-            _keyDownAt.Remove(name);
             if (_held.Count == 0)
             {
                 _lastDir = (0, 0);
-                // 本地预测：松开立即停（短按的命令已入队，服务端走完后自然停）
                 OnIntent?.Invoke((0, 0));
-                // 服务端命令：只有长按才发停止（web 端同款，避免清掉刚入队的步）
-                if (heldMs >= HoldStopMs) OnMove?.Invoke((0, 0));
+                OnMove?.Invoke((0, 0));
             }
         }
     }
@@ -55,7 +50,7 @@ public partial class MoveController : Node
     {
         if (_held.Count == 0) return;
         _accum += delta;
-        if (_accum >= 0.08) // 服务端每 100ms 消费一步：80ms 发送略快于消费，队列不饥饿也不积压
+        if (_accum >= 0.1) // 方向保持：每 100ms 重发当前方向（防丢包；服务端最后一条输入生效）
         {
             _accum = 0;
             SendHeld();
@@ -69,17 +64,8 @@ public partial class MoveController : Node
         SendDir(MoveInput.Combine(dirs));
     }
 
-    /// <summary>
-    /// 发送方向：转弯（非零→非零且变化）先发 (0,0) 清空服务端队列，
-    /// 让新方向立即执行，不被旧命令积压延迟。
-    /// </summary>
     private void SendDir((int Dx, int Dy) dir)
     {
-        if (_lastDir is { } prev && prev != (0, 0) && dir != (0, 0) && prev != dir)
-        {
-            OnMove?.Invoke((0, 0));
-            OnIntent?.Invoke((0, 0));
-        }
         _lastDir = dir;
         OnMove?.Invoke(dir);
         OnIntent?.Invoke(dir);

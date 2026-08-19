@@ -1,0 +1,18 @@
+{
+  "source": "fishman-side-parts.jpg",
+  "columns": 2,
+  "rows": 4,
+  "frame_width": 512,
+  "frame_height": 384,
+  "order": "row-major",
+  "frames": [
+    "side/part_0.png",
+    "side/part_1.png",
+    "side/part_2.png",
+    "side/part_3.png",
+    "side/part_4.png",
+    "side/part_5.png",
+    "side/part_6.png",
+    "side/part_7.png"
+  ]
+}

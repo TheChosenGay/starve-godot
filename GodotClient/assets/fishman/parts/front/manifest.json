@@ -1,0 +1,18 @@
+{
+  "source": "fishman-parts.jpg",
+  "columns": 2,
+  "rows": 4,
+  "frame_width": 512,
+  "frame_height": 384,
+  "order": "row-major",
+  "frames": [
+    "parts/part_0.png",
+    "parts/part_1.png",
+    "parts/part_2.png",
+    "parts/part_3.png",
+    "parts/part_4.png",
+    "parts/part_5.png",
+    "parts/part_6.png",
+    "parts/part_7.png"
+  ]
+}

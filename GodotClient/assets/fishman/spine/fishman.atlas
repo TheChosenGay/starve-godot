@@ -1,0 +1,173 @@
+fishman.png
+size: 2048,2632
+format: RGBA8888
+filter: Linear,Linear
+repeat: none
+front_head
+  rotate: false
+  xy: 2, 2
+  size: 490, 384
+  orig: 512, 384
+  offset: 22, 0
+  index: -1
+front_arm_l_upper
+  rotate: false
+  xy: 494, 2
+  size: 457, 384
+  orig: 512, 384
+  offset: 55, 0
+  index: -1
+front_arm_l_fore
+  rotate: false
+  xy: 953, 2
+  size: 506, 384
+  orig: 512, 384
+  offset: 3, 0
+  index: -1
+front_arm_r_upper
+  rotate: false
+  xy: 1461, 2
+  size: 451, 384
+  orig: 512, 384
+  offset: 61, 0
+  index: -1
+front_arm_r_fore
+  rotate: false
+  xy: 2, 388
+  size: 488, 384
+  orig: 512, 384
+  offset: 24, 0
+  index: -1
+front_leg_r
+  rotate: false
+  xy: 492, 388
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+side_head
+  rotate: false
+  xy: 1006, 388
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+side_torso
+  rotate: false
+  xy: 1520, 388
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+side_arm_l_upper
+  rotate: false
+  xy: 2, 774
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+side_arm_l_fore
+  rotate: false
+  xy: 516, 774
+  size: 504, 384
+  orig: 512, 384
+  offset: 8, 0
+  index: -1
+side_arm_r_upper
+  rotate: false
+  xy: 1022, 774
+  size: 509, 384
+  orig: 512, 384
+  offset: 3, 0
+  index: -1
+side_arm_r_fore
+  rotate: false
+  xy: 1533, 774
+  size: 511, 384
+  orig: 512, 384
+  offset: 1, 0
+  index: -1
+side_leg_l
+  rotate: false
+  xy: 2, 1160
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+side_leg_r
+  rotate: false
+  xy: 516, 1160
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+back_torso
+  rotate: false
+  xy: 1030, 1160
+  size: 510, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+back_arm_l_upper
+  rotate: false
+  xy: 2, 1546
+  size: 506, 384
+  orig: 512, 384
+  offset: 6, 0
+  index: -1
+back_arm_l_fore
+  rotate: false
+  xy: 510, 1546
+  size: 431, 384
+  orig: 512, 384
+  offset: 81, 0
+  index: -1
+back_arm_r_upper
+  rotate: false
+  xy: 943, 1546
+  size: 459, 384
+  orig: 512, 384
+  offset: 53, 0
+  index: -1
+back_arm_r_fore
+  rotate: false
+  xy: 1404, 1546
+  size: 504, 384
+  orig: 512, 384
+  offset: 8, 0
+  index: -1
+back_leg_l
+  rotate: false
+  xy: 2, 1932
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+back_leg_r
+  rotate: false
+  xy: 516, 1932
+  size: 512, 384
+  orig: 512, 384
+  offset: 0, 0
+  index: -1
+back_head
+  rotate: false
+  xy: 1030, 1932
+  size: 502, 381
+  orig: 512, 384
+  offset: 10, 3
+  index: -1
+front_leg_l
+  rotate: false
+  xy: 1534, 1932
+  size: 408, 347
+  orig: 512, 384
+  offset: 104, 0
+  index: -1
+front_torso
+  rotate: false
+  xy: 2, 2318
+  size: 468, 312
+  orig: 512, 384
+  offset: 0, 72
+  index: -1

@@ -1,0 +1,18 @@
+{
+  "source": "lizard-walk-sheet.jpg",
+  "columns": 4,
+  "rows": 2,
+  "frame_width": 256,
+  "frame_height": 512,
+  "order": "row-major",
+  "frames": [
+    "walk/walk_0.png",
+    "walk/walk_1.png",
+    "walk/walk_2.png",
+    "walk/walk_3.png",
+    "walk/walk_4.png",
+    "walk/walk_5.png",
+    "walk/walk_6.png",
+    "walk/walk_7.png"
+  ]
+}

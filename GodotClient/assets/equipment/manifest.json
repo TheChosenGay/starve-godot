@@ -1,0 +1,225 @@
+{
+  "asset_count": 20,
+  "assets": [
+    {
+      "element": "metal",
+      "item": "armor",
+      "file": "assets/metal/armor.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "metal",
+      "item": "helmet",
+      "file": "assets/metal/helmet.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "metal",
+      "item": "axe",
+      "file": "assets/metal/axe.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "metal",
+      "item": "chisel",
+      "file": "assets/metal/chisel.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "wood",
+      "item": "armor",
+      "file": "assets/wood/armor.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "wood",
+      "item": "helmet",
+      "file": "assets/wood/helmet.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "wood",
+      "item": "axe",
+      "file": "assets/wood/axe.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "wood",
+      "item": "chisel",
+      "file": "assets/wood/chisel.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "water",
+      "item": "armor",
+      "file": "assets/water/armor.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "water",
+      "item": "helmet",
+      "file": "assets/water/helmet.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "water",
+      "item": "axe",
+      "file": "assets/water/axe.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "water",
+      "item": "chisel",
+      "file": "assets/water/chisel.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "fire",
+      "item": "armor",
+      "file": "assets/fire/armor.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "fire",
+      "item": "helmet",
+      "file": "assets/fire/helmet.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "fire",
+      "item": "axe",
+      "file": "assets/fire/axe.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "fire",
+      "item": "chisel",
+      "file": "assets/fire/chisel.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "earth",
+      "item": "armor",
+      "file": "assets/earth/armor.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "earth",
+      "item": "helmet",
+      "file": "assets/earth/helmet.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "earth",
+      "item": "axe",
+      "file": "assets/earth/axe.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    },
+    {
+      "element": "earth",
+      "item": "chisel",
+      "file": "assets/earth/chisel.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "transparent": true,
+      "style": "Don't Starve 风格道具图标"
+    }
+  ]
+}

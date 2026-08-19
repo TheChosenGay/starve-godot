@@ -33,6 +33,7 @@ public partial class GameRoot : Node
 
     private StarveClient? _client;
     private TileMap? _tilemap;
+    private Node2D? _worldPivot;
     private Node2D? _world;
     private MapView? _mapView;
     private EntityLayer? _entityLayer;
@@ -59,6 +60,31 @@ public partial class GameRoot : Node
     private readonly bool _freeCamera = CameraArg is not null;
     private bool _autoHeld;
     private long _autoNextAt;
+    private long _demoNextAt;
+    private float _viewRotation;
+    private int _blockedSignature = int.MinValue;
+    private int _hudSignature = int.MinValue;
+
+    /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
+    private static readonly Dictionary<int, string> ItemIconFiles = new()
+    {
+        [(int)ItemKind.Axe] = "res://assets/equipment/wood/axe.png",
+        [(int)ItemKind.Pickaxe] = "res://assets/equipment/wood/chisel.png", // 凿子充当镐图标
+        [(int)ItemKind.WoodArmor] = "res://assets/equipment/wood/armor.png",
+        [(int)ItemKind.Helmet] = "res://assets/equipment/wood/helmet.png",
+    };
+    private static readonly Dictionary<int, Texture2D> ItemIconCache = new();
+
+    private static Texture2D? ItemIcon(int kind)
+    {
+        if (!ItemIconFiles.TryGetValue(kind, out var path)) return null;
+        if (!ItemIconCache.TryGetValue(kind, out var tex))
+        {
+            tex = GD.Load<Texture2D>(path);
+            ItemIconCache[kind] = tex;
+        }
+        return tex;
+    }
 
     private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
     private static string? CapturePath => OS.GetCmdlineUserArgs()
@@ -69,11 +95,16 @@ public partial class GameRoot : Node
         .SkipWhile(a => a != "--cam")
         .Skip(1)
         .FirstOrDefault();
+    /// <summary>演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。</summary>
+    private static (int Dx, int Dy)? DemoMove =>
+        System.Environment.GetEnvironmentVariable("STARVE_DEMO_MOVE") is { } s &&
+        s.Split(',') is { Length: 2 } parts &&
+        int.TryParse(parts[0], out var dx) && int.TryParse(parts[1], out var dy)
+            ? (dx, dy)
+            : null;
 
     public override void _Ready()
     {
-        ActorNode.Preload();
-
         // Godot 内建 Bloom（辉光）：2D 也生效，配合光照 pass 的亮部
         var env = new Godot.Environment();
         env.GlowEnabled = true;
@@ -85,8 +116,10 @@ public partial class GameRoot : Node
 
         _parallax = new ParallaxView { Name = "Parallax" };
         AddChild(_parallax);
+        _worldPivot = new Node2D { Name = "WorldPivot" };
+        AddChild(_worldPivot);
         _world = new Node2D { Name = "World" };
-        AddChild(_world);
+        _worldPivot.AddChild(_world);
         _mapView = new MapView { Name = "MapView" };
         _world.AddChild(_mapView);
         _clouds = new CloudShadowView { Name = "CloudShadows" };
@@ -118,6 +151,12 @@ public partial class GameRoot : Node
         WireHud(_hud);
 
         AddChild(new CameraController { Camera = _camera });
+        // 截图/演示辅助：STARVE_DEMO_ROTATE=45 启动即旋转视角
+        if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
+            float.TryParse(rr, out var deg))
+        {
+            RotateView(deg * Mathf.Pi / 180f);
+        }
         var move = new MoveController();
         _ownSim = new OwnMovementSim(IsWalkable);
         move.OnMove += dir => _client?.Commands.Move(dir.Dx, dir.Dy);
@@ -147,7 +186,8 @@ public partial class GameRoot : Node
         hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
         {
             // M7：Equipped 下线，改用 Equip 槽位 + 玩家身上复制的主动能力组件。
-            _client?.Commands.Equip(EquippedKind() == kind ? 0 : kind);
+            // 服务端 kind=0 = 卸下全部；手持工具或头/身护甲已在身上时再点 = 卸下。
+            _client?.Commands.Equip(IsEquippedKind(kind) ? 0 : kind);
         });
         hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
         {
@@ -192,7 +232,10 @@ public partial class GameRoot : Node
     {
         if (CapturePath is not null)
         {
-            if (_captureAt is null) _captureAt = NowMs() + 3000;
+            var delay = 3000;
+            if (System.Environment.GetEnvironmentVariable("STARVE_CAPTURE_MS") is { } ms &&
+                int.TryParse(ms, out var custom)) delay = custom;
+            if (_captureAt is null) _captureAt = NowMs() + delay;
             if (NowMs() >= _captureAt)
             {
                 var img = GetViewport().GetTexture().GetImage();
@@ -218,6 +261,12 @@ public partial class GameRoot : Node
             _autoNextAt = now + 150; // 按住空格：每 150ms 评估一次（服务端就近匹配/寻路）
             _client?.Commands.Automate();
         }
+        if (DemoMove is { } dm && now >= _demoNextAt)
+        {
+            _demoNextAt = now + 100;
+            _client?.Commands.Move(dm.Dx, dm.Dy);
+            _ownSim?.SetIntent(dm.Dx, dm.Dy);
+        }
         _ownSim?.Tick((float)(delta * 1000));
         System.Numerics.Vector2? own = _ownSim is { Has: true } sim
             ? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
@@ -227,15 +276,14 @@ public partial class GameRoot : Node
 
         var viewport = GetViewport().GetVisibleRect().Size;
         var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
-        var pos = IsoMath.ContainerPosition(
-            viewport.X,
-            viewport.Y,
-            _camera.CenterX(),
-            _camera.CenterY(),
-            hCam,
-            _camera.ZoomLevel);
-        _world!.Position = new Vector2(pos.X, pos.Y);
-        _world.Scale = Vector2.One * _camera.ZoomLevel;
+        // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
+        // Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。
+        var camLocal = IsoMath.WorldToLocal(_camera.CenterX(), _camera.CenterY(), hCam);
+        _worldPivot!.Position = viewport / 2;
+        _worldPivot.Rotation = _viewRotation;
+        _worldPivot.Scale = Vector2.One * _camera.ZoomLevel;
+        _world!.Position = new Vector2(-camLocal.X, -camLocal.Y);
+        _world.Scale = Vector2.One;
 
         var fx = (_camera.CenterX() - _camera.CenterY()) * IsoMath.Step * _camera.ZoomLevel;
         var fy = ((_camera.CenterX() + _camera.CenterY()) * IsoMath.Step / 2 - hCam * IsoMath.Step) *
@@ -358,6 +406,7 @@ public partial class GameRoot : Node
             _camera.HeightAt = _tilemap.HeightAt;
             _mapView!.SetMap(_tilemap);
             _entityLayer!.SetTilemap(_tilemap);
+            _entityLayer.SetViewRotation(_viewRotation);
             _minimap!.SetMap(_tilemap);
             _lighting!.SetNormalMap(BakeNormalTexture(_tilemap));
             _lighting!.SetMapSize(new Vector2(_tilemap.Width, _tilemap.Height));
@@ -386,27 +435,36 @@ public partial class GameRoot : Node
         {
             var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
             if (pos is null) continue;
+            // M7 连续速度：真实位置 = Position(整格) + sub（sub∈[0,1) 分数偏移，Moveable 携带）
+            var mv = view.Get("Moveable", Moveable.Parser);
+            var fx = pos.X + (float)(mv?.SubX ?? 0);
+            var fy = pos.Y + (float)(mv?.SubY ?? 0);
             if (id == _ownId)
             {
                 // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
-                _ownSim?.Reconcile(pos.X, pos.Y);
+                if (mv is not null) _ownSim?.SetSpeed((float)mv.Speed);
+                // 服务端确认停止 = Dir 清空 + 无路径 + sub 归零；确认后才落定，避免停止前被拽
+                var serverStopped = mv is { DirX: 0, DirY: 0 } &&
+                                    mv.Path.Count == 0 &&
+                                    mv.SubX == 0 && mv.SubY == 0;
+                _ownSim?.Reconcile(fx, fy, serverStopped);
             }
             else if (!_smoothers.TryGetValue(id, out var smoother))
             {
                 smoother = new PositionSmoother();
                 _smoothers[id] = smoother;
-                smoother.Update(pos.X, pos.Y, tick, now);
+                smoother.Update(fx, fy, tick, now);
             }
             else
             {
-                smoother.Update(pos.X, pos.Y, tick, now);
+                smoother.Update(fx, fy, tick, now);
             }
             if (_lastServerPos.TryGetValue(id, out var prev) &&
-                (MathF.Abs(prev.X - pos.X) > 0.001f || MathF.Abs(prev.Y - pos.Y) > 0.001f))
+                (MathF.Abs(prev.X - fx) > 0.001f || MathF.Abs(prev.Y - fy) > 0.001f))
             {
                 _movingUntil[id] = now + 240;
             }
-            _lastServerPos[id] = (pos.X, pos.Y);
+            _lastServerPos[id] = (fx, fy);
         }
 
         _entityLayer!.SyncEntities(world.Entities);
@@ -416,6 +474,24 @@ public partial class GameRoot : Node
     /// <summary>从快照重建动态阻挡层（树/矿/建筑等 Block 组件），本地预测墙停用。</summary>
     private void RebuildBlocked(IReadOnlyDictionary<ulong, EntityView> entities)
     {
+        var signature = 17;
+        unchecked
+        {
+            foreach (var view in entities.Values.OrderBy(v => v.EntityId))
+            {
+                var b = view.Get("Block", Block.Parser);
+                var p = view.Get("Position", Position.Parser);
+                if (b is null || p is null) continue;
+                signature = signature * 31 + view.EntityId.GetHashCode();
+                signature = signature * 31 + p.X;
+                signature = signature * 31 + p.Y;
+                signature = signature * 31 + b.Width;
+                signature = signature * 31 + b.Height;
+            }
+        }
+        if (signature == _blockedSignature) return;
+        _blockedSignature = signature;
+
         _blocked.Clear();
         foreach (var view in entities.Values)
         {
@@ -466,6 +542,52 @@ public partial class GameRoot : Node
         (int)ItemKind.Pickaxe => "镐",
         _ => "徒手",
     };
+
+    /// <summary>
+    /// 已穿戴护甲：从 Equip.head/body 反查护甲实体（服务端 Defense 只挂护甲实体，
+    /// 穿戴者身上不存防御），返回 (槽位名, 物品 kind, 减免百分比)。
+    /// </summary>
+    private List<(string Slot, int Kind, int Percent)> WornArmor()
+    {
+        var result = new List<(string, int, int)>();
+        if (_client is null ||
+            !_client.World.Entities.TryGetValue(_ownId, out var own) ||
+            own.Get("Equip", Equip.Parser) is not { } eq)
+        {
+            return result;
+        }
+        var world = _client.World;
+        AddArmor(eq.Head, "头戴");
+        AddArmor(eq.Body, "身穿");
+        return result;
+
+        void AddArmor(ulong id, string slot)
+        {
+            if (id == 0 || !world.Entities.TryGetValue(id, out var item)) return;
+            var def = item.Get("Defense", Defense.Parser);
+            if (def is null) return;
+            var kind = item.Get("Equipment", ItemStack.Parser) is { } eq ? (int)eq.Kind : 0;
+            result.Add((slot, kind, def.Percent));
+        }
+    }
+
+    /// <summary>总防御减免 = 头/身护甲之和（与服务端 Attackable 受击口径一致）。</summary>
+    private int DefensePercent() => WornArmor().Sum(a => a.Percent);
+
+    /// <summary>已装备物品的展示文本（手持 + 头戴/身穿护甲名）。</summary>
+    private string EquipText()
+    {
+        var wear = string.Concat(WornArmor().Select(a =>
+            $" {a.Slot} {ItemName(_client?.World.Config, a.Kind)}"));
+        return $"手持 {EquippedName()}{wear}";
+    }
+
+    /// <summary>背包 kind 是否已装备（手持工具，或头/身护甲）。</summary>
+    private bool IsEquippedKind(int kind)
+    {
+        if (kind <= 0) return false;
+        return EquippedKind() == kind || WornArmor().Any(a => a.Kind == kind);
+    }
 
     /// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
     private void TryAct(ulong id, Intent intent)
@@ -592,13 +714,15 @@ public partial class GameRoot : Node
         {
             var hp = view.Get("Health", Health.Parser);
             var hpTxt = hp is null ? "" : $" hp={hp.Cur}/{hp.Max}";
-            var name = (int)cr.Kind switch
+            var name = cr.Kind switch
             {
-                1 => "兔子",
-                2 => "狼",
-                3 => "野猪",
-                4 => "鹿",
-                5 => "蜘蛛",
+                CreatureKind.Rabbit => "兔子",
+                CreatureKind.Wolf => "狼",
+                CreatureKind.Boar => "野猪",
+                CreatureKind.Deer => "鹿",
+                CreatureKind.Spider => "蜘蛛",
+                CreatureKind.Fishman => "鱼人",
+                CreatureKind.Lizard => "蜥蜴",
                 _ => "生物",
             };
             return $"{name} #{id}{hpTxt} [攻击]";
@@ -612,11 +736,17 @@ public partial class GameRoot : Node
         var inv = own.Get("Inventory", Inventory.Parser);
         var crafting = own.Get("Crafting", Crafting.Parser);
         var cfg = world.Config;
+        var signature = ComputeHudSignature(world, own);
+        if (signature == _hudSignature) return;
+        _hudSignature = signature;
 
         var items = (inv?.Items ?? new()).Select(it =>
-            new ItemView((int)it.Kind, ItemName(cfg, (int)it.Kind), it.Count, ItemColor(cfg, (int)it.Kind))).ToList();
-        // M7：Equipped 下线，手持看玩家身上复制的主动能力组件。
-        _hud.RenderInventory(items, EquippedKind(), cfg?.InventorySlots ?? 12);
+            new ItemView((int)it.Kind, ItemName(cfg, (int)it.Kind), it.Count, ItemColor(cfg, (int)it.Kind),
+                ItemIcon((int)it.Kind))).ToList();
+        // M7：Equipped 下线——手持看玩家身上复制的主动能力组件，护甲从 Equip 反查护甲实体。
+        var equipped = new HashSet<int> { EquippedKind() };
+        foreach (var a in WornArmor()) equipped.Add(a.Kind);
+        _hud.RenderInventory(items, equipped, cfg?.InventorySlots ?? 12);
 
         if (cfg is null) return;
         var ownPos = own.Get("Position", Position.Parser);
@@ -633,7 +763,11 @@ public partial class GameRoot : Node
                 r.Id,
                 ItemName(cfg, (int)r.Output.Kind),
                 r.Ticks,
-                (int)r.Workstation == 0 ? "徒手可做" : stationOk ? "工作站附近 ✓" : "需要工作站",
+                (int)r.Workstation == 0
+                    ? "徒手可做"
+                    : stationOk
+                        ? $"{WorkstationName((int)r.Workstation)}附近 ✓"
+                        : $"需要靠近{WorkstationName((int)r.Workstation)}",
                 can,
                 r.Ingredients.Select(i =>
                     new IngredientView(ItemName(cfg, (int)i.Kind), materials.GetValueOrDefault((int)i.Kind), i.Count)).ToList());
@@ -645,6 +779,50 @@ public partial class GameRoot : Node
             recipes,
             crafting is null ? null : new CraftingView(crafting.RecipeId, (long)crafting.TicksLeft, total));
     }
+
+    private static int ComputeHudSignature(WorldService world, EntityView own)
+    {
+        var hash = new HashCode();
+        hash.Add(world.Config?.GetHashCode() ?? 0);
+        foreach (var name in new[] { "Inventory", "Equip", "Chopper", "Miner", "Position" })
+        {
+            if (own.Components.TryGetValue(name, out var data)) AddBytes(ref hash, data);
+        }
+        if (own.Get("Crafting", Crafting.Parser) is { } crafting)
+        {
+            hash.Add(crafting.RecipeId);
+            var total = world.Config?.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0;
+            hash.Add(total > 0 ? crafting.TicksLeft * 20 / total : crafting.TicksLeft);
+        }
+        foreach (var view in world.Entities.Values.OrderBy(v => v.EntityId))
+        {
+            if (view.Components.ContainsKey("Workstation"))
+            {
+                hash.Add(view.EntityId);
+                if (view.Components.TryGetValue("Workstation", out var ws)) AddBytes(ref hash, ws);
+                if (view.Components.TryGetValue("Position", out var pos)) AddBytes(ref hash, pos);
+            }
+            if (view.Components.ContainsKey("Equipment") || view.Components.ContainsKey("Defense"))
+            {
+                hash.Add(view.EntityId);
+                if (view.Components.TryGetValue("Equipment", out var eq)) AddBytes(ref hash, eq);
+                if (view.Components.TryGetValue("Defense", out var def)) AddBytes(ref hash, def);
+            }
+        }
+        return hash.ToHashCode();
+    }
+
+    private static void AddBytes(ref HashCode hash, byte[] data)
+    {
+        foreach (var b in data) hash.Add(b);
+    }
+
+    private static string WorkstationName(int type) => type switch
+    {
+        1 => "火堆",
+        2 => "工作台",
+        _ => $"工作站#{type}",
+    };
 
     private static HashSet<int> StationNear(WorldService world, Position? ownPos)
     {
@@ -682,13 +860,15 @@ public partial class GameRoot : Node
             return "浆果丛·采集→浆果";
         if (view.Get("Creature", Creature.Parser) is { } cr)
         {
-            var name = (int)cr.Kind switch
+            var name = cr.Kind switch
             {
-                1 => "兔子",
-                2 => "狼",
-                3 => "野猪",
-                4 => "鹿",
-                5 => "蜘蛛",
+                CreatureKind.Rabbit => "兔子",
+                CreatureKind.Wolf => "狼",
+                CreatureKind.Boar => "野猪",
+                CreatureKind.Deer => "鹿",
+                CreatureKind.Spider => "蜘蛛",
+                CreatureKind.Fishman => "鱼人",
+                CreatureKind.Lizard => "蜥蜴",
                 _ => "生物",
             };
             return view.Get("Dead", Dead.Parser) is not null ? name + "尸体" : name;
@@ -735,8 +915,22 @@ public partial class GameRoot : Node
         var resp = await _client.Commands.CraftAsync(recipeId);
         _hud?.Log(resp is { Started: true }
             ? $"开始制作 {recipeId}（{resp.Ticks} ticks）"
-            : $"制作失败: {resp?.Message ?? "超时"}");
+            : $"制作失败: {CraftFailureText(resp?.Message)}");
     }
+
+    private static string CraftFailureText(string? code) => code switch
+    {
+        null or "" => "请求超时，请检查连接",
+        "insufficient materials" => "材料不足，请查看配方中的持有数量",
+        "need workstation nearby" => "需要靠近配方指定的工作站（曼哈顿距离不超过 3 格）",
+        "output stack full" => "背包没有足够空间",
+        "already crafting" => "已有物品正在制作",
+        "player dead" => "死亡状态无法制作",
+        "player not found" => "玩家状态尚未就绪",
+        "unknown recipe" => "配方不存在或客户端配置已过期",
+        "world_unavailable" => "世界服务暂不可用",
+        _ => code,
+    };
 
     private static Texture2D BakeNormalTexture(TileMap tm)
     {
@@ -748,6 +942,12 @@ public partial class GameRoot : Node
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (@event is InputEventKey rk && !rk.Echo && rk.Pressed)
+        {
+            var rkName = OS.GetKeycodeString(rk.Keycode);
+            if (rkName == "Q") RotateView(-Mathf.Pi / 4);
+            else if (rkName == "E") RotateView(Mathf.Pi / 4);
+        }
         if (@event is InputEventKey ak && !ak.Echo && OS.GetKeycodeString(ak.Keycode) == "Space")
         {
             if (ak.Pressed)
@@ -763,9 +963,7 @@ public partial class GameRoot : Node
         }
         if (@event is InputEventMouseMotion mm)
         {
-            var viewport = GetViewport().GetVisibleRect().Size;
-            var w = _camera.ScreenToWorld(mm.Position.X, mm.Position.Y, viewport.X, viewport.Y);
-            _mouseWorld = new System.Numerics.Vector2(w.X, w.Y);
+            _mouseWorld = ScreenToWorld(mm.Position);
         }
         else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
@@ -776,9 +974,8 @@ public partial class GameRoot : Node
                 ExitBuildPreview();
                 return;
             }
-            var viewport = GetViewport().GetVisibleRect().Size;
-            var w = _camera.ScreenToWorld(mb.Position.X, mb.Position.Y, viewport.X, viewport.Y);
-            _selected = FindNearest(new System.Numerics.Vector2(w.X, w.Y));
+            var picked = ScreenToWorld(mb.Position);
+            _selected = FindNearest(picked);
             // 点击实体 = 选中并直接执行对应动作（掉落物→拾取、浆果→采集、树→砍伐、矿→挖掘、生物→攻击）。
             if (_selected is { } sel &&
                 sel != _ownId &&
@@ -876,7 +1073,7 @@ public partial class GameRoot : Node
         _ghost!.Configure(w, h);
         _ghost.Visible = true;
         if (_mouseWorld is not null) UpdateGhost();
-        _hud.Log($"已创建蓝图 #{resp.Entity}，移动鼠标选位置，点击放置");
+        _hud?.Log($"已创建蓝图 #{resp.Entity}，移动鼠标选位置，点击放置");
     }
 
     private void UpdateHud()
@@ -887,11 +1084,12 @@ public partial class GameRoot : Node
         var pos = own?.Get("Position", Starve.Game.V1.Position.Parser);
         var hp = own?.Get("Health", Health.Parser);
         var hunger = own?.Get("Hunger", Hunger.Parser);
-        var defense = hp?.DefensePercent ?? 0;
+        // M7：Health 不再携带防御（服务端只回 cur/max），总减免从 Equip 头/身槽位反查护甲求和。
+        var defense = DefensePercent();
         var defTxt = defense > 0 ? $" 防御{defense}%" : "";
         _hud.SetStatus(
             $"实体数 {w.Count} | 昼夜 {w.DayLight:0.00} | 季节 {SeasonName(w.Season)}\n" +
-            $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} 手持 {EquippedName()}{defTxt}\n" +
+            $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} {EquipText()}{defTxt}\n" +
             $"选中: {DescribeSelected()}");
         _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
     }
@@ -904,6 +1102,22 @@ public partial class GameRoot : Node
         4 => "冬",
         _ => "?",
     };
+
+    /// <summary>Q/E 旋转视角：WorldPivot 固定在屏幕中心，世界围绕跟随中的玩家旋转。</summary>
+    private void RotateView(float delta)
+    {
+        _viewRotation += delta;
+        _entityLayer?.SetViewRotation(_viewRotation);
+    }
+
+    /// <summary>屏幕坐标经 Godot 场景变换逆投影为世界坐标，自动覆盖旋转、缩放和平移。</summary>
+    private System.Numerics.Vector2 ScreenToWorld(Vector2 screen)
+    {
+        if (_world is null) return System.Numerics.Vector2.Zero;
+        var local = _world.ToLocal(screen);
+        Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
+        return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
+    }
 
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 }

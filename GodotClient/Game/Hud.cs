@@ -5,7 +5,7 @@ using Godot;
 
 namespace GodotClient.Game;
 
-public sealed record ItemView(int Kind, string Name, int Count, Color Color);
+public sealed record ItemView(int Kind, string Name, int Count, Color Color, Texture2D? Icon = null);
 public sealed record IngredientView(string Name, int Have, int Need);
 
 public sealed record RecipeView(
@@ -189,7 +189,7 @@ public partial class Hud : Control
         if (_mineBtn is not null) _mineBtn.Disabled = !canMine;
     }
 
-    public void RenderInventory(IReadOnlyList<ItemView> items, int equippedKind, int slots)
+    public void RenderInventory(IReadOnlyList<ItemView> items, IReadOnlyCollection<int> equippedKinds, int slots)
     {
         if (_bag is null) return;
         foreach (var child in _bag.GetChildren()) child.QueueFree();
@@ -204,8 +204,22 @@ public partial class Hud : Control
             };
             if (item is { Kind: > 0, Count: > 0 })
             {
-                btn.Text = $"{item.Name}\n×{item.Count}" + (equippedKind == item.Kind ? "\n[装]" : "");
-                btn.Modulate = item.Color;
+                if (item.Icon is not null)
+                {
+                    // 有道具图标：图标铺底，数字/已装备标记叠字，名字放悬浮提示。
+                    btn.Icon = item.Icon;
+                    btn.ExpandIcon = true;
+                    btn.AddThemeConstantOverride("icon_max_width", 40);
+                    btn.Text = (item.Count > 1 ? $"×{item.Count}" : "") +
+                               (equippedKinds.Contains(item.Kind) ? "\n[装]" : "");
+                    btn.TooltipText = item.Name;
+                }
+                else
+                {
+                    btn.Text = $"{item.Name}\n×{item.Count}" +
+                               (equippedKinds.Contains(item.Kind) ? "\n[装]" : "");
+                    btn.Modulate = item.Color;
+                }
                 _slotKinds.Add(item.Kind);
             }
             else
@@ -247,7 +261,9 @@ public partial class Hud : Control
                 AutowrapMode = TextServer.AutowrapMode.WordSmart,
             });
             var craft = MakeButton("制作", () => CraftPressed?.Invoke(r.Id));
-            craft.Disabled = !r.CanCraft;
+            // 客户端的材料/工作站判断只用于提示；服务端才是最终权威。
+            // 保持按钮可点击，才能把明确的失败原因反馈给玩家，而不是“点不了且不知道为什么”。
+            if (!r.CanCraft) craft.Text = "尝试制作";
             row.AddChild(craft);
             _craftList.AddChild(row);
         }
@@ -269,7 +285,12 @@ public partial class Hud : Control
 
     private static Button MakeButton(string text, Action onPressed)
     {
-        var b = new Button { Text = text, CustomMinimumSize = new Vector2(64, 32) };
+        var b = new Button
+        {
+            Text = text,
+            CustomMinimumSize = new Vector2(64, 32),
+            FocusMode = FocusModeEnum.None,
+        };
         b.Pressed += onPressed;
         return b;
     }

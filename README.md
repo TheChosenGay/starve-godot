@@ -22,6 +22,7 @@ godot-client/
     PositionSmoother.cs     # 实体位置平滑
     IsoMath.cs              # 世界↔容器本地坐标
     MoveInput.cs            # 按键 → 世界方向
+  Starve.Core.Tests/        # 移动预测等纯逻辑单元测试
   GodotClient/              # Godot 4 C# 工程
     Game/                   # 渲染与交互（相机/地形/实体/天气/视差/小地图/HUD/主流程）
     scenes/Main.tscn
@@ -33,9 +34,19 @@ godot-client/
 1. 启动网关：`cd ../starve && go run ./cmd/gate`
 2. 用 **Godot 4.7.1 .NET 版**打开 `GodotClient/project.godot`
 3. 首次打开会提示编译 C#（或手动 `dotnet build GodotClient/GodotClient.csproj`）
-4. 运行（F5）：等距地形 + 实体 + 天气 + HUD；WASD 移动、滚轮缩放、左键选中
+4. 运行（F5）：WASD/方向键移动、Q/E 围绕玩家旋转、滚轮缩放、左键选中
 
 调试参数（`--` 后传）：`--smoke` 连接后打印地图/实体数并退出；`--capture <path>` 3 秒后截图退出。
+
+工程验收：
+
+```bash
+dotnet build GodotClient/GodotClient.csproj
+dotnet test Starve.Core.Tests/Starve.Core.Tests.csproj
+dotnet build ProtocolSmoke/ProtocolSmoke.csproj
+```
+
+当前稳定边界、移动/相机/制作契约见 [P0.1 客户端真实基线](P0.1-CLIENT-BASELINE.md)。
 
 ## 当前状态
 
@@ -54,17 +65,23 @@ godot-client/
 ### 资产接入（已做）
 
 - 地形：sheet-cut 156 张贴图按变体映射打包图集，菱形填充预处理 + 高度/坡度/AO 顶点色
-- 角色：fantasy-player 8 部位代码装配骨骼（移植 web 端关节数学，行走摆臂/待机呼吸）
+- 角色：主角 = 鱼人（人鱼）预烘焙帧动画（idle/walk/attack/hit 各 15 帧，
+  灰底已离线抠成透明，按移动方向翻转；旧 fantasy-player 关节骨骼保留在 ActorNode 未接线）
 - 法线图：高度场梯度烘焙，全屏光照 shader 采样（地面随太阳/点光明暗起伏）
 - LUT：白天/黄昏/夜晚三套预设按昼夜权重混合（青橙电影/胶片/阴天预留）
 - 幽灵预览：建造后绿/红占格跟随鼠标，build.check 节流，点击放置
 - 实体：方向投影（随太阳高度）、血条、受击闪白；树木贴图 + 随风摇晃；云影漂移
-- 移动手感：自己的角色本地预测（按下即走、客户端阻挡网格墙停、快照缓合校正）；
-  其他实体服务端 tick 延迟插值（固定 100ms + 相邻两帧线性插值，消除格步 40ms 停顿）；
-  移动命令 80ms 发送对齐服务端消费节奏；相机平滑 40ms
+- 移动手感（M7 连续速度契约）：服务端 Moveable{speed,dir,sub,path} 方向保持输入、按 speed×dt
+  连续位移（对角归一化，跨格校验可走、不可走贴墙停）；客户端 OwnMovementSim 使用相同锚点/子格
+  `stepAxis` 本地预测（含负方向借位和 0.001/0.999 贴墙），
+  快照 Position+dir×sub 只做校正（两边一致误差趋近 0）；其他实体 50ms 延迟插值；移动命令
+  按住 100ms 重发当前方向、松开发 0,0；相机平滑 40ms
+- 相机：`WorldPivot` 固定视口中心，Q/E 旋转时围绕跟随中的玩家；拾取通过场景逆变换同步旋转
+- 制作：客户端材料/工作站检查只做提示，按钮可请求服务端并展示明确失败原因；HUD 按状态签名增量刷新
 - 小地图：实体点位（玩家/生物/工作站/建筑）+ 视口框
 - 光照：雨天整体压暗 7%（与 web 一致）
-- 火堆：程序化三层火焰（白芯/橙/红外焰，错相闪烁）+ 余烬粒子 + LUT 后加法柔光晕/上收光柱（体积光）+ 2D HDR Bloom
+- 火堆/工作站：火盆底座贴图 + FirePitFire 手绘粒子火焰（flame/glow/ember 加色混合 + 点光）；
+  工作台 = alchemy-engine 15 帧空闲动画；旧程序化 FireView 保留未接线
 
 ### 尚未做
 

@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 
 namespace Starve.Core;
@@ -14,6 +15,24 @@ public static class IsoMath
     /// <summary>世界坐标 → 容器本地坐标（高度已包含，容器本身带 zoom 缩放）。</summary>
     public static Vector2 WorldToLocal(float wx, float wy, float height = 0) =>
         new((wx - wy) * Step, (wx + wy) * Step / 2 - height * Step);
+
+    /// <summary>
+    /// 容器本地坐标 → 世界坐标。高度场会影响屏幕 Y，因此迭代采样两次完成逆投影。
+    /// 该函数接收 WorldContent.ToLocal() 的结果，天然包含相机旋转/缩放的逆变换。
+    /// </summary>
+    public static Vector2 LocalToWorld(float lx, float ly, Func<float, float, float>? heightAt = null)
+    {
+        var height = 0f;
+        var result = Vector2.Zero;
+        for (var i = 0; i < 2; i++)
+        {
+            var a = lx / Step;
+            var b = (ly + height * Step) / (Step / 2);
+            result = new Vector2((a + b) / 2, (b - a) / 2);
+            if (heightAt is not null) height = heightAt(result.X, result.Y);
+        }
+        return result;
+    }
 
     /// <summary>容器位置：把相机中心投影到屏幕中心。</summary>
     public static Vector2 ContainerPosition(
