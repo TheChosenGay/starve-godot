@@ -9,22 +9,46 @@ using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
-public readonly record struct EntityStyle(Color Color, float Radius, bool IsFire, bool IsTree = false);
+public readonly record struct EntityStyle(
+	Color Color,
+	float Radius,
+	bool IsFire,
+	bool IsTree = false,
+	bool IsWorkbench = false);
 
 /// <summary>实体层：世界实体 → 菱形占位（带投影/血条/受击闪白）或骨骼角色。</summary>
-public partial class EntityLayer : Node2D
+public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPresentationSink
 {
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
-	private readonly Dictionary<ulong, ActorNode> _actors = new();
+	private readonly Dictionary<ulong, RigNode> _rigs = new();
+	private readonly Dictionary<ulong, (float X, float Y)> _rigLastPos = new();
+	private readonly Dictionary<ulong, float> _heightSm = new();
+	private readonly ActionPresentationController _actions;
+	private readonly ImpactPresentationController _impacts;
 	private TileMap? _tilemap;
 	private ulong _ownId;
 	private Func<EntityView, string?>? _nameProvider;
 	private long _lastNow;
 	private float _sunT = 1f;
+	private float _viewSin;
+	private float _viewCos = 1f;
+
+	public EntityLayer()
+	{
+		_actions = new ActionPresentationController(this, NowMs);
+		_impacts = new ImpactPresentationController(this);
+	}
 
 	public void SetTilemap(TileMap? tm) => _tilemap = tm;
 
 	public void SetDayLight(float dayLight) => _sunT = 1f - Mathf.Max(0, 1f - dayLight * 2f);
+
+	/// <summary>视图旋转角（弧度）：Z 排序按旋转后的屏幕 Y，实体随世界节点一起转。</summary>
+	public void SetViewRotation(float radians)
+	{
+		_viewSin = Mathf.Sin(radians);
+		_viewCos = Mathf.Cos(radians);
+	}
 
 	public void SetOwnId(ulong id) => _ownId = id;
 
@@ -33,7 +57,7 @@ public partial class EntityLayer : Node2D
 
 	public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
-		var ids = _nodes.Keys.Concat(_actors.Keys).Distinct().ToList();
+		var ids = _nodes.Keys.Concat(_rigs.Keys).Distinct().ToList();
 		foreach (var id in ids.Where(id => !entities.ContainsKey(id)))
 		{
 			Remove(id);
@@ -46,31 +70,68 @@ public partial class EntityLayer : Node2D
 
 			if (isPlayer)
 			{
+				// 主角 = 鱼人（人鱼）帧动画；掉落/建筑等仍走 EntityNode。
 				if (_nodes.TryGetValue(id, out var diamond))
 				{
 					diamond.QueueFree();
 					_nodes.Remove(id);
 				}
-				if (!_actors.TryGetValue(id, out var actor))
+				if (!_rigs.TryGetValue(id, out var rigNode))
 				{
-					actor = new ActorNode();
-					_actors[id] = actor;
-					AddChild(actor);
+					rigNode = new RigNode(RigRegistry.Player);
+					_rigs[id] = rigNode;
+					AddChild(rigNode);
 				}
-				actor.Visible = hasPos;
+				var hpSelf = view.Get("Health", Health.Parser);
+				rigNode.Configure(hpSelf?.Cur ?? 0, hpSelf?.Max ?? 0, false, "");
+				rigNode.Visible = hasPos;
+				SyncAction(id, view);
+				rigNode.SetDead(view.Components.ContainsKey("Dead"));
 				continue;
-			}
-
-			if (_actors.TryGetValue(id, out var old))
-			{
-				old.QueueFree();
-				_actors.Remove(id);
 			}
 
 			if (!hasPos)
 			{
 				if (_nodes.TryGetValue(id, out var gone)) gone.Visible = false;
+				if (_rigs.TryGetValue(id, out var goneRig))
+				{
+					goneRig.Visible = false;
+					SyncAction(id, view);
+				}
 				continue;
+			}
+
+			// M7 生物视觉：鱼人/蜥蜴等注册了骨架的生物用帧动画，其余维持菱形占位。
+			var rig = view.Get("Creature", Creature.Parser) is { } cr
+				&& !view.Components.ContainsKey("Dead")
+				? RigRegistry.RigOf((int)cr.Kind)
+				: null;
+			if (rig is not null)
+			{
+				if (_nodes.TryGetValue(id, out var diamond))
+				{
+					diamond.QueueFree();
+					_nodes.Remove(id);
+				}
+				if (!_rigs.TryGetValue(id, out var rigNode))
+				{
+					rigNode = new RigNode(rig);
+					_rigs[id] = rigNode;
+					AddChild(rigNode);
+				}
+				var hp2 = view.Get("Health", Health.Parser);
+				rigNode.Configure(hp2?.Cur ?? 0, hp2?.Max ?? 0, hp2?.Max > 0,
+					_nameProvider?.Invoke(view) ?? "");
+				rigNode.Visible = true;
+				SyncAction(id, view);
+				continue;
+			}
+
+			if (_rigs.TryGetValue(id, out var oldRig))
+			{
+				_actions.Remove(id);
+				oldRig.QueueFree();
+				_rigs.Remove(id);
 			}
 
 			if (!_nodes.TryGetValue(id, out var node))
@@ -94,19 +155,22 @@ public partial class EntityLayer : Node2D
 	{
 		var deltaMs = _lastNow == 0 ? 16 : now - _lastNow;
 		_lastNow = now;
+		_actions.Tick();
 
 		foreach (var (id, node) in _nodes)
 		{
 			if (!smoothers.TryGetValue(id, out var sm)) continue;
 			var p = sm.Current(now);
-			var h = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			var targetHeight = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			// 自己与相机必须使用同一瞬时高度，否则坡地上两套滤波会造成视觉回拉。
+			var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			node.Position = new Vector2(local.X, local.Y);
-			node.ZIndex = (int)local.Y;
+			node.ZIndex = (int)(local.X * _viewSin + local.Y * _viewCos);
 			node.Tick(now, _sunT);
 		}
 
-		foreach (var (id, actor) in _actors)
+		foreach (var (id, rig) in _rigs)
 		{
 			System.Numerics.Vector2 p;
 			if (id == _ownId && ownPos is { } op)
@@ -121,33 +185,122 @@ public partial class EntityLayer : Node2D
 			{
 				continue;
 			}
-			var h = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			var targetHeight = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
-			actor.Position = new Vector2(local.X, local.Y);
-			actor.ZIndex = (int)local.Y;
-			actor.Update(deltaMs, isMoving(id));
-			actor.SetSunT(_sunT);
+			rig.Position = new Vector2(local.X, local.Y);
+			rig.ZIndex = (int)(local.X * _viewSin + local.Y * _viewCos);
+			if (_rigLastPos.TryGetValue(id, out var last))
+			{
+				var dx = p.X - last.X;
+				var dy = p.Y - last.Y;
+				if (MathF.Abs(dx) + MathF.Abs(dy) > 0.03f)
+				{
+					rig.SetMovementDirection(dx, dy, _viewSin, _viewCos);
+				}
+			}
+			_rigLastPos[id] = (p.X, p.Y);
+			rig.Update(deltaMs, isMoving(id));
+			rig.SetSunT(_sunT);
 		}
 	}
 
-	public void PlayAction(ulong id, string action)
+	public void PredictAction(ulong id, ActionKind kind) => _actions.Predict(id, kind);
+
+	public void CancelPredictedAction(ulong id) => _actions.CancelPrediction(id);
+
+	public void CancelActionForMovement(ulong id) => _actions.CancelForMovement(id);
+
+	public void ApplyActionOutcome(ActionOutcome outcome) => _actions.ApplyOutcome(outcome);
+
+	public void ApplyCombatImpact(WorldEvent worldEvent, CombatImpactEvent impact) =>
+		_impacts.Apply(worldEvent, impact);
+
+	public void PredictHit(ulong sourceActionId, ulong targetEntity) =>
+		_impacts.PredictHit(sourceActionId, targetEntity);
+
+	private void SyncAction(ulong id, EntityView view)
 	{
-		if (_actors.TryGetValue(id, out var actor)) actor.Play(action);
+		var state = view.Get("ActionState", ActionState.Parser);
+		if (state is null)
+		{
+			_actions.ObserveAbsent(id);
+			return;
+		}
+		_actions.Apply(id, state);
+	}
+
+	void IActionPresentationSink.Apply(ulong entityId, ActionKind kind)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.Apply(kind);
+	}
+
+	void IActionPresentationSink.Finish(ulong entityId)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.FinishAction();
+	}
+
+	void IActionPresentationSink.Cancel(ulong entityId)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
+	}
+
+	void IActionPresentationSink.Death(ulong entityId)
+	{
+		// 死亡素材尚未接入；先终止动作，保留独立映射点。
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
+	}
+
+	void IImpactPresentationSink.PlayHit(ulong targetEntity)
+	{
+		if (_rigs.TryGetValue(targetEntity, out var rig)) rig.PlayHit();
+		else if (_nodes.TryGetValue(targetEntity, out var node)) node.PlayHit();
+	}
+
+	void IImpactPresentationSink.CorrectPredictedHit(ulong targetEntity, CombatImpactResult result)
+	{
+		if (_rigs.TryGetValue(targetEntity, out var rig)) rig.ClearPredictedHit();
+		else if (_nodes.TryGetValue(targetEntity, out var node)) node.ClearPredictedHit();
+	}
+
+	void IImpactPresentationSink.PresentNonHit(ulong targetEntity, CombatImpactResult result)
+	{
+		// BLOCKED/IMMUNE/MISS 暂无素材；保留独立适配点，不能映射为 HIT。
 	}
 
 	private void Remove(ulong id)
 	{
+		_actions.Remove(id);
 		if (_nodes.TryGetValue(id, out var n))
 		{
 			n.QueueFree();
 			_nodes.Remove(id);
 		}
-		if (_actors.TryGetValue(id, out var a))
+		if (_rigs.TryGetValue(id, out var r))
 		{
-			a.QueueFree();
-			_actors.Remove(id);
+			r.QueueFree();
+			_rigs.Remove(id);
 		}
+		_rigLastPos.Remove(id);
+		_heightSm.Remove(id);
 	}
+
+	/// <summary>
+	/// 坡道高度平滑：屏幕 Y 含 -h×20 项，陡坡会让屏幕速度骤变（上坡卡、下坡冲）。
+	/// 用 ~40ms 时间常数低通，缓解速度突变（陡坡上角色会短暂轻微浮起，可接受）。
+	/// </summary>
+	private float SmoothHeight(ulong id, float target, float deltaMs)
+	{
+		if (_heightSm.TryGetValue(id, out var prev))
+		{
+			var k = Mathf.Min(1f, deltaMs / 40f);
+			target = prev + (target - prev) * k;
+		}
+		_heightSm[id] = target;
+		return target;
+	}
+
+	private static long NowMs() => checked((long)Time.GetTicksMsec());
 
 	private static EntityStyle StyleFor(EntityView view)
 	{
@@ -164,7 +317,7 @@ public partial class EntityLayer : Node2D
 		if (station is not null)
 			return (int)station.Type == 1
 				? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, true)
-				: new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false);
+				: new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false, IsWorkbench: true);
 
 		// M7 交互重构：受激能力拆成 Choppable/Minable/Pickable（载荷都是 WorkTarget），
 		// 树/矿/浆果按组件名区分，不再用旧的 Workable。
@@ -209,6 +362,8 @@ public partial class EntityLayer : Node2D
 				3 => new Color(0.36f, 0.25f, 0.22f),
 				4 => new Color(0.84f, 0.72f, 0.60f),
 				5 => new Color(0.29f, 0.14f, 0.35f),
+				6 => new Color(0.22f, 0.55f, 0.58f), // 鱼人
+				7 => new Color(0.55f, 0.75f, 0.35f), // 蜥蜴
 				_ => new Color(1f, 1f, 1f),
 			}, 9, false);
 		}
@@ -223,22 +378,27 @@ public partial class EntityLayer : Node2D
 	}
 }
 
-/// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 可选火堆视觉（FireView）。</summary>
+/// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 火盆/工作站结构视觉。</summary>
 public partial class EntityNode : Node2D
 {
 	private Color _color = Colors.White;
 	private float _radius = 8;
-	private FireView? _fireView;
 	private static Texture2D? _treeTexture;
 	private Sprite2D? _treeSprite;
+	private Node2D? _structure;
 	private Label? _nameLabel;
 	private bool _isTree;
+	private bool _hasStructure;
 	private int _healthCur;
 	private int _healthMax;
 	private bool _showBar;
-	private int _lastHealth = -1;
 	private long _flashUntil;
 	private float _sunT = 1f;
+	private static Texture2D? _firePitTex;
+	private static SpriteFrames? _alchemyFrames;
+
+	/// <summary>2×2 火盆：Building.Position 是左上角锚点，视觉中心偏移到脚印中心。</summary>
+	private static readonly Vector2 FirePitCenter = new(0, 20);
 
 	public void Configure(EntityStyle style, int healthCur, int healthMax, bool showBar, string name = "")
 	{
@@ -249,11 +409,6 @@ public partial class EntityNode : Node2D
 		_healthCur = healthCur;
 		_healthMax = healthMax;
 		_showBar = showBar;
-		if (_lastHealth >= 0 && healthCur < _lastHealth)
-		{
-			_flashUntil = (long)Time.GetTicksMsec() + 300;
-		}
-		_lastHealth = healthCur;
 		if (_isTree)
 		{
 			_treeTexture ??= GD.Load<Texture2D>("res://assets/tiles/tile_001.png");
@@ -274,13 +429,83 @@ public partial class EntityNode : Node2D
 		QueueRedraw();
 		if (style.IsFire)
 		{
-			_fireView ??= AddFireView();
-			_fireView.Visible = true;
+			EnsureFirePit();
 		}
-		else if (_fireView is not null)
+		else if (style.IsWorkbench)
 		{
-			_fireView.Visible = false;
+			EnsureAlchemy();
 		}
+		else if (_structure is not null)
+		{
+			_structure.Visible = false;
+			_hasStructure = false;
+		}
+	}
+
+	public void PlayHit()
+	{
+		_flashUntil = (long)Time.GetTicksMsec() + 300;
+		QueueRedraw();
+	}
+
+	public void ClearPredictedHit()
+	{
+		_flashUntil = 0;
+		QueueRedraw();
+	}
+
+	/// <summary>火盆：fire-pit 底座贴图 + 手绘粒子火焰（FirePitFire）。</summary>
+	private void EnsureFirePit()
+	{
+		if (_structure is null)
+		{
+			_firePitTex ??= GD.Load<Texture2D>("res://assets/structures/fire-pit/fire-pit-cutout.png");
+			_structure = new Node2D { Position = FirePitCenter };
+			_structure.AddChild(new Sprite2D
+			{
+				Texture = _firePitTex,
+				Centered = true,
+				Scale = Vector2.One * 0.09f,
+			});
+			_structure.AddChild(new FirePitFire());
+			AddChild(_structure);
+		}
+		_structure.Visible = true;
+		_hasStructure = true;
+	}
+
+	/// <summary>工作站：alchemy-engine 空闲动画（15 帧循环）。</summary>
+	private void EnsureAlchemy()
+	{
+		if (_structure is null)
+		{
+			_alchemyFrames ??= BuildAlchemyFrames();
+			_structure = new Node2D();
+			var anim = new AnimatedSprite2D
+			{
+				SpriteFrames = _alchemyFrames,
+				Centered = true,
+				Scale = Vector2.One * 0.11f,
+			};
+			anim.Play("idle");
+			_structure.AddChild(anim);
+			AddChild(_structure);
+		}
+		_structure.Visible = true;
+		_hasStructure = true;
+	}
+
+	private static SpriteFrames BuildAlchemyFrames()
+	{
+		var sf = new SpriteFrames();
+		sf.AddAnimation("idle");
+		sf.SetAnimationLoopMode("idle", SpriteFrames.LoopMode.Linear);
+		sf.SetAnimationSpeed("idle", 8);
+		for (var i = 1; i <= 15; i++)
+		{
+			sf.AddFrame("idle", GD.Load<Texture2D>($"res://assets/structures/alchemy-engine/cutout/frame_{i:000}.png"));
+		}
+		return sf;
 	}
 
 	private void UpdateNameLabel(string name)
@@ -330,7 +555,7 @@ public partial class EntityNode : Node2D
 			shadowW * 0.35f,
 			new Color(0, 0, 0, 0.16f + 0.16f * _sunT));
 
-		if (!_isTree)
+		if (!_isTree && !_hasStructure)
 		{
 			DrawColoredPolygon(
 				new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0) },
@@ -369,10 +594,4 @@ public partial class EntityNode : Node2D
 		DrawColoredPolygon(pts, color);
 	}
 
-	private FireView AddFireView()
-	{
-		var fv = new FireView();
-		AddChild(fv);
-		return fv;
-	}
 }

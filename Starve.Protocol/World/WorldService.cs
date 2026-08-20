@@ -29,9 +29,20 @@ public sealed class EntityView
 /// <summary>世界数据：消费全量快照 + 每 tick 增量，维护本地权威实体表（阶段 0 最小实现）。</summary>
 public sealed class WorldService
 {
+    private const int EventHistoryLimit = 2048;
     private readonly ConcurrentDictionary<ulong, EntityView> _entities = new();
+    private readonly HashSet<ulong> _publishedEventIds = new();
+    private readonly Queue<ulong> _eventHistory = new();
+    private readonly HashSet<ActionOutcomeKey> _publishedOutcomes = new();
+    private readonly Queue<ActionOutcomeKey> _outcomeHistory = new();
     private TaskCompletionSource _snapshotReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _revision;
+
+    public event Action<ulong, ulong, long>? InputAcknowledged;
+    public event Action<ActionOutcome>? ActionOutcomeReceived;
+    public event Action<WorldEvent>? WorldEventReceived;
+    public event Action<WorldEvent, CombatImpactEvent>? CombatImpactReceived;
+    public event Action<WorldEvent, HealthChangedEvent>? HealthChangedReceived;
 
     /// <summary>静态配置（登录后推送 world.config）。</summary>
     public GameConfig? Config { get; private set; }
@@ -42,8 +53,13 @@ public sealed class WorldService
     /// <summary>昼夜光照（0..1，来自 DayCycle.Light）。</summary>
     public float DayLight { get; private set; } = 0.5f;
 
-    /// <summary>世界 tick（来自 DayCycle.Phase，每 tick +1；位置插值/预测对齐用）。</summary>
+    /// <summary>世界 tick（来自 Snapshot/SnapshotDelta.tick；插值/预测对齐用）。</summary>
     public long WorldTick { get; private set; }
+
+    public ulong InputEpoch { get; private set; }
+
+    /// <summary>服务端已应用的最大命令 seq（仅当前连接）。</summary>
+    public ulong LastAcceptedSeq { get; private set; }
 
     /// <summary>季节（Season 枚举值，来自 WeatherState）。</summary>
     public int Season { get; private set; }
@@ -69,15 +85,20 @@ public sealed class WorldService
         if (msg.Route == Routes.Snapshot)
         {
             var snap = Snapshot.Parser.ParseFrom(msg.Data);
+            if (snap.InputEpoch == 0) return;
+            ResetEventScope();
             _entities.Clear();
             foreach (var es in snap.Entities) Add(es);
-            ApplyWorldState(snap.DayCycle, snap.Weather);
+            ApplyWorldState(
+                snap.DayCycle, snap.Weather, snap.Tick, snap.InputEpoch, snap.LastAcceptedSeq);
             _snapshotReady.TrySetResult();
             Bump();
         }
         else if (msg.Route == Routes.SnapshotDelta)
         {
             var delta = SnapshotDelta.Parser.ParseFrom(msg.Data);
+            if (InputEpoch != 0 && delta.InputEpoch != InputEpoch) return;
+            if (delta.Tick != 0 && WorldTick != 0 && delta.Tick < (ulong)WorldTick) return;
             foreach (var es in delta.Entities) Add(es);
             foreach (var id in delta.RemovedEntities) _entities.TryRemove(id, out _);
             foreach (var rc in delta.RemovedComponents)
@@ -87,13 +108,19 @@ public sealed class WorldService
                     foreach (var name in rc.Components) view.Components.TryRemove(name, out _);
                 }
             }
-            ApplyWorldState(delta.DayCycle, delta.Weather);
+            ApplyWorldState(
+                delta.DayCycle, delta.Weather, delta.Tick, delta.InputEpoch, delta.LastAcceptedSeq);
             Bump();
+            PublishEvents(delta.Events);
         }
         else if (msg.Route == Routes.Config)
         {
             Config = GameConfig.Parser.ParseFrom(msg.Data);
             Bump();
+        }
+        else if (msg.Route == Routes.ActionOutcome)
+        {
+            PublishOutcome(ActionOutcome.Parser.ParseFrom(msg.Data));
         }
         else if (msg.Route == Routes.WeatherFrame)
         {
@@ -111,14 +138,22 @@ public sealed class WorldService
         }
     }
 
-    private void ApplyWorldState(DayCycle? dayCycle, WeatherState? weather)
+    private void ApplyWorldState(
+        DayCycle? dayCycle,
+        WeatherState? weather,
+        ulong tick,
+        ulong inputEpoch,
+        ulong lastAcceptedSeq)
     {
+        WorldTick = (long)tick;
+        InputEpoch = inputEpoch;
+        LastAcceptedSeq = lastAcceptedSeq;
         if (dayCycle is not null)
         {
             DayLight = dayCycle.Light;
-            WorldTick = dayCycle.Phase;
         }
         if (weather is not null) Season = (int)weather.Season;
+        InputAcknowledged?.Invoke(inputEpoch, lastAcceptedSeq, WorldTick);
     }
 
     private void Add(EntityState es)
@@ -134,6 +169,68 @@ public sealed class WorldService
         }
         _entities[es.EntityId] = view;
     }
+
+    private void PublishEvents(IEnumerable<WorldEvent> events)
+    {
+        foreach (var worldEvent in events)
+        {
+            if (worldEvent.EventId != 0 && !_publishedEventIds.Add(worldEvent.EventId)) continue;
+            if (worldEvent.EventId != 0)
+            {
+                _eventHistory.Enqueue(worldEvent.EventId);
+                if (_eventHistory.Count > EventHistoryLimit)
+                {
+                    _publishedEventIds.Remove(_eventHistory.Dequeue());
+                }
+            }
+
+            WorldEventReceived?.Invoke(worldEvent);
+            if (worldEvent.Outcome is { } outcome)
+            {
+                PublishOutcome(outcome);
+            }
+            else if (worldEvent.Impact is { } impact)
+            {
+                CombatImpactReceived?.Invoke(worldEvent, impact);
+            }
+            else if (worldEvent.HealthChanged is { } healthChanged)
+            {
+                HealthChangedReceived?.Invoke(worldEvent, healthChanged);
+            }
+        }
+    }
+
+    private void PublishOutcome(ActionOutcome outcome)
+    {
+        var key = new ActionOutcomeKey(
+            outcome.EntityId,
+            outcome.ActionId,
+            outcome.RequestId,
+            outcome.Result,
+            outcome.Tick);
+        if (!_publishedOutcomes.Add(key)) return;
+        _outcomeHistory.Enqueue(key);
+        if (_outcomeHistory.Count > EventHistoryLimit)
+        {
+            _publishedOutcomes.Remove(_outcomeHistory.Dequeue());
+        }
+        ActionOutcomeReceived?.Invoke(outcome);
+    }
+
+    private void ResetEventScope()
+    {
+        _publishedEventIds.Clear();
+        _eventHistory.Clear();
+        _publishedOutcomes.Clear();
+        _outcomeHistory.Clear();
+    }
+
+    private readonly record struct ActionOutcomeKey(
+        ulong EntityId,
+        ulong ActionId,
+        ulong RequestId,
+        ActionOutcomeResult Result,
+        long Tick);
 
     private void Bump() => Interlocked.Increment(ref _revision);
 }

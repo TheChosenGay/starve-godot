@@ -1,0 +1,18 @@
+{
+  "source": "fishman-back-parts.jpg",
+  "columns": 2,
+  "rows": 4,
+  "frame_width": 512,
+  "frame_height": 384,
+  "order": "row-major",
+  "frames": [
+    "back/part_0.png",
+    "back/part_1.png",
+    "back/part_2.png",
+    "back/part_3.png",
+    "back/part_4.png",
+    "back/part_5.png",
+    "back/part_6.png",
+    "back/part_7.png"
+  ]
+}

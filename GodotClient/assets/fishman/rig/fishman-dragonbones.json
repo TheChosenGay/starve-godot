@@ -1,0 +1,1319 @@
+{
+  "name": "fishman",
+  "version": "5.5",
+  "compatibleVersion": "5.5",
+  "frameRate": 24,
+  "armature": [
+    {
+      "type": "Armature",
+      "frameRate": 24,
+      "name": "fishman",
+      "aabb": {
+        "x": -300,
+        "y": -400,
+        "width": 600,
+        "height": 800
+      },
+      "bone": [
+        {
+          "name": "root",
+          "length": 0,
+          "transform": {
+            "x": 256,
+            "y": 512
+          }
+        },
+        {
+          "name": "torso",
+          "parent": "root",
+          "length": 0,
+          "transform": {
+            "x": 0,
+            "y": -130
+          }
+        },
+        {
+          "name": "head",
+          "parent": "torso",
+          "length": 0,
+          "transform": {
+            "x": 0,
+            "y": -150
+          }
+        },
+        {
+          "name": "arm_l_upper",
+          "parent": "torso",
+          "length": 0,
+          "transform": {
+            "x": -70,
+            "y": -105,
+            "skX": -15,
+            "skY": -15
+          }
+        },
+        {
+          "name": "arm_l_fore",
+          "parent": "arm_l_upper",
+          "length": 0,
+          "transform": {
+            "x": 0,
+            "y": 90
+          }
+        },
+        {
+          "name": "arm_r_upper",
+          "parent": "torso",
+          "length": 0,
+          "transform": {
+            "x": 70,
+            "y": -105,
+            "skX": 15,
+            "skY": 15
+          }
+        },
+        {
+          "name": "arm_r_fore",
+          "parent": "arm_r_upper",
+          "length": 0,
+          "transform": {
+            "x": 0,
+            "y": 90
+          }
+        },
+        {
+          "name": "leg_l",
+          "parent": "root",
+          "length": 0,
+          "transform": {
+            "x": -45,
+            "y": 0
+          }
+        },
+        {
+          "name": "leg_r",
+          "parent": "root",
+          "length": 0,
+          "transform": {
+            "x": 45,
+            "y": 0
+          }
+        }
+      ],
+      "slot": [
+        {
+          "name": "leg_l",
+          "parent": "leg_l",
+          "displayIndex": 0
+        },
+        {
+          "name": "leg_r",
+          "parent": "leg_r",
+          "displayIndex": 1
+        },
+        {
+          "name": "torso",
+          "parent": "torso",
+          "displayIndex": 2
+        },
+        {
+          "name": "arm_l_upper",
+          "parent": "arm_l_upper",
+          "displayIndex": 3
+        },
+        {
+          "name": "arm_l_fore",
+          "parent": "arm_l_fore",
+          "displayIndex": 4
+        },
+        {
+          "name": "arm_r_upper",
+          "parent": "arm_r_upper",
+          "displayIndex": 5
+        },
+        {
+          "name": "arm_r_fore",
+          "parent": "arm_r_fore",
+          "displayIndex": 6
+        },
+        {
+          "name": "head",
+          "parent": "head",
+          "displayIndex": 7
+        }
+      ],
+      "skin": [
+        {
+          "name": "default",
+          "slot": [
+            {
+              "name": "leg_l",
+              "display": [
+                {
+                  "name": "part_6",
+                  "path": "part_6",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "display": [
+                {
+                  "name": "part_7",
+                  "path": "part_7",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "torso",
+              "display": [
+                {
+                  "name": "part_1",
+                  "path": "part_1",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "display": [
+                {
+                  "name": "part_2",
+                  "path": "part_2",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "arm_l_fore",
+              "display": [
+                {
+                  "name": "part_3",
+                  "path": "part_3",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "display": [
+                {
+                  "name": "part_4",
+                  "path": "part_4",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "arm_r_fore",
+              "display": [
+                {
+                  "name": "part_5",
+                  "path": "part_5",
+                  "type": "image"
+                }
+              ]
+            },
+            {
+              "name": "head",
+              "display": [
+                {
+                  "name": "part_0",
+                  "path": "part_0",
+                  "type": "image"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "animation": [
+        {
+          "name": "idle",
+          "duration": 48,
+          "playTimes": 0,
+          "bone": [
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 1.5
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -1.5
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ],
+              "translateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -3
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -1
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            },
+            {
+              "name": "head",
+              "rotateFrame": [
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": -1
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                },
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": -13
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                },
+                {
+                  "duration": 24,
+                  "tweenEasing": 0,
+                  "rotate": 13
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "walk_down",
+          "duration": 19,
+          "playTimes": 0,
+          "bone": [
+            {
+              "name": "leg_l",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                }
+              ]
+            },
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ],
+              "translateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -4
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "walk_up",
+          "duration": 19,
+          "playTimes": 0,
+          "bone": [
+            {
+              "name": "leg_l",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 16
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -16
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 16
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -16
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 16
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -16
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -21.4
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -8.6
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -21.4
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 21.4
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 8.6
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 21.4
+                }
+              ]
+            },
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ],
+              "translateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -4
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "walk_left",
+          "duration": 19,
+          "playTimes": 0,
+          "bone": [
+            {
+              "name": "leg_l",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                }
+              ]
+            },
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -8
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -8
+                }
+              ],
+              "translateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -4
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "walk_right",
+          "duration": 19,
+          "playTimes": 0,
+          "bone": [
+            {
+              "name": "leg_l",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 22
+                },
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -22
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": -6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -23.8
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 6.199999999999999
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 23.8
+                }
+              ]
+            },
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 8
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "rotate": 8
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 8
+                }
+              ],
+              "translateFrame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": -4
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "attack",
+          "duration": 14,
+          "playTimes": 1,
+          "bone": [
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 6,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 8,
+                  "tweenEasing": 0,
+                  "rotate": -10
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 5,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                },
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": -110
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": -40
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                }
+              ]
+            },
+            {
+              "name": "arm_r_fore",
+              "rotateFrame": [
+                {
+                  "duration": 5,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": -30
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": -10
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "head",
+              "rotateFrame": [
+                {
+                  "duration": 5,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 5
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "hit",
+          "duration": 10,
+          "playTimes": 1,
+          "bone": [
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": 12
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "head",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": 10
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": -60
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": 60
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                }
+              ]
+            },
+            {
+              "name": "leg_l",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": -8
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "leg_r",
+              "rotateFrame": [
+                {
+                  "duration": 7,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 2,
+                  "tweenEasing": 0,
+                  "rotate": 8
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "harvest",
+          "duration": 29,
+          "playTimes": 1,
+          "bone": [
+            {
+              "name": "torso",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 25
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 25
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "arm_l_upper",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 40
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 40
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": -15
+                }
+              ]
+            },
+            {
+              "name": "arm_r_upper",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 40
+                },
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 40
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 15
+                }
+              ]
+            },
+            {
+              "name": "arm_l_fore",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 19,
+                  "tweenEasing": 0,
+                  "rotate": 25
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "arm_r_fore",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 19,
+                  "tweenEasing": 0,
+                  "rotate": 25
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            },
+            {
+              "name": "head",
+              "rotateFrame": [
+                {
+                  "duration": 10,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                },
+                {
+                  "duration": 19,
+                  "tweenEasing": 0,
+                  "rotate": 8
+                },
+                {
+                  "duration": 0,
+                  "tweenEasing": 0,
+                  "rotate": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -10,6 +10,8 @@ namespace Starve.Protocol;
 /// </summary>
 public sealed class Transport : IDisposable
 {
+    public const string ClientProtocolVersion = "1.2";
+
     private readonly ClientWebSocket _ws = new();
     private readonly PacketBuffer _buffer = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -20,6 +22,10 @@ public sealed class Transport : IDisposable
     public event Action<PomeloPacket>? OnPacket;
     public event Action<string>? OnKick;
 
+    public bool IsConnected => _ws.State == WebSocketState.Open;
+    public string ProtocolVersion { get; private set; } = "";
+    public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
+
     /// <summary>连接 + 握手：发握手包，等服务端握手响应并回 ack 后返回。</summary>
     public async Task ConnectAsync(string url, CancellationToken ct = default)
     {
@@ -29,7 +35,10 @@ public sealed class Transport : IDisposable
         _cts = linked;
         _receiveTask = Task.Run(() => ReceiveLoopAsync(linked.Token, handshakeTcs), CancellationToken.None);
 
-        await SendPacketAsync(PacketType.Handshake, JsonSerializer.SerializeToUtf8Bytes(new { version = "0.0.1" }), ct);
+        await SendPacketAsync(
+            PacketType.Handshake,
+            JsonSerializer.SerializeToUtf8Bytes(new { version = ClientProtocolVersion }),
+            ct);
         await handshakeTcs.Task.WaitAsync(ct);
     }
 
@@ -54,7 +63,7 @@ public sealed class Transport : IDisposable
                     {
                         case PacketType.Handshake:
                             await SendPacketAsync(PacketType.HandshakeAck, Array.Empty<byte>(), ct);
-                            StartHeartbeat(ParseHeartbeat(pkt.Data));
+                            StartHeartbeat(ParseHandshake(pkt.Data));
                             handshakeTcs.TrySetResult();
                             break;
                         case PacketType.Heartbeat:
@@ -73,15 +82,23 @@ public sealed class Transport : IDisposable
         catch (WebSocketException) { }
     }
 
-    private static int ParseHeartbeat(byte[] body)
+    private int ParseHandshake(byte[] body)
     {
         try
         {
             using var doc = JsonDocument.Parse(body);
-            return doc.RootElement.TryGetProperty("sys", out var sys) &&
-                   sys.TryGetProperty("heartbeat", out var hb)
-                ? hb.GetInt32()
-                : 0;
+            if (!doc.RootElement.TryGetProperty("sys", out var sys)) return 0;
+            ProtocolVersion = sys.TryGetProperty("protocol_version", out var version)
+                ? version.GetString() ?? ""
+                : "";
+            Capabilities = sys.TryGetProperty("capabilities", out var capabilities)
+                ? capabilities.EnumerateArray()
+                    .Select(value => value.GetString())
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value!)
+                    .ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>();
+            return sys.TryGetProperty("heartbeat", out var hb) ? hb.GetInt32() : 0;
         }
         catch
         {

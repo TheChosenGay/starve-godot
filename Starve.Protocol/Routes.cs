@@ -28,4 +28,5 @@ public static class Routes
     public const string CraftDone = "world.craft.done";
     public const string Config = "world.config";
     public const string WeatherFrame = "world.weather.frame";
+    public const string ActionOutcome = "world.action.outcome";
 }

@@ -1,0 +1,90 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "fix/**"
+      - "optimize/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout server contract
+        uses: actions/checkout@v4
+        with:
+          repository: TheChosenGay/starve
+          # 跨仓库联调可显式指定已推送分支；默认要求 main 已具备 P0.2 可移植鉴权。
+          ref: ${{ vars.STARVE_SERVER_REF || 'main' }}
+          path: .contract-server
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .contract-server/go.mod
+          cache-dependency-path: .contract-server/go.sum
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Run quality gate
+        env:
+          STARVE_SERVER_DIR: .contract-server
+        run: make check
+      - name: Run protocol E2E
+        env:
+          JWT_SECRET: feeds-dev-secret
+          GATE_WS_ADDR: ":18081"
+          GATE_METRICS_ADDR: "127.0.0.1:19090"
+          GATE_SAVE_FILE: ${{ runner.temp }}/starve-e2e/save.bin
+          STARVE_GATE_URL: ws://127.0.0.1:18081/ws
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$GATE_SAVE_FILE")"
+          gate_log="$RUNNER_TEMP/starve-gate.log"
+          (
+            cd .contract-server
+            go build -o "$RUNNER_TEMP/starve-gate" ./cmd/gate
+          )
+          (
+            cd .contract-server
+            exec "$RUNNER_TEMP/starve-gate"
+          ) >"$gate_log" 2>&1 &
+          gate_pid=$!
+
+          cleanup() {
+            kill -TERM "$gate_pid" 2>/dev/null || true
+            wait "$gate_pid" 2>/dev/null || true
+            echo "---- gate log ----"
+            cp "$gate_log" /dev/stdout 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$gate_pid" 2>/dev/null; then
+              echo "gate exited before becoming ready" >&2
+              exit 1
+            fi
+            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 18081), .2); s.close()' 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "gate readiness timed out" >&2
+            exit 1
+          fi
+
+          make e2e

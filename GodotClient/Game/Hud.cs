@@ -5,7 +5,7 @@ using Godot;
 
 namespace GodotClient.Game;
 
-public sealed record ItemView(int Kind, string Name, int Count, Color Color);
+public sealed record ItemView(int Kind, string Name, int Count, Color Color, Texture2D? Icon = null);
 public sealed record IngredientView(string Name, int Have, int Need);
 
 public sealed record RecipeView(
@@ -37,6 +37,8 @@ public partial class Hud : Control
     public event Action? SleepPressed;
 
     private Label? _status;
+    private Label? _vitalsLabel;
+    private ProgressBar? _vitalsBar;
     private RichTextLabel? _log;
     private GridContainer? _bag;
     private readonly List<int> _slotKinds = new();
@@ -48,9 +50,16 @@ public partial class Hud : Control
     private Button? _craftCancel;
     private Button? _chopBtn;
     private Button? _mineBtn;
+    private readonly List<Button> _gameplayButtons = new();
+    private readonly List<Button> _craftButtons = new();
+    private bool _interactionsDisabled;
+    private bool _canChop;
+    private bool _canMine;
+    private bool _craftingActive;
     private int _selectedSlot = -1;
     private Label? _fps;
     private double _fpsTimer;
+    private string? _lastStatusText;
 
     public override void _Ready()
     {
@@ -87,18 +96,34 @@ public partial class Hud : Control
         left.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         main.AddChild(left);
 
+        _vitalsLabel = new Label
+        {
+            Text = "生命 0 / 0",
+            LabelSettings = new LabelSettings { FontSize = 20, FontColor = Colors.White },
+        };
+        left.AddChild(_vitalsLabel);
+        _vitalsBar = new ProgressBar
+        {
+            MinValue = 0,
+            MaxValue = 1,
+            Value = 0,
+            ShowPercentage = false,
+            CustomMinimumSize = new Vector2(360, 22),
+        };
+        left.AddChild(_vitalsBar);
+
         _status = new Label { Modulate = new Color(1f, 0.95f, 0.8f) };
         left.AddChild(_status);
 
         // 操作按钮行
         var actionBar = new HBoxContainer();
-        actionBar.AddChild(MakeButton("采集", () => GatherPressed?.Invoke()));
-        actionBar.AddChild(MakeButton("攻击", () => AttackPressed?.Invoke()));
-        _chopBtn = MakeButton("砍伐", () => ChopPressed?.Invoke());
+        actionBar.AddChild(TrackGameplay(MakeButton("采集", () => GatherPressed?.Invoke())));
+        actionBar.AddChild(TrackGameplay(MakeButton("攻击", () => AttackPressed?.Invoke())));
+        _chopBtn = TrackGameplay(MakeButton("砍伐", () => ChopPressed?.Invoke()));
         actionBar.AddChild(_chopBtn);
-        _mineBtn = MakeButton("挖掘", () => MinePressed?.Invoke());
+        _mineBtn = TrackGameplay(MakeButton("挖掘", () => MinePressed?.Invoke()));
         actionBar.AddChild(_mineBtn);
-        actionBar.AddChild(MakeButton("拾取", () => PickupPressed?.Invoke()));
+        actionBar.AddChild(TrackGameplay(MakeButton("拾取", () => PickupPressed?.Invoke())));
         actionBar.AddChild(MakeButton("拆除", () => DemolishPressed?.Invoke()));
         actionBar.AddChild(MakeButton("建火堆", () => BuildPressed?.Invoke(1)));
         actionBar.AddChild(MakeButton("建木墙", () => BuildPressed?.Invoke(2)));
@@ -174,6 +199,8 @@ public partial class Hud : Control
 
     public void SetStatus(string text)
     {
+        if (text == _lastStatusText) return;
+        _lastStatusText = text;
         if (_status is not null) _status.Text = text;
     }
 
@@ -182,14 +209,40 @@ public partial class Hud : Control
         if (_log is not null) _log.AppendText(line + "\n");
     }
 
+    public void SetVitals(HudVitalsViewModel vitals)
+    {
+        if (_vitalsLabel is not null) _vitalsLabel.Text = vitals.Text;
+        if (_vitalsBar is null) return;
+        _vitalsBar.MaxValue = Math.Max(1, vitals.Maximum);
+        _vitalsBar.Value = vitals.IsDead ? 0 : vitals.Current;
+        _vitalsBar.Modulate = vitals.Tone switch
+        {
+            VitalTone.Green => new Color(0.35f, 1f, 0.42f),
+            VitalTone.Yellow => new Color(1f, 0.82f, 0.22f),
+            VitalTone.Spirit => new Color(0.62f, 0.84f, 1f),
+            _ => new Color(1f, 0.25f, 0.22f),
+        };
+    }
+
+    public void SetInteractionsDisabled(bool disabled)
+    {
+        _interactionsDisabled = disabled;
+        foreach (var button in _gameplayButtons) button.Disabled = disabled;
+        foreach (var button in _craftButtons) button.Disabled = disabled;
+        if (_craftCancel is not null) _craftCancel.Disabled = disabled || !_craftingActive;
+        SetToolState(_canChop, _canMine);
+    }
+
     /// <summary>按玩家主动能力置灰操作按钮：徒手只能采集/攻击，砍伐/挖掘需斧头/镐。</summary>
     public void SetToolState(bool canChop, bool canMine)
     {
-        if (_chopBtn is not null) _chopBtn.Disabled = !canChop;
-        if (_mineBtn is not null) _mineBtn.Disabled = !canMine;
+        _canChop = canChop;
+        _canMine = canMine;
+        if (_chopBtn is not null) _chopBtn.Disabled = _interactionsDisabled || !canChop;
+        if (_mineBtn is not null) _mineBtn.Disabled = _interactionsDisabled || !canMine;
     }
 
-    public void RenderInventory(IReadOnlyList<ItemView> items, int equippedKind, int slots)
+    public void RenderInventory(IReadOnlyList<ItemView> items, IReadOnlyCollection<int> equippedKinds, int slots)
     {
         if (_bag is null) return;
         foreach (var child in _bag.GetChildren()) child.QueueFree();
@@ -204,8 +257,22 @@ public partial class Hud : Control
             };
             if (item is { Kind: > 0, Count: > 0 })
             {
-                btn.Text = $"{item.Name}\n×{item.Count}" + (equippedKind == item.Kind ? "\n[装]" : "");
-                btn.Modulate = item.Color;
+                if (item.Icon is not null)
+                {
+                    // 有道具图标：图标铺底，数字/已装备标记叠字，名字放悬浮提示。
+                    btn.Icon = item.Icon;
+                    btn.ExpandIcon = true;
+                    btn.AddThemeConstantOverride("icon_max_width", 40);
+                    btn.Text = (item.Count > 1 ? $"×{item.Count}" : "") +
+                               (equippedKinds.Contains(item.Kind) ? "\n[装]" : "");
+                    btn.TooltipText = item.Name;
+                }
+                else
+                {
+                    btn.Text = $"{item.Name}\n×{item.Count}" +
+                               (equippedKinds.Contains(item.Kind) ? "\n[装]" : "");
+                    btn.Modulate = item.Color;
+                }
                 _slotKinds.Add(item.Kind);
             }
             else
@@ -227,12 +294,14 @@ public partial class Hud : Control
     {
         if (_craftList is null) return;
         foreach (var child in _craftList.GetChildren()) child.QueueFree();
+        _craftButtons.Clear();
+        _craftingActive = crafting is not null;
         if (crafting is { } c)
         {
             var pct = c.Ticks > 0 ? (int)(100 * (1 - (double)c.TicksLeft / c.Ticks)) : 0;
             var row = new Label { Text = $"制作中：{c.RecipeId}（{pct}%）" };
             _craftList.AddChild(row);
-            _craftCancel!.Disabled = false;
+            _craftCancel!.Disabled = _interactionsDisabled;
             return;
         }
 
@@ -247,7 +316,11 @@ public partial class Hud : Control
                 AutowrapMode = TextServer.AutowrapMode.WordSmart,
             });
             var craft = MakeButton("制作", () => CraftPressed?.Invoke(r.Id));
-            craft.Disabled = !r.CanCraft;
+            // 客户端的材料/工作站判断只用于提示；服务端才是最终权威。
+            // 保持按钮可点击，才能把明确的失败原因反馈给玩家，而不是“点不了且不知道为什么”。
+            if (!r.CanCraft) craft.Text = "尝试制作";
+            craft.Disabled = _interactionsDisabled;
+            _craftButtons.Add(craft);
             row.AddChild(craft);
             _craftList.AddChild(row);
         }
@@ -269,8 +342,19 @@ public partial class Hud : Control
 
     private static Button MakeButton(string text, Action onPressed)
     {
-        var b = new Button { Text = text, CustomMinimumSize = new Vector2(64, 32) };
+        var b = new Button
+        {
+            Text = text,
+            CustomMinimumSize = new Vector2(64, 32),
+            FocusMode = FocusModeEnum.None,
+        };
         b.Pressed += onPressed;
         return b;
+    }
+
+    private Button TrackGameplay(Button button)
+    {
+        _gameplayButtons.Add(button);
+        return button;
     }
 }

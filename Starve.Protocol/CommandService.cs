@@ -9,12 +9,35 @@ namespace Starve.Protocol;
 /// </summary>
 public sealed class CommandService
 {
-    private readonly Session _session;
+    private readonly ICommandSession _session;
+    private readonly InputSequenceTracker _inputs = new();
 
-    public CommandService(Session session) => _session = session;
+    public CommandService(ICommandSession session) => _session = session;
+
+    public ulong InputEpoch => _inputs.Epoch;
+    public ulong LastSentSeq => _inputs.LastSent;
+    public ulong LastAcceptedSeq => _inputs.LastAccepted;
+    public ulong PendingMoveCount => _inputs.Pending;
+    public bool CanPredictMovement => _inputs.CanPredict;
+
+    public void BeginInputEpoch(ulong epoch)
+    {
+        _inputs.Begin(epoch);
+    }
+
+    public void Acknowledge(ulong epoch, ulong seq, long _)
+    {
+        _inputs.Acknowledge(epoch, seq);
+    }
 
     public void Move(int dx, int dy) =>
-        Notify(Routes.Move, new PlayerMove { Dx = dx, Dy = dy });
+        Notify(Routes.Move, new PlayerMove
+        {
+            Dx = dx,
+            Dy = dy,
+            Seq = NextSeq(),
+            InputEpoch = InputEpoch,
+        });
 
     public void Gather(ulong target) =>
         Notify(Routes.Gather, new PlayerGather { TargetEntity = target });
@@ -39,7 +62,11 @@ public sealed class CommandService
 
     /// <summary>空格自动行为：服务端在 AOI 内就近匹配目标执行（或寻路走过去）。</summary>
     public void Automate() =>
-        Notify(Routes.Automate, new PlayerAutomate());
+        Notify(Routes.Automate, new PlayerAutomate { Mode = AutomateMode.Any });
+
+    /// <summary>F 自动攻击：仅选择 AOI 内可攻击目标，超距时由服务端寻路。</summary>
+    public void AttackNearest() =>
+        Notify(Routes.Automate, new PlayerAutomate { Mode = AutomateMode.AttackOnly });
 
     public void Drop(int kind, int count) =>
         Notify(Routes.Drop, new PlayerDrop { Kind = kind, Count = count });
@@ -87,4 +114,6 @@ public sealed class CommandService
 
     private void Notify(string route, IMessage msg) =>
         _session.Notify(route, msg.ToByteArray());
+
+    private ulong NextSeq() => _inputs.Next();
 }
