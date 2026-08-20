@@ -7,8 +7,18 @@ namespace Starve.Protocol;
 
 public readonly record struct SessionInfo(string UserId, ulong EntityId, ulong InputEpoch);
 
+public interface ICommandSession
+{
+    Task<byte[]?> RequestAsync(
+        string route,
+        byte[] data,
+        int timeoutMs = 5000,
+        CancellationToken ct = default);
+    void Notify(string route, byte[] data);
+}
+
 /// <summary>会话：握手后的 mid 关联 + 推送/踢线分发 + 登录鉴权。</summary>
-public sealed class Session
+public sealed class Session : ICommandSession
 {
     private readonly Transport _transport;
     private readonly ConcurrentDictionary<int, TaskCompletionSource<byte[]?>> _pending = new();

@@ -10,6 +10,8 @@ namespace Starve.Protocol;
 /// </summary>
 public sealed class Transport : IDisposable
 {
+    public const string ClientProtocolVersion = "1.2";
+
     private readonly ClientWebSocket _ws = new();
     private readonly PacketBuffer _buffer = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -33,7 +35,10 @@ public sealed class Transport : IDisposable
         _cts = linked;
         _receiveTask = Task.Run(() => ReceiveLoopAsync(linked.Token, handshakeTcs), CancellationToken.None);
 
-        await SendPacketAsync(PacketType.Handshake, JsonSerializer.SerializeToUtf8Bytes(new { version = "0.0.1" }), ct);
+        await SendPacketAsync(
+            PacketType.Handshake,
+            JsonSerializer.SerializeToUtf8Bytes(new { version = ClientProtocolVersion }),
+            ct);
         await handshakeTcs.Task.WaitAsync(ct);
     }
 

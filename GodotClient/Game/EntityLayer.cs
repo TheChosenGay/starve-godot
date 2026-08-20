@@ -17,12 +17,14 @@ public readonly record struct EntityStyle(
 	bool IsWorkbench = false);
 
 /// <summary>实体层：世界实体 → 菱形占位（带投影/血条/受击闪白）或骨骼角色。</summary>
-public partial class EntityLayer : Node2D
+public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPresentationSink
 {
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
 	private readonly Dictionary<ulong, RigNode> _rigs = new();
 	private readonly Dictionary<ulong, (float X, float Y)> _rigLastPos = new();
 	private readonly Dictionary<ulong, float> _heightSm = new();
+	private readonly ActionPresentationController _actions;
+	private readonly ImpactPresentationController _impacts;
 	private TileMap? _tilemap;
 	private ulong _ownId;
 	private Func<EntityView, string?>? _nameProvider;
@@ -30,6 +32,12 @@ public partial class EntityLayer : Node2D
 	private float _sunT = 1f;
 	private float _viewSin;
 	private float _viewCos = 1f;
+
+	public EntityLayer()
+	{
+		_actions = new ActionPresentationController(this, NowMs);
+		_impacts = new ImpactPresentationController(this);
+	}
 
 	public void SetTilemap(TileMap? tm) => _tilemap = tm;
 
@@ -77,13 +85,19 @@ public partial class EntityLayer : Node2D
 				var hpSelf = view.Get("Health", Health.Parser);
 				rigNode.Configure(hpSelf?.Cur ?? 0, hpSelf?.Max ?? 0, false, "");
 				rigNode.Visible = hasPos;
+				SyncAction(id, view);
+				rigNode.SetDead(view.Components.ContainsKey("Dead"));
 				continue;
 			}
 
 			if (!hasPos)
 			{
 				if (_nodes.TryGetValue(id, out var gone)) gone.Visible = false;
-				if (_rigs.TryGetValue(id, out var goneRig)) goneRig.Visible = false;
+				if (_rigs.TryGetValue(id, out var goneRig))
+				{
+					goneRig.Visible = false;
+					SyncAction(id, view);
+				}
 				continue;
 			}
 
@@ -108,11 +122,14 @@ public partial class EntityLayer : Node2D
 				var hp2 = view.Get("Health", Health.Parser);
 				rigNode.Configure(hp2?.Cur ?? 0, hp2?.Max ?? 0, hp2?.Max > 0,
 					_nameProvider?.Invoke(view) ?? "");
+				rigNode.Visible = true;
+				SyncAction(id, view);
 				continue;
 			}
 
 			if (_rigs.TryGetValue(id, out var oldRig))
 			{
+				_actions.Remove(id);
 				oldRig.QueueFree();
 				_rigs.Remove(id);
 			}
@@ -138,6 +155,7 @@ public partial class EntityLayer : Node2D
 	{
 		var deltaMs = _lastNow == 0 ? 16 : now - _lastNow;
 		_lastNow = now;
+		_actions.Tick();
 
 		foreach (var (id, node) in _nodes)
 		{
@@ -187,13 +205,72 @@ public partial class EntityLayer : Node2D
 		}
 	}
 
-	public void PlayAction(ulong id, string action)
+	public void PredictAction(ulong id, ActionKind kind) => _actions.Predict(id, kind);
+
+	public void CancelPredictedAction(ulong id) => _actions.CancelPrediction(id);
+
+	public void CancelActionForMovement(ulong id) => _actions.CancelForMovement(id);
+
+	public void ApplyActionOutcome(ActionOutcome outcome) => _actions.ApplyOutcome(outcome);
+
+	public void ApplyCombatImpact(WorldEvent worldEvent, CombatImpactEvent impact) =>
+		_impacts.Apply(worldEvent, impact);
+
+	public void PredictHit(ulong sourceActionId, ulong targetEntity) =>
+		_impacts.PredictHit(sourceActionId, targetEntity);
+
+	private void SyncAction(ulong id, EntityView view)
 	{
-		if (_rigs.TryGetValue(id, out var rig)) rig.Play(action);
+		var state = view.Get("ActionState", ActionState.Parser);
+		if (state is null)
+		{
+			_actions.ObserveAbsent(id);
+			return;
+		}
+		_actions.Apply(id, state);
+	}
+
+	void IActionPresentationSink.Apply(ulong entityId, ActionKind kind)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.Apply(kind);
+	}
+
+	void IActionPresentationSink.Finish(ulong entityId)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.FinishAction();
+	}
+
+	void IActionPresentationSink.Cancel(ulong entityId)
+	{
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
+	}
+
+	void IActionPresentationSink.Death(ulong entityId)
+	{
+		// 死亡素材尚未接入；先终止动作，保留独立映射点。
+		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
+	}
+
+	void IImpactPresentationSink.PlayHit(ulong targetEntity)
+	{
+		if (_rigs.TryGetValue(targetEntity, out var rig)) rig.PlayHit();
+		else if (_nodes.TryGetValue(targetEntity, out var node)) node.PlayHit();
+	}
+
+	void IImpactPresentationSink.CorrectPredictedHit(ulong targetEntity, CombatImpactResult result)
+	{
+		if (_rigs.TryGetValue(targetEntity, out var rig)) rig.ClearPredictedHit();
+		else if (_nodes.TryGetValue(targetEntity, out var node)) node.ClearPredictedHit();
+	}
+
+	void IImpactPresentationSink.PresentNonHit(ulong targetEntity, CombatImpactResult result)
+	{
+		// BLOCKED/IMMUNE/MISS 暂无素材；保留独立适配点，不能映射为 HIT。
 	}
 
 	private void Remove(ulong id)
 	{
+		_actions.Remove(id);
 		if (_nodes.TryGetValue(id, out var n))
 		{
 			n.QueueFree();
@@ -222,6 +299,8 @@ public partial class EntityLayer : Node2D
 		_heightSm[id] = target;
 		return target;
 	}
+
+	private static long NowMs() => checked((long)Time.GetTicksMsec());
 
 	private static EntityStyle StyleFor(EntityView view)
 	{
@@ -313,7 +392,6 @@ public partial class EntityNode : Node2D
 	private int _healthCur;
 	private int _healthMax;
 	private bool _showBar;
-	private int _lastHealth = -1;
 	private long _flashUntil;
 	private float _sunT = 1f;
 	private static Texture2D? _firePitTex;
@@ -331,11 +409,6 @@ public partial class EntityNode : Node2D
 		_healthCur = healthCur;
 		_healthMax = healthMax;
 		_showBar = showBar;
-		if (_lastHealth >= 0 && healthCur < _lastHealth)
-		{
-			_flashUntil = (long)Time.GetTicksMsec() + 300;
-		}
-		_lastHealth = healthCur;
 		if (_isTree)
 		{
 			_treeTexture ??= GD.Load<Texture2D>("res://assets/tiles/tile_001.png");
@@ -367,6 +440,18 @@ public partial class EntityNode : Node2D
 			_structure.Visible = false;
 			_hasStructure = false;
 		}
+	}
+
+	public void PlayHit()
+	{
+		_flashUntil = (long)Time.GetTicksMsec() + 300;
+		QueueRedraw();
+	}
+
+	public void ClearPredictedHit()
+	{
+		_flashUntil = 0;
+		QueueRedraw();
 	}
 
 	/// <summary>火盆：fire-pit 底座贴图 + 手绘粒子火焰（FirePitFire）。</summary>

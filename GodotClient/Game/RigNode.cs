@@ -41,14 +41,14 @@ public static class RigRegistry
     };
 
     // 鱼人（人鱼）：1024² 透明帧，主体统一为 360px 高并按脚底线对齐。
-    // idle/walk/attack/hit 各 15 帧（1 起始编号）；scale 0.15 ≈ 68px 高。
+    // idle/walk/attack/hit 各 15 帧（1 起始编号）；主体视觉高统一为 64px。
     private static readonly RigSpec Fishman = new(
-        "fishman", 1024, 1024, 0.15f, 456f / 1024f,
+        "fishman", 1024, 1024, RigPresentationMetrics.FishmanVisualHeight / 360f, 456f / 1024f,
         new Dictionary<string, AnimSpec>
         {
             ["idle"] = new("res://assets/fishman/anim/idle/cutout/frame_{0:000}.png", 15, 6, true, 1),
             ["walk"] = new("res://assets/fishman/anim/walk/cutout/frame_{0:000}.png", 15, 7.5f, true, 1),
-            ["attack"] = new("res://assets/fishman/anim/attack/cutout/frame_{0:000}.png", 15, 18, false, 1),
+            ["attack"] = new("res://assets/fishman/anim/attack/cutout/frame_{0:000}.png", 15, RigPresentationMetrics.FishmanAttackFps, false, 1),
             ["hit"] = new("res://assets/fishman/anim/hit/cutout/frame_{0:000}.png", 15, 15, false, 1),
         });
 
@@ -59,7 +59,7 @@ public static class RigRegistry
         {
             ["idle"] = new("res://assets/lizard/anim/idle/cutout/idle_{0}.png", 8, 8, true, 0),
             ["walk"] = new("res://assets/lizard/anim/walk/cutout/walk_{0}.png", 8, 10, true, 0),
-            ["attack"] = new("res://assets/lizard/anim/attack/cutout/attack_{0}.png", 8, 12, false, 0),
+            ["attack"] = new("res://assets/lizard/anim/attack/cutout/attack_{0}.png", 8, RigPresentationMetrics.LizardAttackFps, false, 0),
         });
 }
 
@@ -71,6 +71,7 @@ public partial class RigNode : Node2D
 {
     private static readonly Dictionary<string, SpriteFrames> FramesCache = new();
 
+    private readonly Node2D _visualRoot = new();
     private readonly AnimatedSprite2D _sprite = new();
     private readonly RigSpec _rig;
     private readonly SideRig? _sideRig;
@@ -80,12 +81,16 @@ public partial class RigNode : Node2D
     private int _healthCur;
     private int _healthMax;
     private bool _showBar;
-    private int _lastHealth = -1;
     private long _flashUntil;
     private bool _hitQueued;
     private float _facing = 1f;
     private float _turnT;
     private CharacterFacing _characterFacing = CharacterFacing.Front;
+    private bool _actionActive;
+    private bool _actionFinishing;
+    private string _actionAnimation = "idle";
+    private bool _moving;
+    private readonly SpiritPresentationState _spirit = new();
 
     public RigNode(RigSpec rig)
     {
@@ -97,13 +102,14 @@ public partial class RigNode : Node2D
         _sprite.Position = new Vector2(0, rig.FrameH * rig.Scale * (0.5f - rig.FootY));
         _sprite.Animation = "idle";
         _sprite.Play();
-        AddChild(_sprite);
+        AddChild(_visualRoot);
+        _visualRoot.AddChild(_sprite);
         if (rig.Id == "fishman")
         {
             _sideRig = new SideRig { Visible = false };
             _backRig = new BackRig { Visible = false };
-            AddChild(_sideRig);
-            AddChild(_backRig);
+            _visualRoot.AddChild(_sideRig);
+            _visualRoot.AddChild(_backRig);
         }
     }
 
@@ -131,16 +137,43 @@ public partial class RigNode : Node2D
 
     public void Configure(int healthCur, int healthMax, bool showBar, string name = "")
     {
-        if (_lastHealth >= 0 && healthCur < _lastHealth)
-        {
-            _flashUntil = (long)Time.GetTicksMsec() + 300;
-            _hitQueued = true;
-        }
-        _lastHealth = healthCur;
         _healthCur = healthCur;
         _healthMax = healthMax;
         _showBar = showBar;
         UpdateNameLabel(name);
+    }
+
+    public void PlayHit()
+    {
+        if (_spirit.IsDead) return;
+        _flashUntil = (long)Time.GetTicksMsec() + 300;
+        _hitQueued = true;
+    }
+
+    public void ClearPredictedHit()
+    {
+        _flashUntil = 0;
+        _hitQueued = false;
+        if (_sprite.Animation == "hit")
+        {
+            PlayAnimFromStart(_actionActive ? _actionAnimation : _moving ? "walk" : "idle");
+        }
+    }
+
+    public void SetDead(bool dead)
+    {
+        if (!_spirit.SetDead(dead)) return;
+        _visualRoot.Position = Vector2.Zero;
+        _sprite.Modulate = Colors.White;
+        if (!dead) return;
+
+        CancelAction();
+        _hitQueued = false;
+        _flashUntil = 0;
+        _sprite.Visible = true;
+        if (_sideRig is not null) _sideRig.Visible = false;
+        if (_backRig is not null) _backRig.Visible = false;
+        PlayAnimFromStart("idle");
     }
 
     public void SetSunT(float sunT)
@@ -149,12 +182,45 @@ public partial class RigNode : Node2D
         QueueRedraw();
     }
 
-    public void Play(string action)
+    /// <summary>应用动作视觉。动作类型到素材的映射只存在于 Rig 适配层。</summary>
+    public void Apply(ActionKind kind)
     {
-        if (action == "attack" && _rig.Anims.ContainsKey("attack"))
+        if (_spirit.IsDead) return;
+        _actionActive = true;
+        _actionFinishing = false;
+        _actionAnimation = kind switch
         {
-            PlayAnim("attack", false);
+            ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Pick => "attack",
+            // Craft 暂无素材：保持 idle，但仍锁住 walk，避免表现成边制作边走。
+            ActionKind.Craft => "idle",
+            _ => "idle",
+        };
+        PlayAnimFromStart(_actionAnimation);
+    }
+
+    /// <summary>权威完成：解除动作锁，但让当前非循环 clip 自然播放到尾帧。</summary>
+    public void FinishAction()
+    {
+        _actionActive = false;
+        _actionFinishing =
+            _sprite.Animation == _actionAnimation &&
+            _sprite.IsPlaying() &&
+            _rig.Anims.TryGetValue(_actionAnimation, out var spec) &&
+            !spec.Loop;
+        if (!_actionFinishing)
+        {
+            _actionAnimation = "idle";
+            PlayAnimFromStart(_moving ? "walk" : "idle");
         }
+    }
+
+    /// <summary>预测超时、移动或取消：立即停止动作并恢复 walk/idle。</summary>
+    public void CancelAction()
+    {
+        _actionActive = false;
+        _actionFinishing = false;
+        _actionAnimation = "idle";
+        PlayAnimFromStart(_moving ? "walk" : "idle");
     }
 
     /// <summary>按移动方向水平翻转（-1/1；静止时保持上一朝向）。</summary>
@@ -184,6 +250,24 @@ public partial class RigNode : Node2D
 
     public void Update(double deltaMs, bool moving)
     {
+        _moving = moving;
+        var spirit = _spirit.Advance(deltaMs);
+        if (_spirit.IsDead)
+        {
+            _visualRoot.Position = new Vector2(0, spirit.BobOffset);
+            _sprite.Visible = true;
+            if (_sideRig is not null) _sideRig.Visible = false;
+            if (_backRig is not null) _backRig.Visible = false;
+            PlayAnim("idle", true);
+            _sprite.Modulate = new Color(
+                0.72f * spirit.Brightness,
+                0.9f * spirit.Brightness,
+                1.15f * spirit.Brightness,
+                spirit.Alpha);
+            QueueRedraw();
+            return;
+        }
+        _visualRoot.Position = Vector2.Zero;
         if (_turnT > 0)
         {
             _turnT = Mathf.Max(0, _turnT - (float)(deltaMs / 120));
@@ -199,12 +283,25 @@ public partial class RigNode : Node2D
             PlayAnim("hit", false);
             _hitQueued = false;
         }
-        else if (_sprite.Animation == "attack" || _sprite.Animation == "hit")
+        else if (_sprite.Animation == "hit" && _sprite.IsPlaying())
         {
-            if (!_sprite.IsPlaying()) PlayAnim(moving ? "walk" : "idle", true);
+            // 受击视觉短暂优先；播完后恢复仍活跃的权威动作。
+        }
+        else if (_actionActive)
+        {
+            // 权威阶段更新不重启 clip；动画提前播完时停在尾帧等待 Outcome。
+            if (_sprite.Animation != _actionAnimation) PlayAnimFromStart(_actionAnimation);
+        }
+        else if (_actionFinishing &&
+                 _sprite.Animation == _actionAnimation &&
+                 _sprite.IsPlaying())
+        {
+            // 完成后仅等待当前非循环 clip 自然收尾。
         }
         else
         {
+            _actionFinishing = false;
+            _actionAnimation = "idle";
             PlayAnim(moving ? "walk" : "idle", true);
         }
 
@@ -213,7 +310,7 @@ public partial class RigNode : Node2D
             ? new Color(1.6f, 1.6f, 1.6f)
             : Colors.White;
         _sprite.Modulate = color;
-        UpdateDirectionalView(deltaMs, moving, color);
+        UpdateDirectionalView(deltaMs, moving && !_actionActive && !_actionFinishing, color);
         if (flash) QueueRedraw();
     }
 
@@ -246,6 +343,14 @@ public partial class RigNode : Node2D
         if (!_rig.Anims.ContainsKey(name)) name = "idle";
         if (!_rig.Anims.ContainsKey(name)) return;
         if (_sprite.Animation == name && _sprite.IsPlaying()) return;
+        _sprite.Play(name);
+    }
+
+    private void PlayAnimFromStart(string name)
+    {
+        if (!_rig.Anims.ContainsKey(name)) name = "idle";
+        if (!_rig.Anims.ContainsKey(name)) return;
+        _sprite.Stop();
         _sprite.Play(name);
     }
 

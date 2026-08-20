@@ -8,6 +8,16 @@ namespace Starve.Protocol;
 /// </summary>
 public sealed class StarveClient : IDisposable
 {
+    private static readonly string[] RequiredCapabilities =
+    [
+        "input_epoch_ack",
+        "snapshot_tick",
+        "effective_move_speed",
+        "action_state_snapshot",
+        "action_outcome",
+        "world_events",
+    ];
+
     public Transport Transport { get; }
     public Session Session { get; }
     public CommandService Commands { get; }
@@ -27,12 +37,14 @@ public sealed class StarveClient : IDisposable
     public async Task<SessionInfo> ConnectAsync(string url, string token, CancellationToken ct = default)
     {
         await Transport.ConnectAsync(url, ct);
-        if (!Transport.Capabilities.Contains("input_epoch_ack") ||
-            !Transport.Capabilities.Contains("snapshot_tick") ||
-            !Transport.Capabilities.Contains("effective_move_speed"))
+        var missingCapabilities = RequiredCapabilities
+            .Where(capability => !Transport.Capabilities.Contains(capability))
+            .ToArray();
+        if (missingCapabilities.Length > 0)
         {
             throw new NotSupportedException(
-                $"服务端协议能力不兼容: version={Transport.ProtocolVersion}");
+                $"服务端协议能力不兼容: version={Transport.ProtocolVersion}, " +
+                $"missing={string.Join(',', missingCapabilities)}");
         }
         var info = await Session.LoginAsync(token, ct);
         Commands.BeginInputEpoch(info.InputEpoch);

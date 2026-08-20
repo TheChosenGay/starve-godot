@@ -1,6 +1,9 @@
+using Google.Protobuf;
 using Starve.Game.V1;
 using Starve.Protocol;
+using Starve.Protocol.Pomelo;
 using Starve.Protocol.World;
+using Starve.Proto.V1;
 
 return await SmokeRunner.RunAsync(args);
 
@@ -28,6 +31,14 @@ internal static class SmokeRunner
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(options.TimeoutSeconds));
         using var client = new StarveClient();
+        var worldEvents = 0;
+        var outcomes = 0;
+        var impacts = 0;
+        var healthChanges = 0;
+        client.World.WorldEventReceived += _ => worldEvents++;
+        client.World.ActionOutcomeReceived += _ => outcomes++;
+        client.World.CombatImpactReceived += (_, _) => impacts++;
+        client.World.HealthChangedReceived += (_, _) => healthChanges++;
         var connected = false;
         try
         {
@@ -38,6 +49,8 @@ internal static class SmokeRunner
                 $"uid={info.UserId} entity={info.EntityId} epoch={info.InputEpoch}");
             Require(client.World.InputEpoch == info.InputEpoch, "全量快照 input_epoch 与登录不一致");
             ValidateFullSnapshot(client.World, info.EntityId);
+            ValidateActionOutcomeRoute();
+            ValidateAutomateModes();
             PrintWorldSummary(client.World, info.EntityId);
 
             if (options.Diag)
@@ -49,6 +62,9 @@ internal static class SmokeRunner
             var initialRevision = client.World.Revision;
             await WaitForIncrementalAsync(client.World, initialRevision, timeout.Token);
             ValidateMergedOwnEntity(client.World, info.EntityId);
+            Console.WriteLine(
+                $"[世界事件] total={worldEvents} outcome={outcomes} " +
+                $"impact={impacts} health_changed={healthChanges}");
 
             if (options.MoveTest || options.E2E)
             {
@@ -94,7 +110,46 @@ internal static class SmokeRunner
             if (entity.Get("Workstation", Workstation.Parser) is not null)
                 Require(entity.Get("Block", Block.Parser) is not null, "工作站快照缺少 Block 组件");
         }
-        Console.WriteLine($"[全量快照] 实体数={world.Count} tick={world.WorldTick} 玩家组件={own.Components.Count}");
+        var parsedActions = world.Entities.Values.Count(
+            entity => entity.Get("ActionState", ActionState.Parser) is not null);
+        Console.WriteLine(
+            $"[全量快照] 实体数={world.Count} tick={world.WorldTick} " +
+            $"玩家组件={own.Components.Count} ActionState={parsedActions}");
+    }
+
+    private static void ValidateActionOutcomeRoute()
+    {
+        var world = new WorldService();
+        ActionOutcome? parsed = null;
+        world.ActionOutcomeReceived += outcome => parsed = outcome;
+        world.HandleMessage(new PomeloMessage
+        {
+            Type = MsgType.Push,
+            Route = Routes.ActionOutcome,
+            Data = new ActionOutcome
+            {
+                EntityId = 7,
+                ActionId = 9,
+                Kind = ActionKind.Attack,
+                Result = ActionOutcomeResult.Canceled,
+                Reason = ActionOutcomeReason.Moved,
+                Tick = 11,
+            }.ToByteArray(),
+        });
+        Require(
+            parsed is { EntityId: 7, ActionId: 9, Result: ActionOutcomeResult.Canceled },
+            "ActionOutcome route 无法解析");
+        Console.WriteLine("[动作结果] world.action.outcome 路由解析通过");
+    }
+
+    private static void ValidateAutomateModes()
+    {
+        foreach (var mode in new[] { AutomateMode.Any, AutomateMode.AttackOnly })
+        {
+            var bytes = new PlayerAutomate { Mode = mode }.ToByteArray();
+            Require(PlayerAutomate.Parser.ParseFrom(bytes).Mode == mode, $"AutomateMode {mode} 无法解析");
+        }
+        Console.WriteLine("[自动行为] ANY/ATTACK_ONLY protobuf 解析通过");
     }
 
     private static async Task WaitForIncrementalAsync(

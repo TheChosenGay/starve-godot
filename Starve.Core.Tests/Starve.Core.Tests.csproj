@@ -25,6 +25,20 @@
   <ItemGroup>
     <Compile Include="..\GodotClient\Game\MovementDiagnosticsSampler.cs"
              Link="GodotAdapter\MovementDiagnosticsSampler.cs" />
+    <Compile Include="..\GodotClient\Game\ActionPresentationController.cs"
+             Link="GodotAdapter\ActionPresentationController.cs" />
+    <Compile Include="..\GodotClient\Game\ImpactPresentationController.cs"
+             Link="GodotAdapter\ImpactPresentationController.cs" />
+    <Compile Include="..\GodotClient\Game\AutoActionInputState.cs"
+             Link="GodotAdapter\AutoActionInputState.cs" />
+    <Compile Include="..\GodotClient\Game\DirectionalRigNormalizer.cs"
+             Link="GodotAdapter\DirectionalRigNormalizer.cs" />
+    <Compile Include="..\GodotClient\Game\DamageFlashState.cs"
+             Link="GodotAdapter\DamageFlashState.cs" />
+    <Compile Include="..\GodotClient\Game\SpiritPresentationState.cs"
+             Link="GodotAdapter\SpiritPresentationState.cs" />
+    <Compile Include="..\GodotClient\Game\HudVitalsViewModel.cs"
+             Link="GodotAdapter\HudVitalsViewModel.cs" />
     <None Include="..\testdata\movement_golden.json"
           Link="testdata\movement_golden.json"
           CopyToOutputDirectory="PreserveNewest" />

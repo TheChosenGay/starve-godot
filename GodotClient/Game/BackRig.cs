@@ -28,12 +28,14 @@ public partial class BackRig : Node2D
 
     private const float PartScale = 0.09f;
     private static Texture2D[]? _textures;
+    private readonly Node2D _content = new();
     private readonly Sprite2D[] _parts = new Sprite2D[8];
     private float _elapsed;
 
     public BackRig()
     {
         _textures ??= PartPaths.Select(GD.Load<Texture2D>).ToArray();
+        AddChild(_content);
         var order = new[] { 3, 5, 7, 1, 6, 2, 4, 0 };
         foreach (var part in order)
         {
@@ -43,8 +45,9 @@ public partial class BackRig : Node2D
                 Scale = Vector2.One * PartScale,
                 Position = Anchors[part],
             };
-            AddChild(_parts[part]);
+            _content.AddChild(_parts[part]);
         }
+        NormalizeContent();
     }
 
     public void Update(double deltaMs, bool moving)
@@ -59,5 +62,24 @@ public partial class BackRig : Node2D
         _parts[6].Rotation = -Mathf.Sin(phase) * swing * 0.55f;
         _parts[7].Rotation = Mathf.Sin(phase) * swing * 0.55f;
         Position = new Vector2(0, moving ? Mathf.Sin(phase * 2) * 1.2f : 0);
+    }
+
+    private void NormalizeContent()
+    {
+        var geometry = new DirectionalPartGeometry[_parts.Length];
+        for (var i = 0; i < geometry.Length; i++)
+        {
+            geometry[i] = new DirectionalPartGeometry(
+                _textures![i].GetWidth(),
+                _textures[i].GetHeight(),
+                Anchors[i].X,
+                Anchors[i].Y,
+                PartScale);
+        }
+        var normalized = DirectionalRigNormalizer.Normalize(
+            geometry,
+            RigPresentationMetrics.FishmanVisualHeight);
+        _content.Scale = Vector2.One * normalized.Scale;
+        _content.Position = new Vector2(normalized.OffsetX, normalized.OffsetY);
     }
 }

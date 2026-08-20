@@ -34,7 +34,8 @@ godot-client/
 1. 启动网关：`cd ../starve && go run ./cmd/gate`
 2. 用 **Godot 4.7.1 .NET 版**打开 `GodotClient/project.godot`
 3. 首次打开会提示编译 C#（或手动 `dotnet build GodotClient/GodotClient.csproj`）
-4. 运行（F5）：WASD/方向键移动、Q/E 围绕玩家旋转、滚轮缩放、左键选中
+4. 运行（F5）：WASD/方向键移动、Q/E 围绕玩家旋转、滚轮缩放、左键选中；
+   空格自动执行最近行为，F 自动寻找 AOI 内最近可攻击角色（超距自动寻路，按住持续攻击）
 
 调试参数（`--` 后传）：`--smoke` 连接后打印地图/实体数并退出；`--capture <path>` 3 秒后截图退出。
 
@@ -55,6 +56,43 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 低频诊断采样、可靠协议 E2E 和 CI 临时 gate 见 [P0.3 客户端 E2E](P0.3-CLIENT-E2E.md)。
 输入 epoch/seq、服务端 tick、ACK 与预测领先保护见 [P1.1 客户端预测契约](P1.1-PREDICTION-CONTRACT.md)。
 
+## P1.2 权威动作契约
+
+- `proto/game.proto`、`proto/message.proto` 与服务端协议源字节同步，C# 类型由项目构建时生成。
+- 握手声明协议 1.2，并按能力检查 `action_state_snapshot`、`action_outcome` 与 `world_events`；
+  能力缺失时在登录前拒绝，
+  不依赖版本字符串做脆弱的精确匹配。
+- `ActionState` 是玩家与 NPC 共用的唯一持续动作事实源：组件出现表示 start/confirm，
+  `action_id + phase` 标识一次可去重的时间轴更新；组件移除表示完成或取消，客户端立即清除表现。
+- `ActionOutcome` 主路径嵌入同一 `SnapshotDelta.events` 原子下发；旧 `world.action.outcome` route 仅兼容解析。
+  WorldService 对 event_id 与 outcome key 双重有界去重，重复或旧 outcome 不会二次清理或重播。
+- `SnapshotDelta.events` 是瞬时事实：WorldService 先合并组件与移除项，再按 `event_id` 有界去重并发布
+  `WorldEvent`、`CombatImpactEvent`、`HealthChangedEvent`。新全量快照会重置事件幂等作用域。
+- `ImpactPresentationController` 独占命中预测/确认/纠错：只有权威 HIT 能补播受击；MISS、BLOCKED、
+  IMMUNE 不映射为 HIT。Health 组件只更新血条，普通掉血、DOT、饥饿与天气事件不会推断攻击受击动画。
+- GameRoot 在主线程按队列先把 CombatImpact 交给 EntityLayer 播放 HIT，再仅为命中本地玩家的权威
+  HIT 触发全屏红色 `DamageFlashOverlay`；350ms 平滑衰减，连续命中叠加有上限，不根据 HP 差推断。
+- 玩家 `Dead` 组件是持续死亡视觉与 HUD 的唯一事实源：RigNode 使用鱼人正面 idle 轮廓显示白蓝半透明、
+  脉冲漂浮的魂魄，内部 visual root 漂浮而不改变世界坐标；复活后恢复方向、颜色与动作显示。
+- HUD 顶部独立显示“生命 cur / max”，死亡显示“灵魂状态 · 生命 0/max”，并禁用采集、攻击、砍伐、
+  挖掘、拾取和制作；Space/F 不再发命令但 WASD 观察移动保持可用，状态切换只记录一次提示。
+- COMPLETED 只调用 FinishAction，让非循环 clip 自然收尾；移动、主动取消、拒绝、受击中断和死亡则
+  CancelAction 立即恢复 walk/idle（DAMAGED 的 hit 只由同批 CombatImpact HIT 驱动）。
+- 本地交互只做 500ms 短预测。权威状态到达后确认或校准；未收到状态会自动超时停止；
+  本地移动意图开始时立即清除动作视觉，并抑制仍残留在快照中的旧 `action_id`，直到组件移除
+  或新动作替换。P1.1 的 `OwnMovementSim` 与 ACK 契约不变。
+- `ActionPresentationController` 独占预测/权威/超时状态，`EntityLayer` 统一消费所有 Rig 实体，
+  `RigNode` 只把动作类型适配为素材。Attack/Chop/Mine/Pick 暂共用 attack 动画；
+  Craft 暂无专用素材，保持 idle 且不参与任何玩法结算。
+- 攻击表现统一为 800ms：鱼人 15 帧 18.75fps、蜥蜴 8 帧 10fps，服务端 400ms 命中点约在中帧。
+  鱼人四方向以 `FishmanVisualHeight=64px` 归一；侧/背 tight-crop 分件通过
+  `DirectionalRigNormalizer` 对齐整体高度、水平中心与 bottom=0 脚底线，左右仅镜像同一 SideRig。
+- NPC 攻击只读取 `ActionState`，不根据 `AI.state` 推测。
+- `ActionNetworkFaultTests` 以纯确定性方式覆盖 loss/latency/reorder：start 或 outcome 丢包、
+  500ms 延迟超时、结果与旧快照重排，以及旧动作之后的新 `action_id` 恢复；不 sleep、不依赖真实网络。
+- `PlayerPresentationStateTests` 纯逻辑验证红屏只接受本地 HIT、350ms 曲线与叠加上限、魂魄生死切换，
+  以及 Health/Dead 均参与 HUD vitals 签名。
+
 ## 当前状态
 
 | 阶段 | 内容 | 状态 |
@@ -65,7 +103,9 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 | 阶段 2.5 | 全屏法线光照 shader（环境光+太阳+8点光+深度雾）+ 3D LUT 调色 + 建造幽灵预览 | ✅ 截图验证 |
 | 阶段 3 | HUD（状态/日志/操作按钮）/ 点选 / 采集攻击拾取拆除 / 建造预览放置 | ✅ 截图验证 |
 | 阶段 4 | 背包（槽位/使用/装备/丢弃/拆分）+ 制作迷你版（材料/工作站/进度）+ 闪电 + 按格雾 + Bloom | ✅ 截图验证 |
-| M7 交互 | 适配服务端交互重构：Choppable/Minable/Pickable 资源、Loot→Lootable 掉落物（兼容旧名）、Equip 槽位、防御减免、点击即操作 + 选中描述、徒手限制置灰、空格自动行为（world.player.automate，含就近拾取/寻路，按住持续评估） | ✅ 冒烟+实测通过 |
+| M7 交互 | Choppable/Minable/Pickable、装备/防御、点击操作；空格 ANY 自动行为与 F ATTACK_ONLY 最近目标持续攻击/寻路 | ✅ 冒烟+实测通过 |
+| P1.2 动作 | ActionState 权威时间轴 + ActionOutcome + WorldEvent/CombatImpact + 500ms 本地表现预测 | ✅ 单测覆盖 |
+| P1.2 玩家反馈 | 权威 HIT 红屏 + 死亡魂魄 + 独立生命条/灵魂交互状态 | ✅ 纯模型单测覆盖 |
 
 > 睡眠：服务端暂无 world.sleep 接口，客户端已留按钮与提示，待服务端接入后接通。
 

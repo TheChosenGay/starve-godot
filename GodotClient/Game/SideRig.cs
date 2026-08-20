@@ -37,6 +37,7 @@ public partial class SideRig : Node2D
     private const float PartScale = 0.09f;
     private static Texture2D[]? _textures;
 
+    private readonly Node2D _content = new();
     private readonly Sprite2D[] _parts = new Sprite2D[8];
     private float _elapsed;
     private float _facing = 1f;
@@ -53,6 +54,7 @@ public partial class SideRig : Node2D
     public SideRig()
     {
         Preload();
+        AddChild(_content);
         var order = new (int Part, int Order)[8];
         for (var i = 0; i < 8; i++) order[i] = (i, Layout[i].Order);
         Array.Sort(order, (a, b) => a.Order.CompareTo(b.Order));
@@ -65,15 +67,16 @@ public partial class SideRig : Node2D
                 Scale = Vector2.One * PartScale,
                 Position = Layout[part].Anchor,
             };
-            AddChild(_parts[part]);
+            _content.AddChild(_parts[part]);
         }
+        NormalizeContent();
     }
 
     public void SetFacing(float dir)
     {
         if (dir == 0 || dir == _facing) return;
         _facing = dir;
-        Scale = new Vector2(Mathf.Abs(Scale.X) * dir, Scale.Y);
+        Scale = new Vector2(dir < 0 ? -1 : 1, 1);
     }
 
     public void Play(string action)
@@ -89,7 +92,7 @@ public partial class SideRig : Node2D
     {
         _elapsed += (float)deltaMs;
         _actionElapsed += deltaMs;
-        var duration = _action == "attack" ? 400 : 0;
+        var duration = _action == "attack" ? RigPresentationMetrics.AttackDurationMs : 0;
         if (_action is not null && duration > 0 && _actionElapsed >= duration)
         {
             _action = null;
@@ -108,7 +111,9 @@ public partial class SideRig : Node2D
         Rotate(6, -Mathf.Sin(phase * Mathf.Tau) * swing);
         Rotate(7, Mathf.Sin(phase * Mathf.Tau) * swing * 0.8f);
 
-        var impact = Mathf.Sin((float)Math.PI * (float)Mathf.Clamp(_actionElapsed / 400f, 0, 1));
+        var impact = Mathf.Sin(
+            (float)Math.PI *
+            (float)Mathf.Clamp(_actionElapsed / RigPresentationMetrics.AttackDurationMs, 0, 1));
         if (_action == "attack")
         {
             Rotate(2, 0.15f - impact * 1.1f); // 近臂前挥
@@ -124,5 +129,24 @@ public partial class SideRig : Node2D
     private void Rotate(int part, float rad)
     {
         if (_parts[part] is { } s) s.Rotation = rad;
+    }
+
+    private void NormalizeContent()
+    {
+        var geometry = new DirectionalPartGeometry[_parts.Length];
+        for (var i = 0; i < geometry.Length; i++)
+        {
+            geometry[i] = new DirectionalPartGeometry(
+                _textures![i].GetWidth(),
+                _textures[i].GetHeight(),
+                Layout[i].Anchor.X,
+                Layout[i].Anchor.Y,
+                PartScale);
+        }
+        var normalized = DirectionalRigNormalizer.Normalize(
+            geometry,
+            RigPresentationMetrics.FishmanVisualHeight);
+        _content.Scale = Vector2.One * normalized.Scale;
+        _content.Position = new Vector2(normalized.OffsetX, normalized.OffsetY);
     }
 }

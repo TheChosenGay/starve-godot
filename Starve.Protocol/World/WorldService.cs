@@ -29,11 +29,20 @@ public sealed class EntityView
 /// <summary>世界数据：消费全量快照 + 每 tick 增量，维护本地权威实体表（阶段 0 最小实现）。</summary>
 public sealed class WorldService
 {
+    private const int EventHistoryLimit = 2048;
     private readonly ConcurrentDictionary<ulong, EntityView> _entities = new();
+    private readonly HashSet<ulong> _publishedEventIds = new();
+    private readonly Queue<ulong> _eventHistory = new();
+    private readonly HashSet<ActionOutcomeKey> _publishedOutcomes = new();
+    private readonly Queue<ActionOutcomeKey> _outcomeHistory = new();
     private TaskCompletionSource _snapshotReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _revision;
 
     public event Action<ulong, ulong, long>? InputAcknowledged;
+    public event Action<ActionOutcome>? ActionOutcomeReceived;
+    public event Action<WorldEvent>? WorldEventReceived;
+    public event Action<WorldEvent, CombatImpactEvent>? CombatImpactReceived;
+    public event Action<WorldEvent, HealthChangedEvent>? HealthChangedReceived;
 
     /// <summary>静态配置（登录后推送 world.config）。</summary>
     public GameConfig? Config { get; private set; }
@@ -77,6 +86,7 @@ public sealed class WorldService
         {
             var snap = Snapshot.Parser.ParseFrom(msg.Data);
             if (snap.InputEpoch == 0) return;
+            ResetEventScope();
             _entities.Clear();
             foreach (var es in snap.Entities) Add(es);
             ApplyWorldState(
@@ -101,11 +111,16 @@ public sealed class WorldService
             ApplyWorldState(
                 delta.DayCycle, delta.Weather, delta.Tick, delta.InputEpoch, delta.LastAcceptedSeq);
             Bump();
+            PublishEvents(delta.Events);
         }
         else if (msg.Route == Routes.Config)
         {
             Config = GameConfig.Parser.ParseFrom(msg.Data);
             Bump();
+        }
+        else if (msg.Route == Routes.ActionOutcome)
+        {
+            PublishOutcome(ActionOutcome.Parser.ParseFrom(msg.Data));
         }
         else if (msg.Route == Routes.WeatherFrame)
         {
@@ -154,6 +169,68 @@ public sealed class WorldService
         }
         _entities[es.EntityId] = view;
     }
+
+    private void PublishEvents(IEnumerable<WorldEvent> events)
+    {
+        foreach (var worldEvent in events)
+        {
+            if (worldEvent.EventId != 0 && !_publishedEventIds.Add(worldEvent.EventId)) continue;
+            if (worldEvent.EventId != 0)
+            {
+                _eventHistory.Enqueue(worldEvent.EventId);
+                if (_eventHistory.Count > EventHistoryLimit)
+                {
+                    _publishedEventIds.Remove(_eventHistory.Dequeue());
+                }
+            }
+
+            WorldEventReceived?.Invoke(worldEvent);
+            if (worldEvent.Outcome is { } outcome)
+            {
+                PublishOutcome(outcome);
+            }
+            else if (worldEvent.Impact is { } impact)
+            {
+                CombatImpactReceived?.Invoke(worldEvent, impact);
+            }
+            else if (worldEvent.HealthChanged is { } healthChanged)
+            {
+                HealthChangedReceived?.Invoke(worldEvent, healthChanged);
+            }
+        }
+    }
+
+    private void PublishOutcome(ActionOutcome outcome)
+    {
+        var key = new ActionOutcomeKey(
+            outcome.EntityId,
+            outcome.ActionId,
+            outcome.RequestId,
+            outcome.Result,
+            outcome.Tick);
+        if (!_publishedOutcomes.Add(key)) return;
+        _outcomeHistory.Enqueue(key);
+        if (_outcomeHistory.Count > EventHistoryLimit)
+        {
+            _publishedOutcomes.Remove(_outcomeHistory.Dequeue());
+        }
+        ActionOutcomeReceived?.Invoke(outcome);
+    }
+
+    private void ResetEventScope()
+    {
+        _publishedEventIds.Clear();
+        _eventHistory.Clear();
+        _publishedOutcomes.Clear();
+        _outcomeHistory.Clear();
+    }
+
+    private readonly record struct ActionOutcomeKey(
+        ulong EntityId,
+        ulong ActionId,
+        ulong RequestId,
+        ActionOutcomeResult Result,
+        long Tick);
 
     private void Bump() => Interlocked.Increment(ref _revision);
 }
