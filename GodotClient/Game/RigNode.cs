@@ -40,14 +40,14 @@ public static class RigRegistry
         _ => null,
     };
 
-    // 鱼人（人鱼）：480² 透明抠图帧（cutout，原 960² RGB 灰底已按背景色距离抠成 alpha），
+    // 鱼人（人鱼）：1024² 透明帧，主体统一为 360px 高并按脚底线对齐。
     // idle/walk/attack/hit 各 15 帧（1 起始编号）；scale 0.15 ≈ 68px 高。
     private static readonly RigSpec Fishman = new(
-        "fishman", 480, 480, 0.15f, 0.95f,
+        "fishman", 1024, 1024, 0.15f, 456f / 1024f,
         new Dictionary<string, AnimSpec>
         {
-            ["idle"] = new("res://assets/fishman/anim/idle/cutout/frame_{0:000}.png", 15, 10, true, 1),
-            ["walk"] = new("res://assets/fishman/anim/walk/cutout/frame_{0:000}.png", 15, 12, true, 1),
+            ["idle"] = new("res://assets/fishman/anim/idle/cutout/frame_{0:000}.png", 15, 6, true, 1),
+            ["walk"] = new("res://assets/fishman/anim/walk/cutout/frame_{0:000}.png", 15, 7.5f, true, 1),
             ["attack"] = new("res://assets/fishman/anim/attack/cutout/frame_{0:000}.png", 15, 18, false, 1),
             ["hit"] = new("res://assets/fishman/anim/hit/cutout/frame_{0:000}.png", 15, 15, false, 1),
         });
@@ -73,9 +73,8 @@ public partial class RigNode : Node2D
 
     private readonly AnimatedSprite2D _sprite = new();
     private readonly RigSpec _rig;
-    private readonly Sprite2D? _directionalSprite;
-    private readonly Texture2D? _backTexture;
-    private readonly Texture2D? _sideTexture;
+    private readonly SideRig? _sideRig;
+    private readonly BackRig? _backRig;
     private Label? _nameLabel;
     private float _sunT = 1f;
     private int _healthCur;
@@ -87,7 +86,6 @@ public partial class RigNode : Node2D
     private float _facing = 1f;
     private float _turnT;
     private CharacterFacing _characterFacing = CharacterFacing.Front;
-    private readonly Vector2 _directionalBase = new(0, -42);
 
     public RigNode(RigSpec rig)
     {
@@ -102,18 +100,10 @@ public partial class RigNode : Node2D
         AddChild(_sprite);
         if (rig.Id == "fishman")
         {
-            _backTexture = GD.Load<Texture2D>(
-                "res://assets/fishman/character/directional/back.png");
-            _sideTexture = GD.Load<Texture2D>(
-                "res://assets/fishman/character/directional/side.png");
-            _directionalSprite = new Sprite2D
-            {
-                Texture = _backTexture,
-                Position = _directionalBase,
-                Scale = Vector2.One * 0.085f,
-                Visible = false,
-            };
-            AddChild(_directionalSprite);
+            _sideRig = new SideRig { Visible = false };
+            _backRig = new BackRig { Visible = false };
+            AddChild(_sideRig);
+            AddChild(_backRig);
         }
     }
 
@@ -182,7 +172,7 @@ public partial class RigNode : Node2D
         var isoY = (worldDX + worldDY) * 0.5f;
         var screenX = isoX * viewCos - isoY * viewSin;
         var screenY = isoX * viewSin + isoY * viewCos;
-        if (_directionalSprite is null)
+        if (_sideRig is null || _backRig is null)
         {
             SetFacing(MathF.Sign(screenX));
             return;
@@ -223,27 +213,32 @@ public partial class RigNode : Node2D
             ? new Color(1.6f, 1.6f, 1.6f)
             : Colors.White;
         _sprite.Modulate = color;
-        UpdateDirectionalView(moving, color);
+        UpdateDirectionalView(deltaMs, moving, color);
         if (flash) QueueRedraw();
     }
 
-    private void UpdateDirectionalView(bool moving, Color color)
+    private void UpdateDirectionalView(double deltaMs, bool moving, Color color)
     {
-        if (_directionalSprite is null) return;
+        if (_sideRig is null || _backRig is null) return;
         var actionPlaying = (_sprite.Animation == "attack" || _sprite.Animation == "hit") &&
                             _sprite.IsPlaying();
-        var showDirectional = !actionPlaying && _characterFacing != CharacterFacing.Front;
-        _sprite.Visible = !showDirectional;
-        _directionalSprite.Visible = showDirectional;
-        if (!showDirectional) return;
-
-        var side = _characterFacing is CharacterFacing.SideLeft or CharacterFacing.SideRight;
-        _directionalSprite.Texture = side ? _sideTexture : _backTexture;
-        var sign = _characterFacing == CharacterFacing.SideLeft ? -1f : 1f;
-        _directionalSprite.Scale = new Vector2(0.085f * sign, 0.085f);
-        var bob = moving ? MathF.Sin((float)Time.GetTicksMsec() / 110f) * 1.5f : 0;
-        _directionalSprite.Position = _directionalBase + new Vector2(0, bob);
-        _directionalSprite.Modulate = color;
+        var side = !actionPlaying &&
+                   _characterFacing is CharacterFacing.SideLeft or CharacterFacing.SideRight;
+        var back = !actionPlaying && _characterFacing == CharacterFacing.Back;
+        _sprite.Visible = !side && !back;
+        _sideRig.Visible = side;
+        _backRig.Visible = back;
+        if (side)
+        {
+            _sideRig.SetFacing(_characterFacing == CharacterFacing.SideLeft ? -1 : 1);
+            _sideRig.Update(deltaMs, moving);
+            _sideRig.Modulate = color;
+        }
+        if (back)
+        {
+            _backRig.Update(deltaMs, moving);
+            _backRig.Modulate = color;
+        }
     }
 
     private void PlayAnim(string name, bool loop)

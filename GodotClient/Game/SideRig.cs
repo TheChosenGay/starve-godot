@@ -4,7 +4,7 @@ using Godot;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 鱼人侧向骨骼：用 fishman/parts/side 的 8 个拆件按 rig 模板骨骼位置装配（内容中心对齐骨骼），
+/// 鱼人侧向骨骼：用 fishman/parts/side 的 8 个紧边拆件按关节锚点装配，
 /// 程序化摆臂/摆腿模拟侧向行走。横向移动时由 RigNode 切到这个视图，其余时间用正面烘焙帧。
 /// </summary>
 public partial class SideRig : Node2D
@@ -22,22 +22,19 @@ public partial class SideRig : Node2D
         "res://assets/fishman/parts/side/cutout/part_7.png",
     };
 
-    // 装配数据：(骨骼局部坐标, 部件内容中心(512×384 板内), 绘制顺序)。
-    // 骨骼坐标 = rig 模板换算（root 在原点、y 向上为负），侧视近/远肢体只错开少量 x。
-    private static readonly (Vector2 Bone, Vector2 Content, int Order)[] Layout =
+    private static readonly (Vector2 Anchor, int Order)[] Layout =
     {
-        (new Vector2(0, -280), new Vector2(253, 247), 7),   // 0 头
-        (new Vector2(0, -130), new Vector2(248, 230), 5),   // 1 躯干
-        (new Vector2(-14, -235), new Vector2(285, 189), 3), // 2 左臂上（近）
-        (new Vector2(-14, -145), new Vector2(221, 196), 4), // 3 左臂下
-        (new Vector2(14, -235), new Vector2(258, 202), 0),  // 4 右臂上（远）
-        (new Vector2(14, -145), new Vector2(272, 206), 1),  // 5 右臂下
-        (new Vector2(-10, 0), new Vector2(287, 163), 2),    // 6 左腿（近）
-        (new Vector2(10, 0), new Vector2(235, 183), 6),     // 7 右腿（远）
+        (new Vector2(2, -47), 7),  // 0 头
+        (new Vector2(0, -28), 5),  // 1 躯干
+        (new Vector2(2, -31), 3),  // 2 近侧上臂
+        (new Vector2(12, -22), 4), // 3 近侧前臂
+        (new Vector2(-2, -30), 0), // 4 远侧上臂
+        (new Vector2(-11, -21), 1),// 5 远侧前臂
+        (new Vector2(-5, -8), 2),  // 6 近侧腿
+        (new Vector2(5, -8), 6),   // 7 远侧腿
     };
 
-    private const float PartScale = 0.15f;
-    private static readonly Vector2 SheetCenter = new(256, 192);
+    private const float PartScale = 0.09f;
     private static Texture2D[]? _textures;
 
     private readonly Sprite2D[] _parts = new Sprite2D[8];
@@ -61,15 +58,12 @@ public partial class SideRig : Node2D
         Array.Sort(order, (a, b) => a.Order.CompareTo(b.Order));
         foreach (var (part, _) in order)
         {
-            var (bone, content, _) = Layout[part];
-            // 内容中心对齐骨骼：sprite 中心 = 骨骼 - (内容中心 - 板中心) × scale
-            var offset = (content - SheetCenter) * PartScale;
             _parts[part] = new Sprite2D
             {
                 Texture = _textures![part],
                 Centered = true,
                 Scale = Vector2.One * PartScale,
-                Position = bone - offset,
+                Position = Layout[part].Anchor,
             };
             AddChild(_parts[part]);
         }
@@ -102,7 +96,7 @@ public partial class SideRig : Node2D
             _actionElapsed = 0;
         }
 
-        var phase = _elapsed / (moving ? 360f : 720f);
+        var phase = _elapsed / (moving ? 640f : 1200f);
         var swing = moving ? 0.34f : 0.04f;
         var bob = Mathf.Sin(phase * Mathf.Tau) * (moving ? 2.5f : 0.6f);
 
