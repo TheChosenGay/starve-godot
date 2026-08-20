@@ -14,7 +14,7 @@ public sealed class ActionNetworkFaultTests
     public void LostStartStateButOutcomeArrivesClearsPrediction()
     {
         var harness = new Harness();
-        harness.Controller.Predict(Harness.EntityId, ActionKind.Attack);
+        harness.Controller.Predict(Harness.EntityId, ActionKind.Attack, new InputCommandRef(1, 1, 20));
 
         // ActionState start 丢失，只收到生命周期结果。
         harness.ReceiveOutcome(10, ActionOutcomeResult.Completed);
@@ -42,7 +42,7 @@ public sealed class ActionNetworkFaultTests
     public void OutcomeBeforeOldStartStateDoesNotReplay()
     {
         var harness = new Harness();
-        harness.Controller.Predict(Harness.EntityId, ActionKind.Attack);
+        harness.Controller.Predict(Harness.EntityId, ActionKind.Attack, new InputCommandRef(1, 1, 20));
 
         // 重排：结果先到，旧 start 快照后到。
         harness.ReceiveOutcome(10, ActionOutcomeResult.Completed);
@@ -57,7 +57,7 @@ public sealed class ActionNetworkFaultTests
     public void LostStartStateTimesOutAfterDeterministicLatency()
     {
         var harness = new Harness();
-        harness.Controller.Predict(Harness.EntityId, ActionKind.Chop);
+        harness.Controller.Predict(Harness.EntityId, ActionKind.Chop, new InputCommandRef(1, 1, 20));
 
         harness.NowMs = 499;
         harness.Controller.Tick();
@@ -179,6 +179,7 @@ public sealed class ActionNetworkFaultTests
                     Data = ByteString.CopyFrom(new ActionState
                     {
                         ActionId = actionId,
+                        RequestId = 20,
                         Kind = ActionKind.Attack,
                         Phase = ActionPhase.Windup,
                     }.ToByteArray()),

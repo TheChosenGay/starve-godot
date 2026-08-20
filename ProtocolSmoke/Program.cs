@@ -241,7 +241,7 @@ internal static class SmokeRunner
         Require(client.Commands.InputEpoch == client.World.InputEpoch, "输入 ACK epoch 不一致");
         Console.WriteLine(
             $"[输入确认] epoch={client.Commands.InputEpoch} sent={sent} " +
-            $"ack={client.Commands.LastAcceptedSeq} pending={client.Commands.PendingMoveCount}");
+            $"ack={client.Commands.LastAcceptedSeq} pending={client.Commands.PendingControlCount}");
     }
 
     private static async Task WaitForStoppedAsync(
@@ -343,7 +343,8 @@ internal static class SmokeRunner
         await Task.Delay(300, ct);
         foreach (var recipeId in new[] { "pickaxe", "axe" })
         {
-            var response = await client.Commands.CraftAsync(recipeId, ct);
+            var result = await client.Commands.CraftAsync(recipeId, ct);
+            var response = result.Response;
             Console.WriteLine(
                 $"  craft {recipeId} → " +
                 (response is null ? "超时" : response.Started ? "OK started" : $"失败: {response.Message}"));

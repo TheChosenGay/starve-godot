@@ -331,7 +331,7 @@ public partial class GameRoot : Node
                 $"\n输入 epoch={_client?.Commands.InputEpoch ?? 0}" +
                 $" sent={_client?.Commands.LastSentSeq ?? 0}" +
                 $" ack={_client?.Commands.LastAcceptedSeq ?? 0}" +
-                $" pending={_client?.Commands.PendingMoveCount ?? 0}";
+                $" pending={_client?.Commands.PendingControlCount ?? 0}";
             if (changed)
             {
                 GD.Print(
@@ -700,6 +700,7 @@ public partial class GameRoot : Node
         }
 
         ActionKind? predictedKind = null;
+        InputCommandRef? commandRef = null;
         switch (intent)
         {
             case Intent.Gather:
@@ -708,7 +709,7 @@ public partial class GameRoot : Node
                     _hud?.Log("目标不可采集（不是浆果丛）");
                     return;
                 }
-                _client.Commands.Gather(id);
+                commandRef = _client.Commands.Gather(id);
                 predictedKind = ActionKind.Pick;
                 break;
             case Intent.Chop:
@@ -722,7 +723,7 @@ public partial class GameRoot : Node
                     _hud?.Log("徒手无法砍伐，请先装备斧头");
                     return;
                 }
-                _client.Commands.Chop(id);
+                commandRef = _client.Commands.Chop(id);
                 predictedKind = ActionKind.Chop;
                 break;
             case Intent.Mine:
@@ -736,7 +737,7 @@ public partial class GameRoot : Node
                     _hud?.Log("徒手无法挖掘，请先装备镐");
                     return;
                 }
-                _client.Commands.Mine(id);
+                commandRef = _client.Commands.Mine(id);
                 predictedKind = ActionKind.Mine;
                 break;
             case Intent.Pickup:
@@ -754,13 +755,13 @@ public partial class GameRoot : Node
                     _hud?.Log("目标不可攻击");
                     return;
                 }
-                _client.Commands.Attack(id);
+                commandRef = _client.Commands.Attack(id);
                 predictedKind = ActionKind.Attack;
                 break;
         }
-        if (predictedKind is { } kind)
+        if (predictedKind is { } kind && commandRef is { } command)
         {
-            _entityLayer?.PredictAction(_ownId, kind);
+            _entityLayer?.PredictAction(_ownId, kind, command);
         }
     }
 
@@ -1005,11 +1006,12 @@ public partial class GameRoot : Node
     private async Task DoCraftAsync(string recipeId)
     {
         if (_client is null || _ownDead) return;
-        _entityLayer?.PredictAction(_ownId, ActionKind.Craft);
-        var resp = await _client.Commands.CraftAsync(recipeId);
+        var submission = _client.Commands.BeginCraft(recipeId);
+        _entityLayer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
+        var resp = await submission.ResponseTask;
         if (resp is not { Started: true })
         {
-            _entityLayer?.CancelPredictedAction(_ownId);
+            _entityLayer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
         }
         _hud?.Log(resp is { Started: true }
             ? $"开始制作 {recipeId}（{resp.Ticks} ticks）"

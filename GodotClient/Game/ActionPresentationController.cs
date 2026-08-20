@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Starve.Game.V1;
+using Starve.Protocol;
 
 namespace GodotClient.Game;
 
@@ -18,7 +19,10 @@ public readonly record struct ActionPresentationStatus(
     bool Predicted,
     ActionKind Kind,
     ulong ActionId,
-    ActionPhase Phase);
+    ActionPhase Phase,
+    ulong InputEpoch,
+    ulong Seq,
+    ulong RequestId);
 
 /// <summary>
 /// 实体动作表现的唯一状态机：接收本地预测和权威 ActionState，负责去重、替换与取消。
@@ -47,13 +51,16 @@ public sealed class ActionPresentationController
         _predictionTimeoutMs = predictionTimeoutMs;
     }
 
-    public void Predict(ulong entityId, ActionKind kind)
+    public void Predict(ulong entityId, ActionKind kind, InputCommandRef command)
     {
         _entries[entityId] = new Entry(
             Predicted: true,
             Kind: kind,
             ActionId: 0,
             Phase: ActionPhase.Unspecified,
+            InputEpoch: command.InputEpoch,
+            Seq: command.Seq,
+            RequestId: command.RequestId,
             ExpiresAtMs: checked(_nowMs() + _predictionTimeoutMs));
         _sink.Apply(entityId, kind);
     }
@@ -61,12 +68,21 @@ public sealed class ActionPresentationController
     public void Apply(ulong entityId, ActionState state)
     {
         var hasCurrent = _entries.TryGetValue(entityId, out var current);
+        if (hasCurrent &&
+            current.Predicted &&
+            current.RequestId != 0 &&
+            state.RequestId != 0 &&
+            state.RequestId < current.RequestId)
+        {
+            return;
+        }
+
         if (_suppressions.TryGetValue(entityId, out var suppression))
         {
             if (suppression.ActionId == state.ActionId &&
                 suppression.Kind == state.Kind)
             {
-                _entries[entityId] = AuthoritativeEntry(state);
+                _entries[entityId] = AuthoritativeEntry(state, current);
                 return;
             }
             _suppressions.Remove(entityId);
@@ -75,7 +91,7 @@ public sealed class ActionPresentationController
         var shouldRestart = !hasCurrent ||
                             current.Kind != state.Kind ||
                             (!current.Predicted && current.ActionId != state.ActionId);
-        _entries[entityId] = AuthoritativeEntry(state);
+        _entries[entityId] = AuthoritativeEntry(state, current);
         if (shouldRestart) _sink.Apply(entityId, state.Kind);
     }
 
@@ -92,9 +108,14 @@ public sealed class ActionPresentationController
         Remove(entityId);
     }
 
-    public void CancelPrediction(ulong entityId)
+    public void CancelPrediction(ulong entityId, ulong requestId)
     {
-        if (!_entries.TryGetValue(entityId, out var current) || !current.Predicted) return;
+        if (!_entries.TryGetValue(entityId, out var current) ||
+            !current.Predicted ||
+            current.RequestId != requestId)
+        {
+            return;
+        }
         _entries.Remove(entityId);
         _sink.Cancel(entityId);
     }
@@ -130,34 +151,46 @@ public sealed class ActionPresentationController
             _processedOutcomes.Remove(_outcomeHistory.Dequeue());
         }
 
-        if (outcome.Result == ActionOutcomeResult.Rejected)
-        {
-            if (_entries.TryGetValue(outcome.EntityId, out var rejected) && rejected.Predicted)
-            {
-                _entries.Remove(outcome.EntityId);
-                _sink.Cancel(outcome.EntityId);
-            }
-            return;
-        }
-        if (outcome.Result is not (ActionOutcomeResult.Completed or ActionOutcomeResult.Canceled))
+        if (outcome.Result is not (
+                ActionOutcomeResult.Rejected or
+                ActionOutcomeResult.Completed or
+                ActionOutcomeResult.Canceled))
         {
             return;
         }
 
         var hasCurrent = _entries.TryGetValue(outcome.EntityId, out var current);
-        if (hasCurrent &&
-            !current.Predicted &&
-            current.ActionId != outcome.ActionId)
+        if (hasCurrent)
         {
-            return;
+            var matchesRequest = outcome.RequestId != 0 &&
+                                 outcome.RequestId == current.RequestId;
+            var matchesAuthoritativeAction = !current.Predicted &&
+                                             outcome.ActionId != 0 &&
+                                             outcome.ActionId == current.ActionId;
+            var matchesCurrent = matchesRequest || matchesAuthoritativeAction;
+            if (!matchesCurrent) return;
         }
 
-        var suppression = new Suppression(outcome.ActionId, outcome.Kind);
-        if (_suppressions.TryGetValue(outcome.EntityId, out var existing) && existing == suppression) return;
-        _suppressions[outcome.EntityId] = suppression;
+        if (outcome.ActionId != 0)
+        {
+            var suppression = new Suppression(outcome.ActionId, outcome.Kind);
+            if (!_suppressions.TryGetValue(outcome.EntityId, out var existing) ||
+                existing != suppression)
+            {
+                _suppressions[outcome.EntityId] = suppression;
+            }
+        }
 
         if (!hasCurrent) return;
-        if (current.Predicted) _entries.Remove(outcome.EntityId);
+        if (current.Predicted || outcome.Result == ActionOutcomeResult.Rejected)
+        {
+            _entries.Remove(outcome.EntityId);
+        }
+        if (outcome.Result == ActionOutcomeResult.Rejected)
+        {
+            _sink.Cancel(outcome.EntityId);
+            return;
+        }
         if (outcome.Result == ActionOutcomeResult.Completed)
         {
             _sink.Finish(outcome.EntityId);
@@ -187,7 +220,14 @@ public sealed class ActionPresentationController
 
     public ActionPresentationStatus? StatusOf(ulong entityId) =>
         _entries.TryGetValue(entityId, out var entry)
-            ? new ActionPresentationStatus(entry.Predicted, entry.Kind, entry.ActionId, entry.Phase)
+            ? new ActionPresentationStatus(
+                entry.Predicted,
+                entry.Kind,
+                entry.ActionId,
+                entry.Phase,
+                entry.InputEpoch,
+                entry.Seq,
+                entry.RequestId)
             : null;
 
     private readonly record struct Entry(
@@ -195,6 +235,9 @@ public sealed class ActionPresentationController
         ActionKind Kind,
         ulong ActionId,
         ActionPhase Phase,
+        ulong InputEpoch,
+        ulong Seq,
+        ulong RequestId,
         long ExpiresAtMs);
 
     private readonly record struct Suppression(ulong ActionId, ActionKind Kind);
@@ -205,10 +248,19 @@ public sealed class ActionPresentationController
         ActionOutcomeResult Result,
         long Tick);
 
-    private static Entry AuthoritativeEntry(ActionState state) => new(
-        Predicted: false,
-        Kind: state.Kind,
-        ActionId: state.ActionId,
-        Phase: state.Phase,
-        ExpiresAtMs: 0);
+    private static Entry AuthoritativeEntry(ActionState state, Entry previous)
+    {
+        var confirmsPrediction = previous.Predicted &&
+                                 previous.RequestId != 0 &&
+                                 previous.RequestId == state.RequestId;
+        return new Entry(
+            Predicted: false,
+            Kind: state.Kind,
+            ActionId: state.ActionId,
+            Phase: state.Phase,
+            InputEpoch: confirmsPrediction ? previous.InputEpoch : 0,
+            Seq: confirmsPrediction ? previous.Seq : 0,
+            RequestId: state.RequestId,
+            ExpiresAtMs: 0);
+    }
 }

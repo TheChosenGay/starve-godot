@@ -81,6 +81,11 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 - 本地交互只做 500ms 短预测。权威状态到达后确认或校准；未收到状态会自动超时停止；
   本地移动意图开始时立即清除动作视觉，并抑制仍残留在快照中的旧 `action_id`，直到组件移除
   或新动作替换。P1.1 的 `OwnMovementSim` 与 ACK 契约不变。
+- 所有 Control 命令共享同一 `input_epoch + seq` 输入流；会产生持续动作的命令额外携带进程内
+  单调且跨重连不重置的 `request_id`。预测以 `InputCommandRef` 关联，旧请求的 ActionState/Outcome
+  或迟到制作响应不能覆盖、完成或取消较新的预测；Automate/AttackNearest 只发送身份，等待权威状态展示。
+- 制作在发送时立即公开命令身份并开始预测，不等待最长 5 秒的响应；`CraftResponse.started` 仅表示
+  前置校验通过并排队，不保证同 tick 最终胜出，被后续 Control 命令 superseded 时静默且材料不变。
 - `ActionPresentationController` 独占预测/权威/超时状态，`EntityLayer` 统一消费所有 Rig 实体，
   `RigNode` 只把动作类型适配为素材。Attack/Chop/Mine/Pick 暂共用 attack 动画；
   Craft 暂无专用素材，保持 idle 且不参与任何玩法结算。

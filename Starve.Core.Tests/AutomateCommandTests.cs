@@ -22,9 +22,10 @@ public sealed class AutomateCommandTests
     {
         var session = new RecordingSession();
         var commands = new CommandService(session);
+        commands.BeginInputEpoch(7);
 
-        commands.Automate();
-        commands.AttackNearest();
+        var automate = commands.Automate();
+        var attackNearest = commands.AttackNearest();
 
         Assert.Equal(2, session.Notifications.Count);
         Assert.All(session.Notifications, item => Assert.Equal(Routes.Automate, item.Route));
@@ -32,6 +33,10 @@ public sealed class AutomateCommandTests
         Assert.Equal(
             AutomateMode.AttackOnly,
             PlayerAutomate.Parser.ParseFrom(session.Notifications[1].Data).Mode);
+        Assert.Equal<ulong>(1, automate.Seq);
+        Assert.Equal<ulong>(2, attackNearest.Seq);
+        Assert.NotEqual<ulong>(0, automate.RequestId);
+        Assert.True(attackNearest.RequestId > automate.RequestId);
     }
 
     [Fact]

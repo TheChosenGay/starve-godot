@@ -4,6 +4,7 @@ using System.Linq;
 using Godot;
 using Starve.Core;
 using Starve.Game.V1;
+using Starve.Protocol;
 using Starve.Protocol.World;
 using TileMap = Starve.Core.TileMap;
 
@@ -205,9 +206,11 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 		}
 	}
 
-	public void PredictAction(ulong id, ActionKind kind) => _actions.Predict(id, kind);
+	public void PredictAction(ulong id, ActionKind kind, InputCommandRef command) =>
+		_actions.Predict(id, kind, command);
 
-	public void CancelPredictedAction(ulong id) => _actions.CancelPrediction(id);
+	public void CancelPredictedAction(ulong id, ulong requestId) =>
+		_actions.CancelPrediction(id, requestId);
 
 	public void CancelActionForMovement(ulong id) => _actions.CancelForMovement(id);
 
