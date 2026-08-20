@@ -1,3 +1,5 @@
 **/bin/
 **/obj/
 .godot/
+**/__pycache__/
+*.pyc
