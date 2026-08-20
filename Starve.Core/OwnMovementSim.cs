@@ -2,6 +2,12 @@ using System;
 
 namespace Starve.Core;
 
+public readonly record struct MovementDiagnostics(
+    float LastReconciliationError,
+    float MaxReconciliationError,
+    int SoftCorrections,
+    int HardSnaps);
+
 /// <summary>
 /// 自己的本地移动预测：按下立即移动（不等服务端 50ms tick + 快照往返），
 /// 前进时用客户端阻挡网格做墙停（避免走进树/建筑后被服务端拉回），
@@ -22,12 +28,21 @@ public sealed class OwnMovementSim
     private int _dirY;
     private float _speed = DefaultTilesPerSec;
     private bool _has;
+    private float _lastReconciliationError;
+    private float _maxReconciliationError;
+    private int _softCorrections;
+    private int _hardSnaps;
 
     public OwnMovementSim(Func<int, int, bool> walkable) => _walkable = walkable;
 
     public bool Has => _has;
     public bool Moving => _dirX != 0 || _dirY != 0;
     public (float X, float Y) Position => (_anchorX + _subX, _anchorY + _subY);
+    public MovementDiagnostics Diagnostics => new(
+        _lastReconciliationError,
+        _maxReconciliationError,
+        _softCorrections,
+        _hardSnaps);
 
     /// <summary>出生/瞬移/大误差：直接贴合服务端位置。</summary>
     public void SnapTo(float x, float y)
@@ -174,8 +189,11 @@ public sealed class OwnMovementSim
         var ex = serverX - current.X;
         var ey = serverY - current.Y;
         var err = MathF.Sqrt(ex * ex + ey * ey);
+        _lastReconciliationError = err;
+        _maxReconciliationError = MathF.Max(_maxReconciliationError, err);
         if (err > 4f)
         {
+            _hardSnaps++;
             SnapTo(serverX, serverY);
             return;
         }
@@ -191,6 +209,7 @@ public sealed class OwnMovementSim
             k = 0.2f;
         }
         if (k <= 0) return;
+        _softCorrections++;
         BlendTo(serverX, serverY, k);
     }
 }

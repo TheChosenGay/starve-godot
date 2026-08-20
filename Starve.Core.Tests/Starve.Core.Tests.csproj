@@ -22,4 +22,9 @@
     <ProjectReference Include="..\Starve.Core\Starve.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\GodotClient\Game\MovementDiagnosticsSampler.cs"
+             Link="GodotAdapter\MovementDiagnosticsSampler.cs" />
+  </ItemGroup>
+
 </Project>

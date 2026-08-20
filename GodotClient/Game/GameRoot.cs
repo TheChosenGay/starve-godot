@@ -64,6 +64,10 @@ public partial class GameRoot : Node
     private float _viewRotation;
     private int _blockedSignature = int.MinValue;
     private int _hudSignature = int.MinValue;
+    private readonly bool _showMovementDiagnostics =
+        System.Environment.GetEnvironmentVariable("STARVE_DEBUG_MOVEMENT") == "1";
+    private MovementDiagnosticsSampler? _movementDiagnosticsSampler;
+    private string _movementDiagnosticsStatus = "";
 
     /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
     private static readonly Dictionary<int, string> ItemIconFiles = new()
@@ -159,6 +163,11 @@ public partial class GameRoot : Node
         }
         var move = new MoveController();
         _ownSim = new OwnMovementSim(IsWalkable);
+        if (_showMovementDiagnostics)
+        {
+            _movementDiagnosticsSampler = new MovementDiagnosticsSampler(
+                () => _ownSim?.Diagnostics ?? default);
+        }
         move.OnMove += dir => _client?.Commands.Move(dir.Dx, dir.Dy);
         move.OnIntent += dir =>
         {
@@ -268,6 +277,20 @@ public partial class GameRoot : Node
             _ownSim?.SetIntent(dm.Dx, dm.Dy);
         }
         _ownSim?.Tick((float)(delta * 1000));
+        if (_movementDiagnosticsSampler?.TrySample(now, out var diagnostics, out var changed) == true)
+        {
+            _movementDiagnosticsStatus =
+                $"\n预测误差 last={diagnostics.LastReconciliationError:0.000}" +
+                $" max={diagnostics.MaxReconciliationError:0.000}" +
+                $" soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}";
+            if (changed)
+            {
+                GD.Print(
+                    $"MOVEMENT_DIAGNOSTICS last={diagnostics.LastReconciliationError:0.000} " +
+                    $"max={diagnostics.MaxReconciliationError:0.000} " +
+                    $"soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}");
+            }
+        }
         System.Numerics.Vector2? own = _ownSim is { Has: true } sim
             ? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
             : null;
@@ -1090,7 +1113,7 @@ public partial class GameRoot : Node
         _hud.SetStatus(
             $"实体数 {w.Count} | 昼夜 {w.DayLight:0.00} | 季节 {SeasonName(w.Season)}\n" +
             $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} {EquipText()}{defTxt}\n" +
-            $"选中: {DescribeSelected()}");
+            $"选中: {DescribeSelected()}{_movementDiagnosticsStatus}");
         _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
     }
 
@@ -1119,5 +1142,5 @@ public partial class GameRoot : Node
         return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
     }
 
-    private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    private static long NowMs() => checked((long)Time.GetTicksMsec());
 }

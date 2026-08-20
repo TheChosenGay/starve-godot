@@ -41,12 +41,18 @@ godot-client/
 工程验收：
 
 ```bash
-dotnet build GodotClient/GodotClient.csproj
-dotnet test Starve.Core.Tests/Starve.Core.Tests.csproj
-dotnet build ProtocolSmoke/ProtocolSmoke.csproj
+make check
+```
+
+在线协议 E2E 独立执行，不会让本地 `make check` 依赖运行中的服务端：
+
+```bash
+STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 ```
 
 当前稳定边界、移动/相机/制作契约见 [P0.1 客户端真实基线](P0.1-CLIENT-BASELINE.md)。
+质量门禁、协议同步和移动校正指标见 [P0.2 客户端质量门禁](P0.2-QUALITY-GATES.md)。
+低频诊断采样、可靠协议 E2E 和 CI 临时 gate 见 [P0.3 客户端 E2E](P0.3-CLIENT-E2E.md)。
 
 ## 当前状态
 

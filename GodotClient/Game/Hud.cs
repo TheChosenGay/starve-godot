@@ -51,6 +51,7 @@ public partial class Hud : Control
     private int _selectedSlot = -1;
     private Label? _fps;
     private double _fpsTimer;
+    private string? _lastStatusText;
 
     public override void _Ready()
     {
@@ -174,6 +175,8 @@ public partial class Hud : Control
 
     public void SetStatus(string text)
     {
+        if (text == _lastStatusText) return;
+        _lastStatusText = text;
         if (_status is not null) _status.Text = text;
     }
 
