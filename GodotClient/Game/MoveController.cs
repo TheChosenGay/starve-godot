@@ -43,6 +43,11 @@ public partial class MoveController : Node
                 OnIntent?.Invoke((0, 0));
                 OnMove?.Invoke((0, 0));
             }
+            else
+            {
+                // 组合键松开一轴时立即切换剩余方向，不等待下一次 100ms 保活重发。
+                SendHeld();
+            }
         }
     }
 
@@ -66,6 +71,7 @@ public partial class MoveController : Node
 
     private void SendDir((int Dx, int Dy) dir)
     {
+        _accum = 0;
         _lastDir = dir;
         OnMove?.Invoke(dir);
         OnIntent?.Invoke(dir);

@@ -5,6 +5,19 @@ namespace Starve.Core.Tests;
 public sealed class OwnMovementSimTests
 {
     [Fact]
+    public void UsesServerEffectiveSpeedForPrediction()
+    {
+        var sim = new OwnMovementSim((_, _) => true);
+        sim.SnapTo(5f, 3f);
+        sim.SetSpeed(5);
+        sim.SetIntent(1, 0);
+
+        sim.Tick(100);
+
+        Assert.Equal(5.5f, sim.Position.X, 3);
+    }
+
+    [Fact]
     public void NegativeDirectionCrossesAnchorWithoutJumping()
     {
         var sim = new OwnMovementSim((_, _) => true);

@@ -20,13 +20,22 @@ public sealed class StarveClient : IDisposable
         Session = new Session(Transport);
         Commands = new CommandService(Session);
         World = new WorldService();
+        World.InputAcknowledged += Commands.Acknowledge;
         Session.OnPush += World.HandleMessage;
     }
 
     public async Task<SessionInfo> ConnectAsync(string url, string token, CancellationToken ct = default)
     {
         await Transport.ConnectAsync(url, ct);
+        if (!Transport.Capabilities.Contains("input_epoch_ack") ||
+            !Transport.Capabilities.Contains("snapshot_tick") ||
+            !Transport.Capabilities.Contains("effective_move_speed"))
+        {
+            throw new NotSupportedException(
+                $"服务端协议能力不兼容: version={Transport.ProtocolVersion}");
+        }
         var info = await Session.LoginAsync(token, ct);
+        Commands.BeginInputEpoch(info.InputEpoch);
         Info = info;
         await World.WaitForSnapshotAsync(ct);
         return info;

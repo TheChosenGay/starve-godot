@@ -33,6 +33,8 @@ public sealed class WorldService
     private TaskCompletionSource _snapshotReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _revision;
 
+    public event Action<ulong, ulong, long>? InputAcknowledged;
+
     /// <summary>静态配置（登录后推送 world.config）。</summary>
     public GameConfig? Config { get; private set; }
 
@@ -42,8 +44,13 @@ public sealed class WorldService
     /// <summary>昼夜光照（0..1，来自 DayCycle.Light）。</summary>
     public float DayLight { get; private set; } = 0.5f;
 
-    /// <summary>世界 tick（来自 DayCycle.Phase，每 tick +1；位置插值/预测对齐用）。</summary>
+    /// <summary>世界 tick（来自 Snapshot/SnapshotDelta.tick；插值/预测对齐用）。</summary>
     public long WorldTick { get; private set; }
+
+    public ulong InputEpoch { get; private set; }
+
+    /// <summary>服务端已应用的最大命令 seq（仅当前连接）。</summary>
+    public ulong LastAcceptedSeq { get; private set; }
 
     /// <summary>季节（Season 枚举值，来自 WeatherState）。</summary>
     public int Season { get; private set; }
@@ -69,15 +76,19 @@ public sealed class WorldService
         if (msg.Route == Routes.Snapshot)
         {
             var snap = Snapshot.Parser.ParseFrom(msg.Data);
+            if (snap.InputEpoch == 0) return;
             _entities.Clear();
             foreach (var es in snap.Entities) Add(es);
-            ApplyWorldState(snap.DayCycle, snap.Weather);
+            ApplyWorldState(
+                snap.DayCycle, snap.Weather, snap.Tick, snap.InputEpoch, snap.LastAcceptedSeq);
             _snapshotReady.TrySetResult();
             Bump();
         }
         else if (msg.Route == Routes.SnapshotDelta)
         {
             var delta = SnapshotDelta.Parser.ParseFrom(msg.Data);
+            if (InputEpoch != 0 && delta.InputEpoch != InputEpoch) return;
+            if (delta.Tick != 0 && WorldTick != 0 && delta.Tick < (ulong)WorldTick) return;
             foreach (var es in delta.Entities) Add(es);
             foreach (var id in delta.RemovedEntities) _entities.TryRemove(id, out _);
             foreach (var rc in delta.RemovedComponents)
@@ -87,7 +98,8 @@ public sealed class WorldService
                     foreach (var name in rc.Components) view.Components.TryRemove(name, out _);
                 }
             }
-            ApplyWorldState(delta.DayCycle, delta.Weather);
+            ApplyWorldState(
+                delta.DayCycle, delta.Weather, delta.Tick, delta.InputEpoch, delta.LastAcceptedSeq);
             Bump();
         }
         else if (msg.Route == Routes.Config)
@@ -111,14 +123,22 @@ public sealed class WorldService
         }
     }
 
-    private void ApplyWorldState(DayCycle? dayCycle, WeatherState? weather)
+    private void ApplyWorldState(
+        DayCycle? dayCycle,
+        WeatherState? weather,
+        ulong tick,
+        ulong inputEpoch,
+        ulong lastAcceptedSeq)
     {
+        WorldTick = (long)tick;
+        InputEpoch = inputEpoch;
+        LastAcceptedSeq = lastAcceptedSeq;
         if (dayCycle is not null)
         {
             DayLight = dayCycle.Light;
-            WorldTick = dayCycle.Phase;
         }
         if (weather is not null) Season = (int)weather.Season;
+        InputAcknowledged?.Invoke(inputEpoch, lastAcceptedSeq, WorldTick);
     }
 
     private void Add(EntityState es)

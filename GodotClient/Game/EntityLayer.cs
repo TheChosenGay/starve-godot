@@ -21,7 +21,7 @@ public partial class EntityLayer : Node2D
 {
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
 	private readonly Dictionary<ulong, RigNode> _rigs = new();
-	private readonly Dictionary<ulong, float> _rigLastX = new();
+	private readonly Dictionary<ulong, (float X, float Y)> _rigLastPos = new();
 	private readonly Dictionary<ulong, float> _heightSm = new();
 	private TileMap? _tilemap;
 	private ulong _ownId;
@@ -143,7 +143,9 @@ public partial class EntityLayer : Node2D
 		{
 			if (!smoothers.TryGetValue(id, out var sm)) continue;
 			var p = sm.Current(now);
-			var h = SmoothHeight(id, _tilemap?.HeightAt(p.X, p.Y) ?? 0, deltaMs);
+			var targetHeight = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			// 自己与相机必须使用同一瞬时高度，否则坡地上两套滤波会造成视觉回拉。
+			var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			node.Position = new Vector2(local.X, local.Y);
 			node.ZIndex = (int)(local.X * _viewSin + local.Y * _viewCos);
@@ -165,16 +167,21 @@ public partial class EntityLayer : Node2D
 			{
 				continue;
 			}
-			var h = SmoothHeight(id, _tilemap?.HeightAt(p.X, p.Y) ?? 0, deltaMs);
+			var targetHeight = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+			var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			rig.Position = new Vector2(local.X, local.Y);
 			rig.ZIndex = (int)(local.X * _viewSin + local.Y * _viewCos);
-			// 水平移动时按行进方向翻转
-			if (_rigLastX.TryGetValue(id, out var lastX) && MathF.Abs(p.X - lastX) > 0.05f)
+			if (_rigLastPos.TryGetValue(id, out var last))
 			{
-				rig.SetFacing(MathF.Sign(p.X - lastX));
+				var dx = p.X - last.X;
+				var dy = p.Y - last.Y;
+				if (MathF.Abs(dx) + MathF.Abs(dy) > 0.03f)
+				{
+					rig.SetMovementDirection(dx, dy, _viewSin, _viewCos);
+				}
 			}
-			_rigLastX[id] = p.X;
+			_rigLastPos[id] = (p.X, p.Y);
 			rig.Update(deltaMs, isMoving(id));
 			rig.SetSunT(_sunT);
 		}
@@ -197,7 +204,7 @@ public partial class EntityLayer : Node2D
 			r.QueueFree();
 			_rigs.Remove(id);
 		}
-		_rigLastX.Remove(id);
+		_rigLastPos.Remove(id);
 		_heightSm.Remove(id);
 	}
 

@@ -58,10 +58,10 @@ public sealed class OwnMovementSim
         _dirY = dy;
     }
 
-    /// <summary>同步服务端实际速度（快照 Moveable.speed；0 = 用默认）。</summary>
+    /// <summary>同步服务端效果修正后的权威速度；0 表示被冻结。</summary>
     public void SetSpeed(float tilesPerSec)
     {
-        if (tilesPerSec > 0) _speed = tilesPerSec;
+        if (tilesPerSec >= 0) _speed = tilesPerSec;
     }
 
     /// <summary>
@@ -74,8 +74,7 @@ public sealed class OwnMovementSim
         if (!_has || dtMs <= 0) return;
         if (_dirX == 0 && _dirY == 0)
         {
-            // 停止：保持当前位置，不本地快照——服务端确认停止（Dir=0, sub=0）后由
-            // Reconcile 落定到它的锚点格。本地 floor 会和服务端锚点差 1 格（边界情形）。
+            // 连续移动允许停在任意子格；服务端同样保留 sub，不吸附整数格。
             return;
         }
         // 渲染帧可能卡顿超过一个服务端 tick；按 50ms 分片推进，避免一次跨越多个格子。
@@ -175,8 +174,8 @@ public sealed class OwnMovementSim
 
     /// <summary>
     /// 服务端快照校正：只有真正的瞬移/传送（>4 格）才硬跳。
-    /// serverStopped = 服务端已确认停止（Moveable.Dir=0，sub 归零，serverX/Y 即最终锚点格）。
-    /// 停止确认后才落定，且带死区：小误差（预测领先 ≤0.15 格）不往回拽，避免“停下被拉一下”。
+    /// serverStopped = 服务端已确认停止（Moveable.Dir=0 且路径为空）。
+    /// 停止确认后向服务端最终子格位置收敛；小误差保留死区，避免细微抖动。
     /// </summary>
     public void Reconcile(float serverX, float serverY, bool serverStopped = false)
     {

@@ -53,6 +53,7 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 当前稳定边界、移动/相机/制作契约见 [P0.1 客户端真实基线](P0.1-CLIENT-BASELINE.md)。
 质量门禁、协议同步和移动校正指标见 [P0.2 客户端质量门禁](P0.2-QUALITY-GATES.md)。
 低频诊断采样、可靠协议 E2E 和 CI 临时 gate 见 [P0.3 客户端 E2E](P0.3-CLIENT-E2E.md)。
+输入 epoch/seq、服务端 tick、ACK 与预测领先保护见 [P1.1 客户端预测契约](P1.1-PREDICTION-CONTRACT.md)。
 
 ## 当前状态
 

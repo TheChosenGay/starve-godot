@@ -5,6 +5,14 @@ using Starve.Game.V1;
 
 namespace GodotClient.Game;
 
+public enum CharacterFacing
+{
+    Front,
+    Back,
+    SideLeft,
+    SideRight,
+}
+
 /// <summary>动画帧序列规格：目录 pattern（{0} 帧号）+ 帧数 + fps + 是否循环。</summary>
 public sealed record AnimSpec(string Pattern, int Frames, float Fps, bool Loop, int FirstIndex);
 
@@ -65,6 +73,9 @@ public partial class RigNode : Node2D
 
     private readonly AnimatedSprite2D _sprite = new();
     private readonly RigSpec _rig;
+    private readonly Sprite2D? _directionalSprite;
+    private readonly Texture2D? _backTexture;
+    private readonly Texture2D? _sideTexture;
     private Label? _nameLabel;
     private float _sunT = 1f;
     private int _healthCur;
@@ -75,6 +86,8 @@ public partial class RigNode : Node2D
     private bool _hitQueued;
     private float _facing = 1f;
     private float _turnT;
+    private CharacterFacing _characterFacing = CharacterFacing.Front;
+    private readonly Vector2 _directionalBase = new(0, -42);
 
     public RigNode(RigSpec rig)
     {
@@ -87,6 +100,21 @@ public partial class RigNode : Node2D
         _sprite.Animation = "idle";
         _sprite.Play();
         AddChild(_sprite);
+        if (rig.Id == "fishman")
+        {
+            _backTexture = GD.Load<Texture2D>(
+                "res://assets/fishman/character/directional/back.png");
+            _sideTexture = GD.Load<Texture2D>(
+                "res://assets/fishman/character/directional/side.png");
+            _directionalSprite = new Sprite2D
+            {
+                Texture = _backTexture,
+                Position = _directionalBase,
+                Scale = Vector2.One * 0.085f,
+                Visible = false,
+            };
+            AddChild(_directionalSprite);
+        }
     }
 
     /// <summary>组装 SpriteFrames：按 AnimSpec 逐个加载帧图（缓存，多个同类角色共享）。</summary>
@@ -148,6 +176,22 @@ public partial class RigNode : Node2D
         _turnT = 1f; // 转身瞬间给一点旋转，让方向变化在正面帧上也看得出来
     }
 
+    public void SetMovementDirection(float worldDX, float worldDY, float viewSin, float viewCos)
+    {
+        var isoX = worldDX - worldDY;
+        var isoY = (worldDX + worldDY) * 0.5f;
+        var screenX = isoX * viewCos - isoY * viewSin;
+        var screenY = isoX * viewSin + isoY * viewCos;
+        if (_directionalSprite is null)
+        {
+            SetFacing(MathF.Sign(screenX));
+            return;
+        }
+        _characterFacing = MathF.Abs(screenY) >= MathF.Abs(screenX)
+            ? screenY < 0 ? CharacterFacing.Back : CharacterFacing.Front
+            : screenX < 0 ? CharacterFacing.SideLeft : CharacterFacing.SideRight;
+    }
+
     public void Update(double deltaMs, bool moving)
     {
         if (_turnT > 0)
@@ -174,10 +218,32 @@ public partial class RigNode : Node2D
             PlayAnim(moving ? "walk" : "idle", true);
         }
 
-        _sprite.Modulate = (long)Time.GetTicksMsec() < _flashUntil
+        var flash = (long)Time.GetTicksMsec() < _flashUntil;
+        var color = flash
             ? new Color(1.6f, 1.6f, 1.6f)
             : Colors.White;
-        if ((long)Time.GetTicksMsec() < _flashUntil) QueueRedraw();
+        _sprite.Modulate = color;
+        UpdateDirectionalView(moving, color);
+        if (flash) QueueRedraw();
+    }
+
+    private void UpdateDirectionalView(bool moving, Color color)
+    {
+        if (_directionalSprite is null) return;
+        var actionPlaying = (_sprite.Animation == "attack" || _sprite.Animation == "hit") &&
+                            _sprite.IsPlaying();
+        var showDirectional = !actionPlaying && _characterFacing != CharacterFacing.Front;
+        _sprite.Visible = !showDirectional;
+        _directionalSprite.Visible = showDirectional;
+        if (!showDirectional) return;
+
+        var side = _characterFacing is CharacterFacing.SideLeft or CharacterFacing.SideRight;
+        _directionalSprite.Texture = side ? _sideTexture : _backTexture;
+        var sign = _characterFacing == CharacterFacing.SideLeft ? -1f : 1f;
+        _directionalSprite.Scale = new Vector2(0.085f * sign, 0.085f);
+        var bob = moving ? MathF.Sin((float)Time.GetTicksMsec() / 110f) * 1.5f : 0;
+        _directionalSprite.Position = _directionalBase + new Vector2(0, bob);
+        _directionalSprite.Modulate = color;
     }
 
     private void PlayAnim(string name, bool loop)

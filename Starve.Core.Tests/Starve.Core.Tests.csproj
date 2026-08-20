@@ -25,6 +25,9 @@
   <ItemGroup>
     <Compile Include="..\GodotClient\Game\MovementDiagnosticsSampler.cs"
              Link="GodotAdapter\MovementDiagnosticsSampler.cs" />
+    <None Include="..\testdata\movement_golden.json"
+          Link="testdata\movement_golden.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

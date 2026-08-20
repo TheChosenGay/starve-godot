@@ -30,6 +30,8 @@ public partial class GameRoot : Node
     private readonly HashSet<(int X, int Y)> _blocked = new();
     private readonly Dictionary<ulong, long> _movingUntil = new();
     private readonly Dictionary<ulong, (float X, float Y)> _lastServerPos = new();
+    private bool _ownIntentMoving;
+    private bool _ownPathMoving;
 
     private StarveClient? _client;
     private TileMap? _tilemap;
@@ -172,9 +174,8 @@ public partial class GameRoot : Node
         move.OnIntent += dir =>
         {
             _ownSim?.SetIntent(dir.Dx, dir.Dy);
-            // 本地预测先行：走路动画立即播放，不等服务端确认
-            if (dir.Dx != 0 || dir.Dy != 0) _movingUntil[_ownId] = NowMs() + 240;
-            else _movingUntil.Remove(_ownId);
+            // 自己的动画严格跟随本地输入，松键立即 idle；服务端位置只负责校正。
+            _ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
         };
         AddChild(move);
 
@@ -276,13 +277,22 @@ public partial class GameRoot : Node
             _client?.Commands.Move(dm.Dx, dm.Dy);
             _ownSim?.SetIntent(dm.Dx, dm.Dy);
         }
-        _ownSim?.Tick((float)(delta * 1000));
+        if (_client is { } predictionClient &&
+            predictionClient.Transport.IsConnected &&
+            predictionClient.Commands.CanPredictMovement)
+        {
+            _ownSim?.Tick((float)(delta * 1000));
+        }
         if (_movementDiagnosticsSampler?.TrySample(now, out var diagnostics, out var changed) == true)
         {
             _movementDiagnosticsStatus =
                 $"\n预测误差 last={diagnostics.LastReconciliationError:0.000}" +
                 $" max={diagnostics.MaxReconciliationError:0.000}" +
-                $" soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}";
+                $" soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}" +
+                $"\n输入 epoch={_client?.Commands.InputEpoch ?? 0}" +
+                $" sent={_client?.Commands.LastSentSeq ?? 0}" +
+                $" ack={_client?.Commands.LastAcceptedSeq ?? 0}" +
+                $" pending={_client?.Commands.PendingMoveCount ?? 0}";
             if (changed)
             {
                 GD.Print(
@@ -345,7 +355,13 @@ public partial class GameRoot : Node
         _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
-        _entityLayer!.UpdatePositions(_smoothers, id => _movingUntil.GetValueOrDefault(id) > now, now, own);
+        _entityLayer!.UpdatePositions(
+            _smoothers,
+            id => id == _ownId
+                ? _ownIntentMoving || _ownPathMoving
+                : _movingUntil.GetValueOrDefault(id) > now,
+            now,
+            own);
         _entityLayer.SetDayLight(client.World.DayLight);
         _minimap!.SetView(
             client.World.Entities,
@@ -465,11 +481,16 @@ public partial class GameRoot : Node
             if (id == _ownId)
             {
                 // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
-                if (mv is not null) _ownSim?.SetSpeed((float)mv.Speed);
-                // 服务端确认停止 = Dir 清空 + 无路径 + sub 归零；确认后才落定，避免停止前被拽
+                if (mv is not null) _ownSim?.SetSpeed((float)mv.EffectiveSpeed);
+                _ownPathMoving = mv is { Path.Count: > 0 };
+                if (!_ownIntentMoving)
+                {
+                    var pathDir = _ownPathMoving ? mv!.Path[0] : null;
+                    _ownSim?.SetIntent(pathDir?.Dx ?? 0, pathDir?.Dy ?? 0);
+                }
+                // 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
                 var serverStopped = mv is { DirX: 0, DirY: 0 } &&
-                                    mv.Path.Count == 0 &&
-                                    mv.SubX == 0 && mv.SubY == 0;
+                                    mv.Path.Count == 0;
                 _ownSim?.Reconcile(fx, fy, serverStopped);
             }
             else if (!_smoothers.TryGetValue(id, out var smoother))
@@ -482,7 +503,8 @@ public partial class GameRoot : Node
             {
                 smoother.Update(fx, fy, tick, now);
             }
-            if (_lastServerPos.TryGetValue(id, out var prev) &&
+            if (id != _ownId &&
+                _lastServerPos.TryGetValue(id, out var prev) &&
                 (MathF.Abs(prev.X - fx) > 0.001f || MathF.Abs(prev.Y - fy) > 0.001f))
             {
                 _movingUntil[id] = now + 240;
@@ -963,27 +985,30 @@ public partial class GameRoot : Node
         return ImageTexture.CreateFromImage(img);
     }
 
+    public override void _Input(InputEvent @event)
+    {
+        if (@event is not InputEventKey key || key.Echo) return;
+        var name = OS.GetKeycodeString(key.Keycode);
+        if (key.Pressed)
+        {
+            if (name == "Q") RotateView(-Mathf.Pi / 4);
+            else if (name == "E") RotateView(Mathf.Pi / 4);
+        }
+        if (name != "Space") return;
+        if (key.Pressed)
+        {
+            _autoHeld = true;
+            _autoNextAt = NowMs() + 150;
+            _client?.Commands.Automate(); // 按下立即触发一次
+        }
+        else
+        {
+            _autoHeld = false;
+        }
+    }
+
     public override void _UnhandledInput(InputEvent @event)
     {
-        if (@event is InputEventKey rk && !rk.Echo && rk.Pressed)
-        {
-            var rkName = OS.GetKeycodeString(rk.Keycode);
-            if (rkName == "Q") RotateView(-Mathf.Pi / 4);
-            else if (rkName == "E") RotateView(Mathf.Pi / 4);
-        }
-        if (@event is InputEventKey ak && !ak.Echo && OS.GetKeycodeString(ak.Keycode) == "Space")
-        {
-            if (ak.Pressed)
-            {
-                _autoHeld = true;
-                _autoNextAt = NowMs() + 150;
-                _client?.Commands.Automate(); // 按下立即触发一次
-            }
-            else
-            {
-                _autoHeld = false;
-            }
-        }
         if (@event is InputEventMouseMotion mm)
         {
             _mouseWorld = ScreenToWorld(mm.Position);

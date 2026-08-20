@@ -33,9 +33,12 @@ internal static class SmokeRunner
         {
             var info = await client.ConnectAsync(options.Url, DevTokens.Mint(options.Uid), timeout.Token);
             connected = true;
-            Console.WriteLine($"[登录成功] uid={info.UserId} entity={info.EntityId}");
+            Console.WriteLine(
+                $"[登录成功] protocol={client.Transport.ProtocolVersion} " +
+                $"uid={info.UserId} entity={info.EntityId} epoch={info.InputEpoch}");
+            Require(client.World.InputEpoch == info.InputEpoch, "全量快照 input_epoch 与登录不一致");
             ValidateFullSnapshot(client.World, info.EntityId);
-            PrintWorldSummary(client.World);
+            PrintWorldSummary(client.World, info.EntityId);
 
             if (options.Diag)
             {
@@ -43,8 +46,8 @@ internal static class SmokeRunner
                 return 0;
             }
 
-            var initialTick = client.World.WorldTick;
-            await WaitForIncrementalAsync(client.World, initialTick, timeout.Token);
+            var initialRevision = client.World.Revision;
+            await WaitForIncrementalAsync(client.World, initialRevision, timeout.Token);
             ValidateMergedOwnEntity(client.World, info.EntityId);
 
             if (options.MoveTest || options.E2E)
@@ -56,7 +59,7 @@ internal static class SmokeRunner
             }
 
             Console.WriteLine(options.E2E
-                ? "P0.3 E2E 通过：登录、全量快照、增量合并和移动契约均有效。"
+                ? "P1.1 E2E 通过：协议能力、epoch、tick、ACK 和移动契约均有效。"
                 : "协议冒烟测试通过。");
             return 0;
         }
@@ -86,20 +89,25 @@ internal static class SmokeRunner
         Require(own.Get("Player", Player.Parser) is not null, "全量快照缺少 Player 组件");
         Require(own.Get("Position", Position.Parser) is not null, "全量快照缺少 Position 组件");
         Require(own.Get("Moveable", Moveable.Parser) is not null, "全量快照缺少 Moveable 组件");
+        foreach (var entity in world.Entities.Values)
+        {
+            if (entity.Get("Workstation", Workstation.Parser) is not null)
+                Require(entity.Get("Block", Block.Parser) is not null, "工作站快照缺少 Block 组件");
+        }
         Console.WriteLine($"[全量快照] 实体数={world.Count} tick={world.WorldTick} 玩家组件={own.Components.Count}");
     }
 
     private static async Task WaitForIncrementalAsync(
         WorldService world,
-        long initialTick,
+        int initialRevision,
         CancellationToken ct)
     {
         await WaitUntilAsync(
-            () => world.WorldTick != initialTick,
+            () => world.Revision != initialRevision,
             TimeSpan.FromSeconds(5),
             "未收到推进世界 tick 的增量快照",
             ct);
-        Console.WriteLine($"[增量快照] tick {initialTick} -> {world.WorldTick} revision={world.Revision}");
+        Console.WriteLine($"[增量快照] tick={world.WorldTick} last_seq={world.LastAcceptedSeq} revision={world.Revision}");
     }
 
     private static void ValidateMergedOwnEntity(WorldService world, ulong entityId)
@@ -114,7 +122,8 @@ internal static class SmokeRunner
         ValidateMoveable(moveable);
         Console.WriteLine(
             $"[增量合并] Player={hasPlayer} Health={hasHealth} Position={hasPosition} " +
-            $"speed={moveable.Speed:0.##} sub=({moveable.SubX:0.00},{moveable.SubY:0.00})");
+            $"speed={moveable.Speed:0.##} effective={moveable.EffectiveSpeed:0.##} " +
+            $"sub=({moveable.SubX:0.00},{moveable.SubY:0.00})");
     }
 
     private static async Task RunMovementContractAsync(
@@ -162,7 +171,22 @@ internal static class SmokeRunner
             moved,
             $"服务端未在同一次尝试中确认方向并产生位移，起点=({start.X:0.00},{start.Y:0.00})");
         await WaitForStoppedAsync(client.World, entityId, ct);
+        await WaitForInputAckAsync(client, ct);
         Console.WriteLine("[移动契约] 方向、速度、sub 范围、位移和停止确认通过");
+    }
+
+    private static async Task WaitForInputAckAsync(StarveClient client, CancellationToken ct)
+    {
+        var sent = client.Commands.LastSentSeq;
+        await WaitUntilAsync(
+            () => client.Commands.LastAcceptedSeq >= sent,
+            TimeSpan.FromSeconds(3),
+            $"输入 ACK 未追上：sent={sent} ack={client.Commands.LastAcceptedSeq}",
+            ct);
+        Require(client.Commands.InputEpoch == client.World.InputEpoch, "输入 ACK epoch 不一致");
+        Console.WriteLine(
+            $"[输入确认] epoch={client.Commands.InputEpoch} sent={sent} " +
+            $"ack={client.Commands.LastAcceptedSeq} pending={client.Commands.PendingMoveCount}");
     }
 
     private static async Task WaitForStoppedAsync(
@@ -185,6 +209,7 @@ internal static class SmokeRunner
     private static void ValidateMoveable(Moveable moveable)
     {
         Require(moveable.Speed > 0, "Moveable.speed 必须大于 0");
+        Require(moveable.EffectiveSpeed >= 0, "Moveable.effective_speed 不能为负数");
         Require(moveable.DirX is >= -1 and <= 1 && moveable.DirY is >= -1 and <= 1,
             "Moveable.dir 超出 -1..1");
         Require(moveable.SubX is >= 0 and < 1 && moveable.SubY is >= 0 and < 1,
@@ -270,7 +295,12 @@ internal static class SmokeRunner
         }
     }
 
-    private static void PrintWorldSummary(WorldService world)
+    private static WorkTarget? WorkTargetOf(EntityView view) =>
+        view.Get("Choppable", WorkTarget.Parser)
+        ?? view.Get("Minable", WorkTarget.Parser)
+        ?? view.Get("Pickable", WorkTarget.Parser);
+
+    private static void PrintWorldSummary(WorldService world, ulong ownId)
     {
         var stations = world.Entities.Values
             .Select(v => (v, ws: v.Get("Workstation", Workstation.Parser), b: v.Get("Building", Building.Parser)))
@@ -283,6 +313,42 @@ internal static class SmokeRunner
             })
             .ToList();
         Console.WriteLine("[工作站/建筑] " + (stations.Count == 0 ? "无" : string.Join(", ", stations)));
+        var blockers = world.Entities.Values.Count(v => v.Get("Block", Block.Parser) is not null);
+        Console.WriteLine($"[动态阻挡] Block 实体数={blockers}");
+        var own = GetEntity(world, ownId, "玩家实体不存在");
+        var ownPos = own.Get("Position", Position.Parser)!;
+        var nearby = world.Entities.Values
+            .Where(v => v.EntityId != ownId)
+            .Select(v => new
+            {
+                View = v,
+                Position = v.Get("Position", Position.Parser),
+                Target = WorkTargetOf(v),
+            })
+            .Where(x => x.Position is not null &&
+                        (x.Target is not null || x.View.LootOf() is not null))
+            .Select(x => new
+            {
+                x.View.EntityId,
+                Distance = Math.Abs(x.Position!.X - ownPos.X) +
+                           Math.Abs(x.Position.Y - ownPos.Y),
+                Action = x.View.Get("Pickable", WorkTarget.Parser) is not null ? "pick"
+                    : x.View.Get("Choppable", WorkTarget.Parser) is not null ? "chop"
+                    : x.View.Get("Minable", WorkTarget.Parser) is not null ? "mine"
+                    : "pickup",
+                Kind = x.Target?.Kind.ToString() ?? "loot",
+            })
+            .Where(x => x.Distance <= 8)
+            .OrderBy(x => x.Distance)
+            .Take(8)
+            .ToList();
+        Console.WriteLine(
+            $"[自动行为诊断] Picker={own.Components.ContainsKey("Picker")} " +
+            $"附近目标=" +
+            (nearby.Count == 0
+                ? "无"
+                : string.Join(", ", nearby.Select(
+                    x => $"#{x.EntityId}:{x.Action}/{x.Kind}/d{x.Distance}"))));
     }
 
     private static void Require(bool condition, string message)
