@@ -221,7 +221,18 @@ public partial class GameRoot : Node
         });
         hud.CraftPressed += recipeId => _ = DoCraftAsync(recipeId);
         hud.CancelCraftPressed += () => _client?.Commands.CancelCraft();
-        hud.SleepPressed += () => _hud?.Log("睡眠：服务端暂无 world.sleep 接口，待实现后接入");
+        hud.SleepPressed += () =>
+        {
+            if (_client is null || _ownDead) return;
+            var command = _client.Commands.Sleep();
+            _entityLayer?.PredictAction(_ownId, ActionKind.Sleep, command);
+        };
+        hud.CancelSleepPressed += () =>
+        {
+            if (_client is null || _ownDead) return;
+            _client.Commands.CancelSleep();
+            _entityLayer?.CancelActionLocally(_ownId);
+        };
     }
 
     private async Task StartAsync()

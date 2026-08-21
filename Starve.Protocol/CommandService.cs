@@ -114,6 +114,30 @@ public sealed class CommandService
     /// <summary>F 自动攻击：仅选择 AOI 内可攻击目标，超距时由服务端寻路。</summary>
     public InputCommandRef AttackNearest() => Automate(AutomateMode.AttackOnly);
 
+    public InputCommandRef Sleep()
+    {
+        var command = NextControlCommand();
+        Notify(Routes.Sleep, new PlayerSleep
+        {
+            Seq = command.Seq,
+            InputEpoch = command.InputEpoch,
+            RequestId = command.RequestId,
+        });
+        return command;
+    }
+
+    public InputCommandRef CancelSleep()
+    {
+        var command = NextControlCommand();
+        Notify(Routes.CancelSleep, new PlayerSleep
+        {
+            Seq = command.Seq,
+            InputEpoch = command.InputEpoch,
+            RequestId = command.RequestId,
+        });
+        return command;
+    }
+
     public void Drop(int kind, int count) =>
         Notify(Routes.Drop, new PlayerDrop { Kind = kind, Count = count });
 

@@ -16,6 +16,7 @@ public sealed class StarveClient : IDisposable
         "action_state_snapshot",
         "action_outcome",
         "world_events",
+        "sleep_action",
     ];
 
     public Transport Transport { get; }

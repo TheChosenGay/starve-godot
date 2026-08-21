@@ -21,10 +21,12 @@ public sealed class CommandServiceTests
         var mine = commands.Mine(94);
         var automate = commands.Automate();
         var attackNearest = commands.AttackNearest();
+        var sleep = commands.Sleep();
+        var cancelSleep = commands.CancelSleep();
         var craft = commands.BeginCraft("axe");
         var cancel = commands.CancelCraft();
 
-        Assert.Equal(Enumerable.Range(1, 9).Select(i => (ulong)i),
+        Assert.Equal(Enumerable.Range(1, 11).Select(i => (ulong)i),
             new[]
             {
                 move.Seq,
@@ -34,11 +36,17 @@ public sealed class CommandServiceTests
                 mine.Seq,
                 automate.Seq,
                 attackNearest.Seq,
+                sleep.Seq,
+                cancelSleep.Seq,
                 craft.CommandRef.Seq,
                 cancel.Seq,
             });
         Assert.All(
-            new[] { move, gather, attack, chop, mine, automate, attackNearest, craft.CommandRef, cancel },
+            new[]
+            {
+                move, gather, attack, chop, mine, automate, attackNearest,
+                sleep, cancelSleep, craft.CommandRef, cancel,
+            },
             command => Assert.Equal<ulong>(42, command.InputEpoch));
         Assert.Equal<ulong>(0, move.RequestId);
         Assert.Equal<ulong>(0, cancel.RequestId);
@@ -51,6 +59,8 @@ public sealed class CommandServiceTests
             mine.RequestId,
             automate.RequestId,
             attackNearest.RequestId,
+            sleep.RequestId,
+            cancelSleep.RequestId,
             craft.CommandRef.RequestId,
         };
         Assert.All(requestIds, requestId => Assert.NotEqual<ulong>(0, requestId));
@@ -63,12 +73,14 @@ public sealed class CommandServiceTests
         AssertMine(session.Notification(Routes.Mine), mine);
         AssertAutomate(session.Notifications.Where(x => x.Route == Routes.Automate).ElementAt(0), automate);
         AssertAutomate(session.Notifications.Where(x => x.Route == Routes.Automate).ElementAt(1), attackNearest);
+        AssertSleep(session.Notification(Routes.Sleep), sleep);
+        AssertSleep(session.Notification(Routes.CancelSleep), cancelSleep);
         AssertCancel(session.Notification(Routes.CancelCraft), cancel);
 
         var craftMessage = PlayerCraft.Parser.ParseFrom(Assert.Single(session.Requests).Data);
         Assert.Equal("axe", craftMessage.RecipeId);
         AssertIdentity(craftMessage.Seq, craftMessage.InputEpoch, craftMessage.RequestId, craft.CommandRef);
-        Assert.Equal<ulong>(9, commands.LastSentSeq);
+        Assert.Equal<ulong>(11, commands.LastSentSeq);
     }
 
     [Fact]
@@ -144,6 +156,12 @@ public sealed class CommandServiceTests
     private static void AssertAutomate((string Route, byte[] Data) sent, InputCommandRef command)
     {
         var message = PlayerAutomate.Parser.ParseFrom(sent.Data);
+        AssertIdentity(message.Seq, message.InputEpoch, message.RequestId, command);
+    }
+
+    private static void AssertSleep((string Route, byte[] Data) sent, InputCommandRef command)
+    {
+        var message = PlayerSleep.Parser.ParseFrom(sent.Data);
         AssertIdentity(message.Seq, message.InputEpoch, message.RequestId, command);
     }
 

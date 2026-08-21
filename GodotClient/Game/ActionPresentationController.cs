@@ -79,8 +79,10 @@ public sealed class ActionPresentationController
 
         if (_suppressions.TryGetValue(entityId, out var suppression))
         {
-            if (suppression.ActionId == state.ActionId &&
-                suppression.Kind == state.Kind)
+            var matchesSuppression = suppression.ActionId != 0
+                ? suppression.ActionId == state.ActionId
+                : suppression.RequestId != 0 && suppression.RequestId == state.RequestId;
+            if (suppression.Kind == state.Kind && matchesSuppression)
             {
                 _entries[entityId] = AuthoritativeEntry(state, current);
                 return;
@@ -120,16 +122,20 @@ public sealed class ActionPresentationController
         _sink.Cancel(entityId);
     }
 
-    public void CancelForMovement(ulong entityId)
+    public void CancelForMovement(ulong entityId) => CancelLocally(entityId);
+
+    /// <summary>本地主动中断表现，并抑制取消确认前残留的同一权威快照。</summary>
+    public void CancelLocally(ulong entityId)
     {
         if (!_entries.TryGetValue(entityId, out var current)) return;
         if (current.Predicted)
         {
+            _suppressions[entityId] = new Suppression(0, current.Kind, current.RequestId);
             _entries.Remove(entityId);
         }
         else
         {
-            var suppression = new Suppression(current.ActionId, current.Kind);
+            var suppression = new Suppression(current.ActionId, current.Kind, current.RequestId);
             if (_suppressions.TryGetValue(entityId, out var existing) && existing == suppression) return;
             _suppressions[entityId] = suppression;
         }
@@ -173,7 +179,7 @@ public sealed class ActionPresentationController
 
         if (outcome.ActionId != 0)
         {
-            var suppression = new Suppression(outcome.ActionId, outcome.Kind);
+            var suppression = new Suppression(outcome.ActionId, outcome.Kind, outcome.RequestId);
             if (!_suppressions.TryGetValue(outcome.EntityId, out var existing) ||
                 existing != suppression)
             {
@@ -240,7 +246,7 @@ public sealed class ActionPresentationController
         ulong RequestId,
         long ExpiresAtMs);
 
-    private readonly record struct Suppression(ulong ActionId, ActionKind Kind);
+    private readonly record struct Suppression(ulong ActionId, ActionKind Kind, ulong RequestId);
     private readonly record struct OutcomeKey(
         ulong EntityId,
         ulong ActionId,

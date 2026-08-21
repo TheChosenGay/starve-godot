@@ -214,6 +214,8 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 
 	public void CancelActionForMovement(ulong id) => _actions.CancelForMovement(id);
 
+	public void CancelActionLocally(ulong id) => _actions.CancelLocally(id);
+
 	public void ApplyActionOutcome(ActionOutcome outcome) => _actions.ApplyOutcome(outcome);
 
 	public void ApplyCombatImpact(WorldEvent worldEvent, CombatImpactEvent impact) =>

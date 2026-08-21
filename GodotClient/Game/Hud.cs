@@ -35,6 +35,7 @@ public partial class Hud : Control
     public event Action<string>? CraftPressed;
     public event Action? CancelCraftPressed;
     public event Action? SleepPressed;
+    public event Action? CancelSleepPressed;
 
     private Label? _status;
     private Label? _vitalsLabel;
@@ -127,7 +128,8 @@ public partial class Hud : Control
         actionBar.AddChild(MakeButton("拆除", () => DemolishPressed?.Invoke()));
         actionBar.AddChild(MakeButton("建火堆", () => BuildPressed?.Invoke(1)));
         actionBar.AddChild(MakeButton("建木墙", () => BuildPressed?.Invoke(2)));
-        actionBar.AddChild(MakeButton("睡眠", () => SleepPressed?.Invoke()));
+        actionBar.AddChild(TrackGameplay(MakeButton("睡眠", () => SleepPressed?.Invoke())));
+        actionBar.AddChild(TrackGameplay(MakeButton("取消睡眠", () => CancelSleepPressed?.Invoke())));
         left.AddChild(actionBar);
 
         // 背包

@@ -51,80 +51,64 @@ public partial class FirePitFire : Node2D
             _light.Energy = 1.0f + pulse * 0.3f;
     }
 
-    private GpuParticles2D MakeFlame()
+    private CpuParticles2D MakeFlame()
     {
-        var ramp = new GradientTexture1D
+        var ramp = new Gradient
         {
-            Gradient = new Gradient
+            Colors = new[]
             {
-                Colors = new[]
-                {
-                    new Color(1f, 1f, 0.55f, 1f),
-                    new Color(1f, 0.2f, 0f, 0f),
-                },
-                Offsets = new[] { 0f, 1f },
+                new Color(1f, 1f, 0.55f, 1f),
+                new Color(1f, 0.2f, 0f, 0f),
             },
-            Width = 16,
+            Offsets = new[] { 0f, 1f },
         };
-        var pm = new ParticleProcessMaterial
-        {
-            Direction = new Vector3(0, -1, 0),
-            Spread = 18,
-            Gravity = new Vector3(0, -25, 0),
-            InitialVelocityMin = 30,
-            InitialVelocityMax = 70,
-            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
-            EmissionSphereRadius = 12,
-            ScaleMin = 0.04f,
-            ScaleMax = 0.1f,
-            ColorRamp = ramp,
-        };
-        return new GpuParticles2D
+        return new CpuParticles2D
         {
             Texture = GD.Load<Texture2D>(FlamePath),
             Material = AddMat(),
-            ProcessMaterial = pm,
             Amount = 40,
             Lifetime = 0.7f,
+            Direction = new Vector2(0, -1),
+            Spread = 18,
+            Gravity = new Vector2(0, -25),
+            InitialVelocityMin = 30,
+            InitialVelocityMax = 70,
+            EmissionShape = CpuParticles2D.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 12,
+            ScaleAmountMin = 0.04f,
+            ScaleAmountMax = 0.1f,
+            ColorRamp = ramp,
             Emitting = true,
         };
     }
 
-    private GpuParticles2D MakeEmbers()
+    private CpuParticles2D MakeEmbers()
     {
-        var ramp = new GradientTexture1D
+        var ramp = new Gradient
         {
-            Gradient = new Gradient
+            Colors = new[]
             {
-                Colors = new[]
-                {
-                    new Color(1f, 0.95f, 0.7f, 1f),
-                    new Color(1f, 0.3f, 0f, 0f),
-                },
-                Offsets = new[] { 0f, 1f },
+                new Color(1f, 0.95f, 0.7f, 1f),
+                new Color(1f, 0.3f, 0f, 0f),
             },
-            Width = 16,
+            Offsets = new[] { 0f, 1f },
         };
-        var pm = new ParticleProcessMaterial
-        {
-            Direction = new Vector3(0, -1, 0),
-            Spread = 30,
-            Gravity = new Vector3(0, -45, 0),
-            InitialVelocityMin = 40,
-            InitialVelocityMax = 90,
-            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
-            EmissionSphereRadius = 8,
-            ScaleMin = 0.02f,
-            ScaleMax = 0.06f,
-            ColorRamp = ramp,
-        };
-        return new GpuParticles2D
+        return new CpuParticles2D
         {
             Texture = GD.Load<Texture2D>(EmberPath),
             Material = AddMat(),
-            ProcessMaterial = pm,
             Amount = 14,
             Lifetime = 1.1f,
+            Direction = new Vector2(0, -1),
+            Spread = 30,
+            Gravity = new Vector2(0, -45),
+            InitialVelocityMin = 40,
+            InitialVelocityMax = 90,
+            EmissionShape = CpuParticles2D.EmissionShapeEnum.Sphere,
+            EmissionSphereRadius = 8,
+            ScaleAmountMin = 0.02f,
+            ScaleAmountMax = 0.06f,
+            ColorRamp = ramp,
             Emitting = true,
             Position = new Vector2(0, -5),
         };

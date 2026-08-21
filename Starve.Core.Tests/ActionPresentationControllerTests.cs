@@ -53,6 +53,37 @@ public sealed class ActionPresentationControllerTests
     }
 
     [Fact]
+    public void ExplicitCancelImmediatelyClearsSleepAndSuppressesResidualState()
+    {
+        var sink = new RecordingSink();
+        var controller = new ActionPresentationController(sink, () => 0);
+        var sleep = State(18, ActionKind.Sleep, ActionPhase.Windup);
+        controller.Apply(7, sleep);
+
+        controller.CancelLocally(7);
+        controller.Apply(7, sleep);
+
+        Assert.Single(sink.Applied);
+        Assert.Single(sink.Cleared);
+        Assert.Equal(ActionKind.Sleep, controller.StatusOf(7)!.Value.Kind);
+    }
+
+    [Fact]
+    public void ExplicitCancelSuppressesLateAuthorityForPredictedSleep()
+    {
+        var sink = new RecordingSink();
+        var controller = new ActionPresentationController(sink, () => 0);
+        controller.Predict(7, ActionKind.Sleep, Ref());
+
+        controller.CancelLocally(7);
+        controller.Apply(7, State(18, ActionKind.Sleep, ActionPhase.Windup));
+
+        Assert.Single(sink.Applied);
+        Assert.Single(sink.Cleared);
+        Assert.Equal(ActionKind.Sleep, controller.StatusOf(7)!.Value.Kind);
+    }
+
+    [Fact]
     public void PhaseUpdateDoesNotRestartAnimation()
     {
         var sink = new RecordingSink();

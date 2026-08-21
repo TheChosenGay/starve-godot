@@ -191,8 +191,8 @@ public partial class RigNode : Node2D
         _actionAnimation = kind switch
         {
             ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Pick => "attack",
-            // Craft 暂无素材：保持 idle，但仍锁住 walk，避免表现成边制作边走。
-            ActionKind.Craft => "idle",
+            // Craft/Sleep 暂无专用素材：保持 idle，但仍锁住 walk。
+            ActionKind.Craft or ActionKind.Sleep => "idle",
             _ => "idle",
         };
         PlayAnimFromStart(_actionAnimation);
