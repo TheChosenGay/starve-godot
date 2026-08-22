@@ -68,5 +68,10 @@ public sealed class PlayerPresentationStateTests
         Assert.Equal("灵魂状态 · 生命 0 / 100", dead.Text);
         Assert.Equal(VitalTone.Red, hurt.Tone);
         Assert.Equal(VitalTone.Spirit, dead.Tone);
+
+        var hungry = HudVitalsViewModel.Create(80, 100, false, 20);
+        Assert.NotEqual(healthy.Signature, hungry.Signature);
+        Assert.Equal(20, hungry.Hunger);
+        Assert.Equal(0.2f, hungry.HungerRatio, 3);
     }
 }

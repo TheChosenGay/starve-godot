@@ -477,11 +477,12 @@ public partial class EntityNode : Node2D
 		{
 			_firePitTex ??= GD.Load<Texture2D>("res://assets/structures/fire-pit/fire-pit-cutout.png");
 			_structure = new Node2D { Position = FirePitCenter };
+			var pitScale = 36f / Mathf.Max(1, _firePitTex.GetWidth());
 			_structure.AddChild(new Sprite2D
 			{
 				Texture = _firePitTex,
 				Centered = true,
-				Scale = Vector2.One * 0.09f,
+				Scale = Vector2.One * pitScale,
 			});
 			_structure.AddChild(new FirePitFire());
 			AddChild(_structure);

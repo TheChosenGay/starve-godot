@@ -51,6 +51,7 @@ public partial class GameRoot : Node
     private LutPass? _lut;
     private VolumetricView? _volumetric;
     private GhostNode? _ghost;
+    private Control? _uiRoot;
     private Hud? _hud;
     private DamageFlashOverlay? _damageFlash;
     private MoveController? _moveController;
@@ -156,12 +157,21 @@ public partial class GameRoot : Node
 
         var ui = new CanvasLayer { Layer = 10 };
         AddChild(ui);
+        // CanvasLayer 不是 Control：子控件的锚点不会跟窗口走，底栏会算到屏幕外。
+        _uiRoot = new Control
+        {
+            Name = "UiRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        ui.AddChild(_uiRoot);
+        FitUiRoot();
+        GetViewport().SizeChanged += FitUiRoot;
         _minimap = new MinimapView { Name = "Minimap" };
-        ui.AddChild(_minimap);
+        _uiRoot.AddChild(_minimap);
         _damageFlash = new DamageFlashOverlay { Name = "DamageFlash" };
-        ui.AddChild(_damageFlash);
+        _uiRoot.AddChild(_damageFlash);
         _hud = new Hud { Name = "Hud" };
-        ui.AddChild(_hud);
+        _uiRoot.AddChild(_hud);
         WireHud(_hud);
 
         AddChild(new CameraController { Camera = _camera });
@@ -203,6 +213,14 @@ public partial class GameRoot : Node
 
         _hud.Log("连接中…");
         _ = StartAsync();
+    }
+
+    private void FitUiRoot()
+    {
+        if (_uiRoot is null) return;
+        var rect = GetViewport().GetVisibleRect();
+        _uiRoot.Position = Vector2.Zero;
+        _uiRoot.Size = rect.Size;
     }
 
     private void WireHud(Hud hud)
@@ -388,6 +406,7 @@ public partial class GameRoot : Node
         if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
         _camera.Tick((float)(delta * 1000));
 
+        FitUiRoot();
         var viewport = GetViewport().GetVisibleRect().Size;
         var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
         // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
@@ -946,7 +965,13 @@ public partial class GameRoot : Node
                         : $"需要靠近{WorkstationName((int)r.Workstation)}",
                 can,
                 r.Ingredients.Select(i =>
-                    new IngredientView(ItemName(cfg, (int)i.Kind), materials.GetValueOrDefault((int)i.Kind), i.Count)).ToList());
+                    new IngredientView(
+                        ItemName(cfg, (int)i.Kind),
+                        materials.GetValueOrDefault((int)i.Kind),
+                        i.Count,
+                        ItemIcon((int)i.Kind),
+                        ItemColor(cfg, (int)i.Kind))).ToList(),
+                ItemIcon((int)r.Output.Kind));
         }).ToList();
         var total = crafting is null
             ? 0
@@ -1328,8 +1353,10 @@ public partial class GameRoot : Node
     {
         if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
         var health = own.Get("Health", Health.Parser);
+        var hunger = own.Get("Hunger", Hunger.Parser);
         var dead = own.Components.ContainsKey("Dead");
-        _hud.SetVitals(HudVitalsViewModel.Create(health?.Cur ?? 0, health?.Max ?? 0, dead));
+        _hud.SetVitals(HudVitalsViewModel.Create(
+            health?.Cur ?? 0, health?.Max ?? 0, dead, hunger?.Level ?? 0));
         _hud.SetInteractionsDisabled(dead || GameplayLocked());
         if (dead && !_ownDead)
         {
@@ -1344,27 +1371,21 @@ public partial class GameRoot : Node
         if (_hud is null || _client is null) return;
         var w = _client.World;
         RefreshOwnVitals(w);
-        var own = w.Entities.TryGetValue(_ownId, out var view) ? view : null;
-        var pos = own?.Get("Position", Starve.Game.V1.Position.Parser);
-        var hp = own?.Get("Health", Health.Parser);
-        var hunger = own?.Get("Hunger", Hunger.Parser);
         var hauntStatus = _entityLayer?.ActionStatusOf(_ownId);
-        var actionState = own?.Get("ActionState", ActionState.Parser);
+        var actionState = w.Entities.TryGetValue(_ownId, out var own)
+            ? own.Get("ActionState", ActionState.Parser)
+            : null;
         var hauntText = HauntInteractionPolicy.IsGameplayLocked(hauntStatus)
             ? HauntProgressText(w.WorldTick, hauntStatus, actionState)
             : _ownDead
                 ? "灵魂状态：靠近复活雕像并点击作祟"
                 : "";
-        // M7：Health 不再携带防御（服务端只回 cur/max），总减免从 Equip 头/身槽位反查护甲求和。
         var defense = DefensePercent();
-        var defTxt = defense > 0 ? $" 防御{defense}%" : "";
-        _hud.SetStatus(
-            $"实体数 {w.Count} | 昼夜 {w.DayLight:0.00} | 季节 {SeasonName(w.Season)}\n" +
-            $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} {EquipText()}{defTxt}\n" +
-            $"选中: {DescribeSelected()}{_movementDiagnosticsStatus}\n" +
-            (hauntText.Length > 0
-                ? hauntText
-                : "操作：空格自动行为；F 自动寻找最近可攻击角色（按住持续攻击/超距寻路）"));
+        var selected = DescribeSelected();
+        var status = hauntText.Length > 0 ? hauntText : selected;
+        if (defense > 0) status = $"{status}  防御{defense}%";
+        if (_movementDiagnosticsStatus.Length > 0) status += _movementDiagnosticsStatus;
+        _hud.SetStatus(status);
         _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
     }
 

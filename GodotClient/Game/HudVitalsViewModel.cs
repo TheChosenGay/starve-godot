@@ -17,13 +17,24 @@ public readonly record struct HudVitalsViewModel(
     float Ratio,
     string Text,
     VitalTone Tone,
-    int Signature)
+    int Signature,
+    int Hunger = 0,
+    int HungerMaximum = 100,
+    float HungerRatio = 0)
 {
-    public static HudVitalsViewModel Create(int current, int maximum, bool isDead)
+    public static HudVitalsViewModel Create(
+        int current,
+        int maximum,
+        bool isDead,
+        int hunger = 0,
+        int hungerMaximum = 100)
     {
         var safeMax = Math.Max(0, maximum);
         var safeCurrent = Math.Clamp(current, 0, safeMax);
         var ratio = safeMax > 0 ? safeCurrent / (float)safeMax : 0;
+        var safeHungerMax = Math.Max(1, hungerMaximum);
+        var safeHunger = Math.Clamp(hunger, 0, safeHungerMax);
+        var hungerRatio = safeHunger / (float)safeHungerMax;
         var tone = isDead ? VitalTone.Spirit
             : ratio > 0.6f ? VitalTone.Green
             : ratio > 0.3f ? VitalTone.Yellow
@@ -38,6 +49,9 @@ public readonly record struct HudVitalsViewModel(
             ratio,
             text,
             tone,
-            HashCode.Combine(safeCurrent, safeMax, isDead));
+            HashCode.Combine(safeCurrent, safeMax, isDead, safeHunger),
+            safeHunger,
+            safeHungerMax,
+            hungerRatio);
     }
 }

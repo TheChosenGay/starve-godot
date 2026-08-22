@@ -7,13 +7,14 @@ using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
-/// <summary>小地图：地形底图 + 实体点 + 视口框（约 4Hz 刷新）。</summary>
+/// <summary>小地图：地形底图 + 实体点 + 视口框（约 4Hz 刷新）。右上角锚点，随窗口贴边。</summary>
 public partial class MinimapView : Control
 {
-	private static readonly Vector2 Offset = new(-170, 36);
-	private const float Size = 150f;
+	private const float MapSize = 112f;
+	private const float Margin = 12f;
 
 	private readonly TextureRect _tex = new();
+	private PanelContainer? _frame;
 	private TileMap? _map;
 	private IReadOnlyDictionary<ulong, EntityView> _entities = new Dictionary<ulong, EntityView>();
 	private Vector2 _camCenter;
@@ -25,10 +26,48 @@ public partial class MinimapView : Control
 	{
 		SetAnchorsPreset(LayoutPreset.FullRect);
 		MouseFilter = MouseFilterEnum.Ignore;
-		_tex.SetAnchorsPreset(LayoutPreset.TopRight);
-		_tex.Position = Offset;
-		_tex.Size = new Vector2(Size, Size);
-		AddChild(_tex);
+		Theme = HudTheme.Create();
+
+		_frame = new PanelContainer
+		{
+			MouseFilter = MouseFilterEnum.Ignore,
+		};
+		_frame.SetAnchorsPreset(LayoutPreset.TopLeft);
+		GetViewport().SizeChanged += PlaceFrame;
+		CallDeferred(MethodName.PlaceFrame);
+
+		var margin = new MarginContainer { MouseFilter = MouseFilterEnum.Ignore };
+		margin.AddThemeConstantOverride("margin_left", 6);
+		margin.AddThemeConstantOverride("margin_top", 6);
+		margin.AddThemeConstantOverride("margin_right", 6);
+		margin.AddThemeConstantOverride("margin_bottom", 6);
+		_tex.CustomMinimumSize = new Vector2(MapSize, MapSize);
+		_tex.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
+		_tex.StretchMode = TextureRect.StretchModeEnum.Scale;
+		_tex.MouseFilter = MouseFilterEnum.Ignore;
+		margin.AddChild(_tex);
+		_frame.AddChild(margin);
+		AddChild(_frame);
+	}
+
+	public override void _ExitTree()
+	{
+		var vp = GetViewport();
+		if (vp is not null)
+			vp.SizeChanged -= PlaceFrame;
+	}
+
+	private void PlaceFrame()
+	{
+		var size = GetParent() is Control parent && parent.Size.X > 1
+			? parent.Size
+			: GetViewportRect().Size;
+		SetAnchorsPreset(LayoutPreset.FullRect);
+		Size = size;
+		if (_frame is null) return;
+		const float frame = MapSize + 16;
+		_frame.Position = new Vector2(size.X - Margin - frame, Margin + 28);
+		_frame.Size = new Vector2(frame, frame);
 	}
 
 	public void SetMap(TileMap tm)
@@ -78,10 +117,9 @@ public partial class MinimapView : Control
 	{
 		if (_map is null) return;
 		var origin = _tex.GlobalPosition;
-		var sx = Size / _map.Width;
-		var sy = Size / _map.Height;
+		var sx = MapSize / _map.Width;
+		var sy = MapSize / _map.Height;
 
-		// 视口框
 		var vw = _screenSize.X / (40f * _zoom) * sx;
 		var vh = _screenSize.Y / (40f * _zoom) * sy;
 		var ccx = _camCenter.X * sx;
@@ -104,8 +142,8 @@ public partial class MinimapView : Control
 
 	private static Color ColorFor(EntityView view)
 	{
-		if (view.Get("Player", Player.Parser) is not null) return new Color(0.94f, 0.78f, 0.38f);
 		if (view.Get("Hauntable", Hauntable.Parser) is not null) return new Color(0.35f, 0.9f, 1f);
+		if (view.Get("Player", Player.Parser) is not null) return new Color(0.94f, 0.78f, 0.38f);
 		if (view.LootOf() is not null) return new Color(1f, 0.85f, 0.31f);
 		if (view.Get("Workstation", Workstation.Parser) is not null) return new Color(1f, 0.63f, 0.29f);
 		var building = view.Get("Building", Building.Parser);

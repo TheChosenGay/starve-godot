@@ -49,22 +49,21 @@ public partial class VolumetricView : Node2D
                 Mathf.Sin(t * 23 + seedB) * 0.08f;
 
             // 柔光晕：屏幕半径 ≈ 2.8 格（1 格 = 20px × zoom）
-            var glowR = 56f * _zoom * (0.92f + Mathf.Sin(t * 5 + seedB) * 0.06f);
+            var glowR = 28f * _zoom * (0.94f + Mathf.Sin(t * 5 + seedB) * 0.05f);
             DrawTextureRect(
                 FxTextures.Glow,
                 new Rect2(s.X - glowR, s.Y - glowR, glowR * 2, glowR * 2),
                 false,
-                new Color(1f, 0.58f, 0.25f, 0.14f * flicker));
+                new Color(1f, 0.58f, 0.25f, 0.22f * flicker));
 
-            // 光柱：底部宽 2 格、高约 5 格，轻微摇摆
-            var shW = 40f * _zoom;
-            var shH = 190f * _zoom;
-            var sway = Mathf.Sin(t * 2.1f + seedA * 0.7f) * shW * 0.05f;
+            var shW = 22f * _zoom;
+            var shH = 86f * _zoom;
+            var sway = Mathf.Sin(t * 2.1f + seedA * 0.7f) * shW * 0.04f;
             DrawTextureRect(
                 FxTextures.Shaft,
                 new Rect2(s.X - shW / 2 + sway, s.Y - shH, shW, shH),
                 false,
-                new Color(1f, 0.62f, 0.28f, 0.085f * flicker));
+                new Color(1f, 0.62f, 0.28f, 0.16f * flicker));
         }
 
         // 黄昏天光：3 道斜射暖光楔（dark 处于黄昏区间时出现）

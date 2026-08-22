@@ -179,7 +179,9 @@ public partial class RigNode : Node2D
 
     public void SetSunT(float sunT)
     {
-        _sunT = sunT;
+        var next = Mathf.Clamp(sunT, 0f, 1f);
+        if (Mathf.IsEqualApprox(_sunT, next)) return;
+        _sunT = next;
         QueueRedraw();
     }
 
@@ -387,9 +389,14 @@ public partial class RigNode : Node2D
     public override void _Draw()
     {
         // 方向投影：太阳越高越短、越淡（与 EntityNode 同风格）
-        var len = 0.35f + (1f - _sunT) * 1.0f;
-        var w = Mathf.Max(7f, 12f * _rig.Scale * 100f * len);
-        DrawEllipsePoly(new Vector2(-w * 0.5f * len, 2), w * len, w * 0.3f, new Color(0, 0, 0, 0.16f + 0.16f * _sunT));
+        var sun = Mathf.Clamp(_sunT, 0f, 1f);
+        var stretch = Mathf.Lerp(1.15f, 0.85f, sun);
+        const float foot = 15f;
+        DrawEllipsePoly(
+            new Vector2(-2f * stretch, 2),
+            foot * stretch,
+            foot * 0.32f,
+            new Color(0, 0, 0, 0.18f + 0.12f * sun));
 
         if (_showBar && _healthMax > 0)
         {
