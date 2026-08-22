@@ -26,11 +26,13 @@ public partial class InventorySlot : Button
 
     public void Configure(ItemView? item, bool equipped, bool selected)
     {
-        _item = item is { Kind: > 0, Count: > 0 } ? item : null;
-        _equipped = equipped && _item is not null;
+        var next = item is { Kind: > 0, Count: > 0 } ? item : null;
+        var nextEquipped = equipped && next is not null;
+        if (_item == next && _equipped == nextEquipped && _selected == selected) return;
+        _item = next;
+        _equipped = nextEquipped;
         _selected = selected;
         TooltipText = _item is null ? "" : _item.Name;
-        ApplyFrame();
         QueueRedraw();
     }
 

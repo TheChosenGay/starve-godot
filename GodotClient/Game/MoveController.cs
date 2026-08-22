@@ -8,15 +8,12 @@ namespace GodotClient.Game;
 
 /// <summary>
 /// 移动输入：WASD/方向键按住即走、每 100ms 重发方向、松开发停。
-/// M7 连续速度契约：方向保持——按住持续发当前方向（最后一条输入生效，无队列），
-/// 松开发 (0,0) 清方向停止；转弯直接发新方向，无需先清队列。
-/// 按键 → 世界方向的映射在 Core.MoveInput，这里只做输入采集。
+/// 只认 _Input 按键事件，不轮询实体键盘——IsPhysicalKeyPressed 在部分环境下恒为 false，
+/// 会把还按着的方向键清掉，角色只剩 idle。
 /// </summary>
 public partial class MoveController : Node
 {
-    /// <summary>方向变化回调（(0,0) = 停止）。</summary>
     public Action<(int Dx, int Dy)>? OnMove;
-    /// <summary>本地预测意图：按下/松开/转弯都通知（与是否发服务端命令无关）。</summary>
     public Action<(int Dx, int Dy)>? OnIntent;
 
     private readonly HashSet<string> _held = new();
@@ -62,7 +59,6 @@ public partial class MoveController : Node
             }
             else
             {
-                // 组合键松开一轴时立即切换剩余方向，不等待下一次 100ms 保活重发。
                 SendHeld();
             }
         }
@@ -70,14 +66,11 @@ public partial class MoveController : Node
 
     public override void _Process(double delta)
     {
-        if (_blocked) return;
-        if (_held.Count == 0) return;
+        if (_blocked || _held.Count == 0) return;
         _accum += delta;
-        if (_accum >= 0.1) // 方向保持：每 100ms 重发当前方向（防丢包；服务端最后一条输入生效）
-        {
-            _accum = 0;
-            SendHeld();
-        }
+        if (_accum < 0.1) return;
+        _accum = 0;
+        SendHeld();
     }
 
     private void SendHeld()

@@ -55,6 +55,7 @@ public partial class Hud : Control
     private Button? _bagSplit;
     private GridContainer? _craftList;
     private Button? _craftCancel;
+    private Button? _craftConfirm;
     private Button? _craftTab;
     private PanelContainer? _craftRail;
     private PanelContainer? _craftCard;
@@ -74,6 +75,8 @@ public partial class Hud : Control
     private int _lastSlotCount;
     private IReadOnlyList<RecipeView> _lastRecipes = Array.Empty<RecipeView>();
     private CraftingView? _lastCrafting;
+    private int _lastCardFingerprint = int.MinValue;
+    private bool _relayouting;
 
     public override void _Ready()
     {
@@ -87,17 +90,10 @@ public partial class Hud : Control
         AddChild(BuildCraftDrawer());
         AddChild(BuildFps());
 
-        GetViewport().SizeChanged += OnViewportSizeChanged;
-        FitToViewport();
         CallDeferred(MethodName.RelayoutDrawers);
     }
 
-    public override void _ExitTree()
-    {
-        var vp = GetViewport();
-        if (vp is not null)
-            vp.SizeChanged -= OnViewportSizeChanged;
-    }
+    public void Relayout() => RelayoutDrawers();
 
     public override void _UnhandledInput(InputEvent @event)
     {
@@ -111,60 +107,101 @@ public partial class Hud : Control
         {
             _craftOpen = false;
             _selectedRecipeId = null;
+            _lastCardFingerprint = int.MinValue;
             RelayoutDrawers();
             GetViewport().SetInputAsHandled();
         }
     }
 
-    private void OnViewportSizeChanged() => RelayoutDrawers();
-
-    private void FitToViewport()
+    /// <summary>点在制作/背包等交互板上时，世界点击不能再落到实体上。</summary>
+    public bool HitsInteractive(Vector2 screen)
     {
-        var size = GetViewportRect().Size;
-        if (size.X < 2 || size.Y < 2) return;
-        Position = Vector2.Zero;
-        Size = size;
+        return ContainsScreen(_craftTab, screen) ||
+               ContainsScreen(_craftRail, screen) ||
+               ContainsScreen(_craftCard, screen) ||
+               ContainsScreen(_bottomBar, screen);
     }
+
+    private static bool ContainsScreen(Control? control, Vector2 screen) =>
+        control is { Visible: true } && control.GetGlobalRect().HasPoint(screen);
 
     private void RelayoutDrawers()
     {
-        FitToViewport();
-        FitBottomBar();
-        FitLog();
-        ApplyCraftOpenState();
-        if (_fps is not null)
-            _fps.Position = new Vector2(Math.Max(8, Size.X - 280), 8);
+        if (_relayouting) return;
+        if (GetParent() is Control parent && parent.Size.X < 2)
+        {
+            CallDeferred(MethodName.RelayoutDrawers);
+            return;
+        }
+        _relayouting = true;
+        try
+        {
+            SetAnchorsPreset(LayoutPreset.FullRect);
+            PinBottomBar();
+            PinLog();
+            PinFps();
+            PinCraft();
+        }
+        finally
+        {
+            _relayouting = false;
+        }
     }
 
-    private void FitBottomBar()
+    private void PinBottomBar()
     {
         if (_bottomBar is null) return;
+        _bottomBar.Visible = true;
         var min = _bottomBar.GetCombinedMinimumSize();
-        var w = Math.Min(Math.Max(min.X, 1), Math.Max(80, Size.X - 16));
+        var w = Math.Max(min.X, 80);
         var h = Math.Max(min.Y, 52f);
-        ResetAnchors(_bottomBar);
-        _bottomBar.Size = new Vector2(w, h);
-        _bottomBar.Position = new Vector2(Mathf.Floor((Size.X - w) * 0.5f), Size.Y - BottomMargin - h);
+        _bottomBar.AnchorLeft = 0.5f;
+        _bottomBar.AnchorRight = 0.5f;
+        _bottomBar.AnchorTop = 1f;
+        _bottomBar.AnchorBottom = 1f;
+        _bottomBar.OffsetLeft = -w * 0.5f;
+        _bottomBar.OffsetRight = w * 0.5f;
+        _bottomBar.OffsetTop = -BottomMargin - h;
+        _bottomBar.OffsetBottom = -BottomMargin;
     }
 
-    private void FitLog()
+    private void PinLog()
     {
-        if (_log is null || _bottomBar is null) return;
-        ResetAnchors(_log);
-        _log.Position = new Vector2(_bottomBar.Position.X, _bottomBar.Position.Y - 22);
-        _log.Size = new Vector2(Math.Max(160, _bottomBar.Size.X), 20);
+        if (_log is null) return;
+        var w = Math.Max(160, BarWidth());
+        _log.AnchorLeft = 0.5f;
+        _log.AnchorRight = 0.5f;
+        _log.AnchorTop = 1f;
+        _log.AnchorBottom = 1f;
+        _log.OffsetLeft = -w * 0.5f;
+        _log.OffsetRight = w * 0.5f;
+        _log.OffsetTop = -BottomMargin - BarHeight() - 22;
+        _log.OffsetBottom = -BottomMargin - BarHeight() - 2;
     }
 
-    private static void ResetAnchors(Control control)
+    private void PinFps()
     {
-        control.AnchorLeft = 0;
-        control.AnchorTop = 0;
-        control.AnchorRight = 0;
-        control.AnchorBottom = 0;
-        control.OffsetLeft = 0;
-        control.OffsetTop = 0;
-        control.OffsetRight = 0;
-        control.OffsetBottom = 0;
+        if (_fps is null) return;
+        _fps.AnchorLeft = 1f;
+        _fps.AnchorRight = 1f;
+        _fps.AnchorTop = 0;
+        _fps.AnchorBottom = 0;
+        _fps.OffsetLeft = -96;
+        _fps.OffsetRight = -8;
+        _fps.OffsetTop = 8;
+        _fps.OffsetBottom = 30;
+    }
+
+    private float BarWidth()
+    {
+        if (_bottomBar is null) return 80;
+        return Math.Max(_bottomBar.GetCombinedMinimumSize().X, 80);
+    }
+
+    private float BarHeight()
+    {
+        if (_bottomBar is null) return 52;
+        return Math.Max(_bottomBar.GetCombinedMinimumSize().Y, 52);
     }
 
     private Control BuildTopLeft()
@@ -292,46 +329,95 @@ public partial class Hud : Control
     private void ToggleCraft()
     {
         _craftOpen = !_craftOpen;
-        if (!_craftOpen) _selectedRecipeId = null;
+        if (!_craftOpen)
+        {
+            _selectedRecipeId = null;
+            _lastCardFingerprint = int.MinValue;
+        }
         RelayoutDrawers();
     }
 
-    private void ApplyCraftOpenState()
+    private void PinCraft()
     {
         if (_craftTab is null || _craftRail is null || _craftCard is null) return;
-        var midY = Size.Y * 0.38f;
-        ResetAnchors(_craftTab);
         _craftTab.Text = _craftOpen ? "收\n起" : "制\n作";
-        _craftTab.Position = new Vector2(0, midY);
-        _craftTab.Size = new Vector2(CraftTabWidth, 96);
+        _craftTab.AnchorLeft = 0;
+        _craftTab.AnchorRight = 0;
+        _craftTab.AnchorTop = 0.42f;
+        _craftTab.AnchorBottom = 0.42f;
+        _craftTab.OffsetLeft = 0;
+        _craftTab.OffsetRight = CraftTabWidth;
+        _craftTab.OffsetTop = -48;
+        _craftTab.OffsetBottom = 48;
 
         _craftRail.Visible = _craftOpen;
         var railW = 0f;
         if (_craftOpen)
         {
-            ResetAnchors(_craftRail);
             var min = _craftRail.GetCombinedMinimumSize();
             railW = Math.Max(CraftSlot.Cell * 2 + 22, min.X);
             var railH = Math.Max(min.Y, CraftSlot.Cell + 16);
-            var top = midY - railH * 0.5f;
-            var maxBottom = (_bottomBar?.Position.Y ?? Size.Y) - 10;
-            if (top + railH > maxBottom) top = Math.Max(8, maxBottom - railH);
-            _craftRail.Size = new Vector2(railW, railH);
-            _craftRail.Position = new Vector2(CraftTabWidth + 4, top);
+            _craftRail.AnchorLeft = 0;
+            _craftRail.AnchorRight = 0;
+            _craftRail.AnchorTop = 0.42f;
+            _craftRail.AnchorBottom = 0.42f;
+            _craftRail.OffsetLeft = CraftTabWidth + 4;
+            _craftRail.OffsetRight = CraftTabWidth + 4 + railW;
+            _craftRail.OffsetTop = -railH * 0.5f;
+            _craftRail.OffsetBottom = railH * 0.5f;
         }
 
         var showCard = _craftOpen && (_selectedRecipeId is not null || _lastCrafting is not null);
         _craftCard.Visible = showCard;
-        if (showCard)
+        if (!showCard) return;
+        var cardMin = _craftCard.GetCombinedMinimumSize();
+        var cardW = Math.Max(168, cardMin.X);
+        var cardH = Math.Max(cardMin.Y, 96);
+        _craftCard.AnchorLeft = 0;
+        _craftCard.AnchorRight = 0;
+        _craftCard.AnchorTop = 0.42f;
+        _craftCard.AnchorBottom = 0.42f;
+        _craftCard.OffsetLeft = CraftTabWidth + railW + 10;
+        _craftCard.OffsetRight = CraftTabWidth + railW + 10 + cardW;
+        _craftCard.OffsetTop = -cardH * 0.4f;
+        _craftCard.OffsetBottom = cardH * 0.6f;
+    }
+
+    private void RefreshCraftCard(bool relayout)
+    {
+        var fingerprint = CraftCardFingerprint();
+        if (fingerprint != _lastCardFingerprint)
         {
+            _lastCardFingerprint = fingerprint;
             RebuildCraftCard();
-            ResetAnchors(_craftCard);
-            var min = _craftCard.GetCombinedMinimumSize();
-            var cardW = Math.Max(168, min.X);
-            var cardH = Math.Max(min.Y, 96);
-            _craftCard.Size = new Vector2(cardW, cardH);
-            _craftCard.Position = new Vector2(CraftTabWidth + railW + 6, midY - cardH * 0.4f);
         }
+        if (relayout) RelayoutDrawers();
+    }
+
+    private int CraftCardFingerprint()
+    {
+        var hash = new HashCode();
+        hash.Add(_selectedRecipeId);
+        if (_lastCrafting is { } crafting)
+        {
+            hash.Add(crafting.RecipeId);
+            hash.Add(crafting.TicksLeft);
+            hash.Add(crafting.Ticks);
+        }
+        var recipe = _lastRecipes.FirstOrDefault(r => r.Id == _selectedRecipeId)
+                     ?? (_lastCrafting is { } active
+                         ? _lastRecipes.FirstOrDefault(r => r.Id == active.RecipeId)
+                         : null);
+        if (recipe is null) return hash.ToHashCode();
+        hash.Add(recipe.CanCraft);
+        hash.Add(recipe.StationLabel);
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            hash.Add(ingredient.Name);
+            hash.Add(ingredient.Have);
+            hash.Add(ingredient.Need);
+        }
+        return hash.ToHashCode();
     }
 
     private static Control MakeDivider() =>
@@ -389,9 +475,28 @@ public partial class Hud : Control
     public void SetInteractionsDisabled(bool disabled)
     {
         _interactionsDisabled = disabled;
-        foreach (var button in _gameplayButtons) button.Disabled = disabled;
-        foreach (var button in _craftButtons) button.Disabled = disabled;
+        DisableLive(_gameplayButtons, disabled);
+        DisableLive(_craftButtons, disabled);
+        if (GodotObject.IsInstanceValid(_craftCancel)) _craftCancel!.Disabled = disabled;
+        if (GodotObject.IsInstanceValid(_craftConfirm)) _craftConfirm!.Disabled = disabled;
         RefreshBagButtons();
+    }
+
+    /// <summary>
+    /// 材料卡重建会 QueueFree 旧按钮。若还留在列表里，下一帧写 Disabled 会抛，
+    /// GameRoot._Process 后半段（本地移动、相机）整段被跳过，角色就冻住；雨和火是 GPU，看着还在动。
+    /// </summary>
+    private static void DisableLive(List<Button> buttons, bool disabled)
+    {
+        for (var i = buttons.Count - 1; i >= 0; i--)
+        {
+            if (!GodotObject.IsInstanceValid(buttons[i]))
+            {
+                buttons.RemoveAt(i);
+                continue;
+            }
+            buttons[i].Disabled = disabled;
+        }
     }
 
     public void SetToolState(bool canChop, bool canMine)
@@ -420,6 +525,7 @@ public partial class Hud : Control
                 _bag.AddChild(slot);
                 _slotKinds.Add(0);
             }
+            CallDeferred(MethodName.RelayoutDrawers);
         }
 
         for (var i = 0; i < slots; i++)
@@ -432,7 +538,6 @@ public partial class Hud : Control
             _slotKinds[i] = item is { Kind: > 0, Count: > 0 } ? item.Kind : 0;
         }
         RefreshBagButtons();
-        CallDeferred(MethodName.RelayoutDrawers);
     }
 
     public void RenderCraft(IReadOnlyList<RecipeView> recipes, CraftingView? crafting)
@@ -441,30 +546,61 @@ public partial class Hud : Control
         _lastRecipes = recipes;
         _lastCrafting = crafting;
         _craftingActive = crafting is not null;
-        foreach (var child in _craftList.GetChildren()) child.QueueFree();
-        _craftButtons.Clear();
-        if (crafting is not null && !_craftOpen)
+        var openedForCraft = crafting is not null && !_craftOpen;
+        if (openedForCraft)
         {
             _craftOpen = true;
-            _selectedRecipeId = crafting.RecipeId;
-            RelayoutDrawers();
+            _selectedRecipeId = crafting!.RecipeId;
         }
 
-        foreach (var recipe in recipes)
+        SyncCraftSlots(recipes);
+        if (openedForCraft)
         {
-            var slot = new CraftSlot();
-            slot.Configure(recipe.Icon, recipe.OutputName, recipe.Id == _selectedRecipeId, recipe.CanCraft);
-            var id = recipe.Id;
-            slot.Pressed += () =>
-            {
-                _selectedRecipeId = id;
-                if (!_craftOpen) _craftOpen = true;
-                RelayoutDrawers();
-            };
-            _craftButtons.Add(slot);
-            _craftList.AddChild(slot);
+            _lastCardFingerprint = int.MinValue;
+            RefreshCraftCard(relayout: false);
+            RelayoutDrawers();
+            return;
         }
-        if (_craftOpen) CallDeferred(MethodName.RelayoutDrawers);
+
+        if (_craftOpen) RefreshCraftCard(relayout: false);
+    }
+
+    private void SyncCraftSlots(IReadOnlyList<RecipeView> recipes)
+    {
+        if (_craftList is null) return;
+        while (_craftList.GetChildCount() > recipes.Count)
+        {
+            var extra = _craftList.GetChild(_craftList.GetChildCount() - 1);
+            _craftButtons.Remove((Button)extra);
+            extra.QueueFree();
+        }
+        for (var i = 0; i < recipes.Count; i++)
+        {
+            var recipe = recipes[i];
+            CraftSlot slot;
+            if (i < _craftList.GetChildCount() && _craftList.GetChild(i) is CraftSlot existing)
+            {
+                slot = existing;
+            }
+            else
+            {
+                slot = new CraftSlot();
+                slot.Pressed += () => OnCraftSlotPressed(slot);
+                _craftButtons.Add(slot);
+                _craftList.AddChild(slot);
+            }
+            slot.Configure(recipe.Id, recipe.Icon, recipe.OutputName, recipe.Id == _selectedRecipeId, recipe.CanCraft);
+        }
+    }
+
+    private void OnCraftSlotPressed(CraftSlot slot)
+    {
+        if (_selectedRecipeId == slot.RecipeId && _craftOpen) return;
+        _selectedRecipeId = slot.RecipeId;
+        _craftOpen = true;
+        _lastCardFingerprint = int.MinValue;
+        RefreshCraftCard(relayout: false);
+        CallDeferred(MethodName.RelayoutDrawers);
     }
 
     private void SelectBagSlot(int slot)
@@ -478,7 +614,13 @@ public partial class Hud : Control
     {
         if (_craftCard is null) return;
         var body = _craftCard.GetChild(0).GetChild(0);
-        foreach (var child in body.GetChildren()) child.QueueFree();
+        _craftCancel = null;
+        _craftConfirm = null;
+        foreach (var child in body.GetChildren())
+        {
+            if (child is Button button) _craftButtons.Remove(button);
+            child.QueueFree();
+        }
         if (body is not VBoxContainer box) return;
         box.AddThemeConstantOverride("separation", 6);
 
@@ -517,11 +659,10 @@ public partial class Hud : Control
         });
         foreach (var ingredient in recipe.Ingredients)
             box.AddChild(MakeIngredientRow(ingredient));
-        var craft = MakeButton(recipe.CanCraft ? "制作" : "尝试制作", () => CraftPressed?.Invoke(recipe.Id));
-        craft.CustomMinimumSize = new Vector2(96, 32);
-        craft.Disabled = _interactionsDisabled;
-        _craftButtons.Add(craft);
-        box.AddChild(craft);
+        _craftConfirm = MakeButton(recipe.CanCraft ? "制作" : "尝试制作", () => CraftPressed?.Invoke(recipe.Id));
+        _craftConfirm.CustomMinimumSize = new Vector2(96, 32);
+        _craftConfirm.Disabled = _interactionsDisabled;
+        box.AddChild(_craftConfirm);
     }
 
     private static Control MakeRecipeHeader(RecipeView recipe)

@@ -33,7 +33,7 @@ public partial class MinimapView : Control
 			MouseFilter = MouseFilterEnum.Ignore,
 		};
 		_frame.SetAnchorsPreset(LayoutPreset.TopLeft);
-		GetViewport().SizeChanged += PlaceFrame;
+		Resized += PlaceFrame;
 		CallDeferred(MethodName.PlaceFrame);
 
 		var margin = new MarginContainer { MouseFilter = MouseFilterEnum.Ignore };
@@ -52,21 +52,18 @@ public partial class MinimapView : Control
 
 	public override void _ExitTree()
 	{
-		var vp = GetViewport();
-		if (vp is not null)
-			vp.SizeChanged -= PlaceFrame;
+		Resized -= PlaceFrame;
 	}
 
 	private void PlaceFrame()
 	{
-		var size = GetParent() is Control parent && parent.Size.X > 1
-			? parent.Size
-			: GetViewportRect().Size;
-		SetAnchorsPreset(LayoutPreset.FullRect);
-		Size = size;
 		if (_frame is null) return;
+		var size = Size.X > 1 ? Size : GetViewportRect().Size;
 		const float frame = MapSize + 16;
-		_frame.Position = new Vector2(size.X - Margin - frame, Margin + 28);
+		var pos = new Vector2(size.X - Margin - frame, Margin + 28);
+		if (_frame.Position.DistanceSquaredTo(pos) < 1f && Mathf.IsEqualApprox(_frame.Size.X, frame))
+			return;
+		_frame.Position = pos;
 		_frame.Size = new Vector2(frame, frame);
 	}
 

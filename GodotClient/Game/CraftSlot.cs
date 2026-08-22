@@ -11,12 +11,16 @@ public partial class CraftSlot : Button
     private Texture2D? _icon;
     private string _fallback = "?";
     private bool _selected;
+    private bool _canCraft = true;
+
+    public string RecipeId { get; private set; } = "";
 
     public CraftSlot()
     {
         CustomMinimumSize = new Vector2(Cell, Cell);
         FocusMode = FocusModeEnum.None;
-        ToggleMode = true;
+        ToggleMode = false;
+        MouseFilter = MouseFilterEnum.Stop;
         Text = "";
         ApplyFrame();
     }
@@ -27,13 +31,18 @@ public partial class CraftSlot : Button
             QueueRedraw();
     }
 
-    public void Configure(Texture2D? icon, string name, bool selected, bool canCraft)
+    public void Configure(string recipeId, Texture2D? icon, string name, bool selected, bool canCraft)
     {
+        RecipeId = recipeId;
+        if (_icon == icon && _fallback == (name.Length > 0 ? name[..1] : "?") &&
+            _selected == selected && _canCraft == canCraft && TooltipText == name)
+            return;
         _icon = icon;
         _fallback = name.Length > 0 ? name[..1] : "?";
         _selected = selected;
+        _canCraft = canCraft;
         TooltipText = name;
-        ButtonPressed = selected;
+        SetPressedNoSignal(selected);
         Modulate = canCraft ? Colors.White : new Color(1, 1, 1, 0.45f);
         QueueRedraw();
     }

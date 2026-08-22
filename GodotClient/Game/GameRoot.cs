@@ -77,6 +77,7 @@ public partial class GameRoot : Node
     private string _movementDiagnosticsStatus = "";
     private bool _ownDead;
     private bool _gameplayLocked;
+    private Vector2 _uiRootSize;
 
     /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
     private static readonly Dictionary<int, string> ItemIconFiles = new()
@@ -164,8 +165,10 @@ public partial class GameRoot : Node
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
         ui.AddChild(_uiRoot);
-        FitUiRoot();
+        // CanvasLayer 不是 Control，子节点 FullRect 不会自动吃到窗口。必须把 UiRoot.Size 写成视口大小。
         GetViewport().SizeChanged += FitUiRoot;
+        var window = GetWindow();
+        if (window is not null) window.SizeChanged += FitUiRoot;
         _minimap = new MinimapView { Name = "Minimap" };
         _uiRoot.AddChild(_minimap);
         _damageFlash = new DamageFlashOverlay { Name = "DamageFlash" };
@@ -173,6 +176,8 @@ public partial class GameRoot : Node
         _hud = new Hud { Name = "Hud" };
         _uiRoot.AddChild(_hud);
         WireHud(_hud);
+        FitUiRoot();
+        CallDeferred(MethodName.FitUiRoot);
 
         AddChild(new CameraController { Camera = _camera });
         // 截图/演示辅助：STARVE_DEMO_ROTATE=45 启动即旋转视角
@@ -215,12 +220,34 @@ public partial class GameRoot : Node
         _ = StartAsync();
     }
 
+    public override void _ExitTree()
+    {
+        var vp = GetViewport();
+        if (vp is not null) vp.SizeChanged -= FitUiRoot;
+        var window = GetWindow();
+        if (window is not null) window.SizeChanged -= FitUiRoot;
+    }
+
     private void FitUiRoot()
     {
         if (_uiRoot is null) return;
-        var rect = GetViewport().GetVisibleRect();
+        var size = GetViewport().GetVisibleRect().Size;
+        if (size.X < 2 || size.Y < 2)
+        {
+            var win = GetWindow();
+            if (win is not null) size = win.Size;
+        }
+        if (size.X < 2 || size.Y < 2)
+        {
+            CallDeferred(MethodName.FitUiRoot);
+            return;
+        }
+        if (_uiRoot.Size.DistanceSquaredTo(size) < 1f && _uiRoot.Position == Vector2.Zero)
+            return;
+        _uiRootSize = size;
         _uiRoot.Position = Vector2.Zero;
-        _uiRoot.Size = rect.Size;
+        _uiRoot.Size = size;
+        _hud?.Relayout();
     }
 
     private void WireHud(Hud hud)
@@ -345,7 +372,14 @@ public partial class GameRoot : Node
         {
             _lastRevision = client.World.Revision;
             ApplyWorld(client.World);
-            RefreshOwnVitals(client.World);
+            try
+            {
+                RefreshOwnVitals(client.World);
+            }
+            catch (Exception ex)
+            {
+                GD.PushError($"HUD vitals: {ex.Message}");
+            }
         }
         while (_worldEvents.TryDequeue(out var worldEvent))
         {
@@ -406,7 +440,6 @@ public partial class GameRoot : Node
         if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
         _camera.Tick((float)(delta * 1000));
 
-        FitUiRoot();
         var viewport = GetViewport().GetVisibleRect().Size;
         var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
         // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
@@ -468,7 +501,14 @@ public partial class GameRoot : Node
             new Vector2(_camera.CenterX(), _camera.CenterY()),
             _camera.ZoomLevel,
             viewport);
-        UpdateHud();
+        try
+        {
+            UpdateHud();
+        }
+        catch (Exception ex)
+        {
+            GD.PushError($"HUD: {ex.Message}");
+        }
     }
 
     private void UpdateLighting(WorldService world, Vector2 viewport, float zoom, System.Numerics.Vector2? own)
@@ -985,10 +1025,13 @@ public partial class GameRoot : Node
     {
         var hash = new HashCode();
         hash.Add(world.Config?.GetHashCode() ?? 0);
-        foreach (var name in new[] { "Inventory", "Equip", "Chopper", "Miner", "Position", "Health" })
+        // 不把原始坐标打进签名：走动时 Position 每拍都变，会把制作/背包整棵拆掉重建。
+        foreach (var name in new[] { "Inventory", "Equip", "Chopper", "Miner", "Health" })
         {
             if (own.Components.TryGetValue(name, out var data)) AddBytes(ref hash, data);
         }
+        foreach (var type in StationNear(world, own.Get("Position", Position.Parser)).OrderBy(t => t))
+            hash.Add(type);
         var health = own.Get("Health", Health.Parser);
         hash.Add(HudVitalsViewModel.Create(
             health?.Cur ?? 0,
@@ -1223,6 +1266,7 @@ public partial class GameRoot : Node
         }
         else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
+            if (PointerOnHud(mb.Position)) return;
             if (GameplayLocked()) return;
             if (_ownDead)
             {
@@ -1389,6 +1433,14 @@ public partial class GameRoot : Node
         _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
     }
 
+    private bool PointerOnHud(Vector2 screen)
+    {
+        if (_hud is null) return false;
+        if (_hud.HitsInteractive(screen)) return true;
+        var hovered = GetViewport()?.GuiGetHoveredControl();
+        return hovered is not null && (hovered == _hud || _hud.IsAncestorOf(hovered));
+    }
+
     private bool GameplayLocked() =>
         HauntInteractionPolicy.IsGameplayLocked(_entityLayer?.ActionStatusOf(_ownId));
 
@@ -1414,7 +1466,14 @@ public partial class GameRoot : Node
             _autoActions.Release(AutoActionIntent.AttackOnly);
             ExitBuildPreview();
         }
-        _hud?.SetInteractionsDisabled(_ownDead || locked);
+        try
+        {
+            _hud?.SetInteractionsDisabled(_ownDead || locked);
+        }
+        catch (Exception ex)
+        {
+            GD.PushError($"HUD disable: {ex.Message}");
+        }
     }
 
     private static string HauntProgressText(
