@@ -1,0 +1,7 @@
+P0 sound effects are remixed from Kenney.nl packs (CC0):
+  Interface Sounds, Impact Sounds, RPG Audio
+  https://kenney.nl
+Credit "Kenney.nl" is appreciated but not required.
+
+Downloaded via the CC0 Sounds mirror, then trimmed and
+loudness-matched by scripts/audio_pipeline.py.

@@ -3,3 +3,4 @@
 .godot/
 **/__pycache__/
 *.pyc
+GodotClient/assets/audio/_raw/

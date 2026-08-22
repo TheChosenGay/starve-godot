@@ -1,0 +1,1082 @@
+{
+  "version": 1,
+  "style": {
+    "id": "starve-foley",
+    "name": "饥荒式干福莱",
+    "prompt_block": "Don't Starve gothic cartoon foley, dry wood leather bone wet mud and flint, short slightly cartoon survival game, thin analog lo-fi, no orchestra, no cinematic reverb tail, no sci-fi, no melody, no human speech",
+    "negative": "music, melody, singing, speech, voice-over, choir, cinematic boom, long reverb, explosion, laser, synth lead, trailer braam",
+    "sample_rate": 48000,
+    "channels": 1,
+    "format": "ogg",
+    "peak_db": -3.0,
+    "sfx_lufs": -18.0,
+    "amb_lufs": -23.0
+  },
+  "entries": [
+    {
+      "id": "sfx.ui.click",
+      "priority": "P0",
+      "category": "ui",
+      "name": "UI 点击",
+      "description": "制作槽、背包按钮、火/墙/睡等 HUD 按下",
+      "trigger": {
+        "source": "Hud",
+        "when": "button.pressed"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [80, 140],
+        "variations": 3,
+        "cooldown_ms": 40,
+        "loop": false
+      },
+      "prompt": "short dry wooden UI click, tiny taut leather tap on a small board, one-shot only",
+      "prompt_influence": 0.55
+    },
+    {
+      "id": "sfx.ui.deny",
+      "priority": "P0",
+      "category": "ui",
+      "name": "操作拒绝",
+      "description": "TryAct 提前返回、缺工具、ActionOutcome REJECTED",
+      "trigger": {
+        "source": "GameRoot.TryAct / ActionOutcome",
+        "when": "rejected or missing tool"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [140, 220],
+        "variations": 2,
+        "cooldown_ms": 120,
+        "loop": false
+      },
+      "prompt": "short muffled wooden thud deny, dull blocked tap, no voice, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.ui.craft.open",
+      "priority": "P0",
+      "category": "ui",
+      "name": "打开制作抽屉",
+      "description": "Hud.ToggleCraft / 按 C",
+      "trigger": {
+        "source": "Hud.ToggleCraft",
+        "when": "drawer opens"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [180, 280],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "small wooden drawer sliding open, dry parchment rustle, short one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.ui.craft.start",
+      "priority": "P0",
+      "category": "ui",
+      "name": "开始制作",
+      "description": "DoCraftAsync 成功提交 BeginCraft，ActionKind.Craft 起手",
+      "trigger": {
+        "source": "GameRoot.DoCraftAsync",
+        "when": "BeginCraft accepted"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [200, 320],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "soft wooden workbench start, light flint click and cloth fold, short crafting begin, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.ui.craft.done",
+      "priority": "P0",
+      "category": "ui",
+      "name": "制作完成",
+      "description": "ActionOutcome COMPLETED 且 kind=Craft",
+      "trigger": {
+        "source": "ActionOutcome",
+        "when": "COMPLETED + ActionKind.Craft"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [220, 360],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "satisfying short wooden craft complete, light flint chime without melody, dry one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.ui.craft.fail",
+      "priority": "P0",
+      "category": "ui",
+      "name": "制作失败",
+      "description": "DoCraftAsync 失败或 Craft 被 REJECTED",
+      "trigger": {
+        "source": "GameRoot.DoCraftAsync / ActionOutcome",
+        "when": "craft failed"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [160, 260],
+        "variations": 2,
+        "cooldown_ms": 120,
+        "loop": false
+      },
+      "prompt": "dry failed craft clack, two small wood pieces missing each other, no voice, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.player.footstep.grass",
+      "priority": "P0",
+      "category": "player",
+      "name": "草地脚步",
+      "description": "鱼人 walk 循环的接触帧；默认地形",
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant frames"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [90, 160],
+        "variations": 4,
+        "cooldown_ms": 280,
+        "volume_db": -16,
+        "loop": false
+      },
+      "prompt": "short dry grass footstep, light leather sole on packed dirt and straw, one step only",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.player.swing",
+      "priority": "P0",
+      "category": "player",
+      "name": "挥击起手",
+      "description": "ActionKind Attack/Chop/Mine 进入 WINDUP，对齐攻击动画开头",
+      "trigger": {
+        "source": "ActionPresentationController",
+        "when": "ActionKind.Attack|Chop|Mine start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "short dry whoosh of a small wooden tool swung through air, cloth rustle, no impact yet, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.gather.chop.wood",
+      "priority": "P0",
+      "category": "gather",
+      "name": "砍树命中",
+      "description": "Chop 接触帧，约 AttackImpactMs=400",
+      "trigger": {
+        "source": "ActionKind.Chop impact",
+        "when": "windup reaches AttackImpactMs"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [160, 260],
+        "variations": 4,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "small hatchet hitting a thin dry tree trunk, short woody chop, bark chips, no echo, one hit only",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.gather.mine.stone",
+      "priority": "P0",
+      "category": "gather",
+      "name": "挖矿命中",
+      "description": "Mine 接触帧，约 AttackImpactMs=400",
+      "trigger": {
+        "source": "ActionKind.Mine impact",
+        "when": "windup reaches AttackImpactMs"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [160, 260],
+        "variations": 4,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "small pickaxe ticking flint and dry stone, short rocky mine hit, gravel fall, no echo, one hit only",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.gather.pick.berry",
+      "priority": "P0",
+      "category": "gather",
+      "name": "采集浆果",
+      "description": "ActionKind.Pick 起手/完成",
+      "trigger": {
+        "source": "ActionKind.Pick",
+        "when": "pick start or complete"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "soft berry bush pick, leaves and twig snap, tiny fruit pluck, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.gather.pickup",
+      "priority": "P0",
+      "category": "gather",
+      "name": "拾取掉落",
+      "description": "掉落物被捡走（点击/空格自动化/走近）",
+      "trigger": {
+        "source": "GameRoot loot despawn",
+        "when": "nearby Lootable removed"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [100, 180],
+        "variations": 3,
+        "cooldown_ms": 160,
+        "volume_db": 4,
+        "loop": false
+      },
+      "prompt": "short item pickup, small wood and cloth bundle lifted from dirt, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.combat.hit.flesh",
+      "priority": "P0",
+      "category": "combat",
+      "name": "命中血肉",
+      "description": "仅权威 CombatImpact HIT；预测 HIT 也可先播",
+      "trigger": {
+        "source": "ImpactPresentationController",
+        "when": "CombatImpactResult.Hit"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [160, 260],
+        "variations": 4,
+        "cooldown_ms": 70,
+        "loop": false
+      },
+      "prompt": "dry fleshy melee impact, short wooden thud on hide, no gore wetness overload, no scream, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.combat.miss",
+      "priority": "P0",
+      "category": "combat",
+      "name": "未命中",
+      "description": "PresentNonHit + CombatImpactResult.Miss",
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Miss"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [120, 200],
+        "variations": 3,
+        "cooldown_ms": 70,
+        "loop": false
+      },
+      "prompt": "weapon swing missing, air whoosh and light cloth, no impact, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.combat.blocked",
+      "priority": "P0",
+      "category": "combat",
+      "name": "格挡",
+      "description": "PresentNonHit + CombatImpactResult.Blocked",
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Blocked"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 3,
+        "cooldown_ms": 70,
+        "loop": false
+      },
+      "prompt": "short wooden armor block, dry clack of stick on wood plate, no metal clang, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.player.death",
+      "priority": "P0",
+      "category": "player",
+      "name": "死亡转魂",
+      "description": "Dead 组件出现 / RigNode.SetDead(true)",
+      "trigger": {
+        "source": "RigNode.SetDead",
+        "when": "dead becomes true"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [400, 700],
+        "variations": 2,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "thin cold soul leaving the body, short dry wind and faint bone rattle, no choir, no words, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.player.sleep",
+      "priority": "P0",
+      "category": "player",
+      "name": "入睡",
+      "description": "ActionKind.Sleep 起手",
+      "trigger": {
+        "source": "Hud.SleepPressed / ActionKind.Sleep",
+        "when": "sleep starts"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [280, 450],
+        "variations": 2,
+        "cooldown_ms": 300,
+        "loop": false
+      },
+      "prompt": "soft wood cot creak and a short sleepy exhale, cloth settle, no snore loop, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.player.footstep.stone",
+      "priority": "P1",
+      "category": "player",
+      "name": "石地脚步",
+      "description": "矿区 / 石质地形 walk",
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant on stone biome"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [90, 160],
+        "variations": 4,
+        "cooldown_ms": 90,
+        "loop": false
+      },
+      "prompt": "short leather sole on dry stone and grit, one footstep only",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.player.footstep.mud",
+      "priority": "P1",
+      "category": "player",
+      "name": "泥地脚步",
+      "description": "沼泽 / 雨后 walk",
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant on swamp or wet ground"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [100, 180],
+        "variations": 4,
+        "cooldown_ms": 90,
+        "loop": false
+      },
+      "prompt": "short wet mud footstep, light squish on packed marsh dirt, one step only",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.player.haunt",
+      "priority": "P1",
+      "category": "player",
+      "name": "作祟",
+      "description": "灵魂态 ActionKind.Haunt 起手",
+      "trigger": {
+        "source": "GameRoot.TryHaunt",
+        "when": "ActionKind.Haunt start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [350, 600],
+        "variations": 2,
+        "cooldown_ms": 200,
+        "loop": false
+      },
+      "prompt": "cold spirit whoosh into a stone statue, thin bone chime, no words, no choir, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.player.revive",
+      "priority": "P1",
+      "category": "player",
+      "name": "复活",
+      "description": "Dead 组件移除",
+      "trigger": {
+        "source": "RigNode.SetDead",
+        "when": "dead becomes false"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [350, 550],
+        "variations": 2,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "short body returning, dry inhale and faint warmth whoosh, no fanfare, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.build.place",
+      "priority": "P1",
+      "category": "build",
+      "name": "放置建筑",
+      "description": "Commands.Place 火堆/木墙",
+      "trigger": {
+        "source": "GameRoot place confirm",
+        "when": "Place sent"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [180, 280],
+        "variations": 2,
+        "cooldown_ms": 100,
+        "loop": false
+      },
+      "prompt": "wooden structure planted into dirt, short thud and timber knock, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.build.demolish",
+      "priority": "P1",
+      "category": "build",
+      "name": "拆除",
+      "description": "Hud.DemolishPressed",
+      "trigger": {
+        "source": "Hud.DemolishPressed",
+        "when": "demolish"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [200, 320],
+        "variations": 2,
+        "cooldown_ms": 100,
+        "loop": false
+      },
+      "prompt": "short wooden structure breaking apart, dry planks and dirt, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.world.campfire",
+      "priority": "P1",
+      "category": "world",
+      "name": "火堆燃烧",
+      "description": "已放置 campfire / FirePitFire 附近 loop",
+      "trigger": {
+        "source": "FirePitFire",
+        "when": "placed BuildingKind.Campfire in range"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": true,
+        "duration_ms": [8000, 12000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "small campfire crackle loop, dry twigs and soft flame, seamless, no music",
+      "prompt_influence": 0.35,
+      "generate_seconds": 10
+    },
+    {
+      "id": "sfx.player.eat",
+      "priority": "P1",
+      "category": "player",
+      "name": "进食",
+      "description": "背包使用浆果/肉",
+      "trigger": {
+        "source": "Hud.BagUsePressed",
+        "when": "use food item"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [180, 280],
+        "variations": 2,
+        "cooldown_ms": 150,
+        "loop": false
+      },
+      "prompt": "short cartoon bite of berry or meat, dry chew, no voice, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.combat.immune",
+      "priority": "P1",
+      "category": "combat",
+      "name": "免疫",
+      "description": "PresentNonHit + CombatImpactResult.Immune",
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Immune"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "dull immune impact, strike absorbed by hide, short dry puff, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.vitals.heal",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "回血",
+      "description": "本地玩家 HealthChanged delta>0 且 cause=Healing",
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "local player delta > 0"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [180, 280],
+        "variations": 2,
+        "cooldown_ms": 120,
+        "loop": false
+      },
+      "prompt": "soft warm heal tick, faint dry chime without melody, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.vitals.starve",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "饥饿掉血",
+      "description": "HealthChanged cause=Starvation",
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Starvation"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [160, 240],
+        "variations": 2,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "hollow stomach pang, dry body ache tick, no voice, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.vitals.weather",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "天气伤害",
+      "description": "HealthChanged cause=Weather",
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Weather"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [160, 260],
+        "variations": 2,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "cold wind sting on skin, short shiver whoosh, no voice, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "amb.day",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "白天环境",
+      "description": "白天 bed，随昼夜切换",
+      "trigger": {
+        "source": "World clock / WeatherState.phase",
+        "when": "daytime"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [12000, 16000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "thin daytime wilderness ambience loop, distant dry insects and light breeze, seamless, no music",
+      "prompt_influence": 0.3,
+      "generate_seconds": 14
+    },
+    {
+      "id": "amb.night",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "夜晚环境",
+      "description": "夜晚 bed",
+      "trigger": {
+        "source": "World clock / WeatherState.phase",
+        "when": "nighttime"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [12000, 16000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "thin night wilderness ambience loop, distant crickets and cold air, seamless, no music, no wolf howl",
+      "prompt_influence": 0.3,
+      "generate_seconds": 14
+    },
+    {
+      "id": "amb.rain",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "降雨",
+      "description": "Weather rain > 0.15 时叠在 bed 上",
+      "trigger": {
+        "source": "WeatherView / WeatherSummary.Rain",
+        "when": "rain > 0.15"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [10000, 14000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "soft rain on leaves and dirt loop, light survival-game rain, seamless, no thunder, no music",
+      "prompt_influence": 0.3,
+      "generate_seconds": 12
+    },
+    {
+      "id": "sfx.creature.spider.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜘蛛攻击",
+      "description": "CreatureKind.Spider ActionKind.Attack",
+      "trigger": {
+        "source": "ActionState Attack + Creature.Spider",
+        "when": "spider attack start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [180, 280],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "small dry spider lunge, chitin click and short hiss, no human voice, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.creature.spider.hit",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜘蛛受击",
+      "description": "蜘蛛作为 HIT 目标",
+      "trigger": {
+        "source": "CombatImpact HIT + Creature.Spider",
+        "when": "spider is hit"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 3,
+        "cooldown_ms": 70,
+        "loop": false
+      },
+      "prompt": "small spider body hit, dry chitin crack, short skitter, no scream, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.creature.wolf.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "狼攻击",
+      "description": "CreatureKind.Wolf ActionKind.Attack",
+      "trigger": {
+        "source": "ActionState Attack + Creature.Wolf",
+        "when": "wolf attack start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [180, 280],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "short wolf snap and growl, dry cartoon animal, no long howl, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.creature.rabbit.flee",
+      "priority": "P1",
+      "category": "creature",
+      "name": "兔子逃跑",
+      "description": "CreatureKind.Rabbit 进入 flee",
+      "trigger": {
+        "source": "Creature.state = flee",
+        "when": "rabbit flees"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [140, 220],
+        "variations": 2,
+        "cooldown_ms": 200,
+        "loop": false
+      },
+      "prompt": "tiny rabbit dash through dry grass, short rustle, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.creature.lizard.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜥蜴攻击",
+      "description": "CreatureKind.Lizard ActionKind.Attack",
+      "trigger": {
+        "source": "ActionState Attack + Creature.Lizard",
+        "when": "lizard attack start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [180, 280],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "dry lizard hiss and quick claw swipe, short cartoon reptile, no roar, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.world.thunder",
+      "priority": "P1",
+      "category": "world",
+      "name": "雷鸣",
+      "description": "WeatherView.OnLightning，与闪电环境光同步",
+      "trigger": {
+        "source": "WeatherView.OnLightning",
+        "when": "lightning flash"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [800, 1600],
+        "variations": 3,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "distant dry thunder rumble, short survival-game storm, no explosion, no music, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.vitals.poison",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "中毒掉血",
+      "description": "HealthChanged cause=Poison，无 CombatImpact",
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Poison"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [160, 260],
+        "variations": 2,
+        "cooldown_ms": 400,
+        "loop": false
+      },
+      "prompt": "short venom sting tick, dry insect hiss and body ache, no voice, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.ui.equip",
+      "priority": "P1",
+      "category": "ui",
+      "name": "装备",
+      "description": "Hud.BagEquipPressed / Commands.Equip",
+      "trigger": {
+        "source": "Hud.BagEquipPressed",
+        "when": "equip or unequip"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [120, 200],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "short wooden tool or armor being equipped, dry leather strap, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.ui.drop",
+      "priority": "P1",
+      "category": "ui",
+      "name": "丢弃",
+      "description": "Hud.BagDropPressed / Commands.Drop",
+      "trigger": {
+        "source": "Hud.BagDropPressed",
+        "when": "drop item"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [120, 200],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "small bundle dropped onto dirt, short wood and cloth thud, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.player.sleep.cancel",
+      "priority": "P1",
+      "category": "player",
+      "name": "醒来",
+      "description": "Hud.CancelSleepPressed / Commands.CancelSleep",
+      "trigger": {
+        "source": "Hud.CancelSleepPressed",
+        "when": "sleep canceled"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [160, 260],
+        "variations": 2,
+        "cooldown_ms": 200,
+        "loop": false
+      },
+      "prompt": "short waking stir, cloth and wood cot creak, dry inhale, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "sfx.action.cancel",
+      "priority": "P1",
+      "category": "player",
+      "name": "动作取消",
+      "description": "ActionOutcome CANCELED（移动打断、主动取消等，不含死亡）",
+      "trigger": {
+        "source": "ActionPresentationController.ApplyOutcome",
+        "when": "CANCELED and reason != Dead"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": false,
+        "duration_ms": [100, 180],
+        "variations": 2,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "tiny interrupted action whoosh, short cloth stop, no impact, one-shot",
+      "prompt_influence": 0.5
+    },
+    {
+      "id": "sfx.creature.boar.attack",
+      "priority": "P2",
+      "category": "creature",
+      "name": "野猪攻击",
+      "description": "CreatureKind.Boar ActionKind.Attack",
+      "trigger": {
+        "source": "ActionState Attack + Creature.Boar",
+        "when": "boar attack start"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [200, 320],
+        "variations": 3,
+        "cooldown_ms": 80,
+        "loop": false
+      },
+      "prompt": "heavy boar snort and short charge grunt, dry hide impact windup, one-shot",
+      "prompt_influence": 0.45
+    },
+    {
+      "id": "sfx.creature.deer.flee",
+      "priority": "P2",
+      "category": "creature",
+      "name": "鹿逃跑",
+      "description": "CreatureKind.Deer 进入 flee",
+      "trigger": {
+        "source": "Creature.state = flee",
+        "when": "deer flees"
+      },
+      "playback": {
+        "type": "one-shot",
+        "bus": "SFX",
+        "spatial": true,
+        "duration_ms": [180, 280],
+        "variations": 2,
+        "cooldown_ms": 200,
+        "loop": false
+      },
+      "prompt": "deer hooves on dry leaves, short startled dash, one-shot",
+      "prompt_influence": 0.4
+    },
+    {
+      "id": "amb.winter",
+      "priority": "P2",
+      "category": "ambient",
+      "name": "冬季环境",
+      "description": "Season.Winter 替换白天 bed",
+      "trigger": {
+        "source": "Season.Winter",
+        "when": "winter daytime"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [12000, 16000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "thin winter wind over dry grass loop, cold air, seamless, no music",
+      "prompt_influence": 0.3,
+      "generate_seconds": 14
+    },
+    {
+      "id": "amb.snow",
+      "priority": "P2",
+      "category": "ambient",
+      "name": "降雪",
+      "description": "WeatherView 冬季雪粒子叠在 bed 上",
+      "trigger": {
+        "source": "WeatherView.SetWeather",
+        "when": "season == Winter"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": false,
+        "duration_ms": [10000, 14000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "soft snow and cold air loop, light flakes on dry grass, seamless, no music, no thunder",
+      "prompt_influence": 0.3,
+      "generate_seconds": 12
+    },
+    {
+      "id": "sfx.world.alchemy",
+      "priority": "P2",
+      "category": "world",
+      "name": "炼金台运转",
+      "description": "EntityLayer.EnsureAlchemy 附近 loop",
+      "trigger": {
+        "source": "EntityLayer.EnsureAlchemy",
+        "when": "alchemy engine in range"
+      },
+      "playback": {
+        "type": "loop",
+        "bus": "Ambient",
+        "spatial": true,
+        "duration_ms": [8000, 12000],
+        "variations": 1,
+        "cooldown_ms": 0,
+        "loop": true
+      },
+      "prompt": "small wooden alchemy engine idle loop, soft bubbling and gear tick, dry workshop, seamless, no music",
+      "prompt_influence": 0.35,
+      "generate_seconds": 10
+    }
+  ]
+}

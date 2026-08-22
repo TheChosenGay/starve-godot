@@ -89,6 +89,19 @@ public sealed class CommandServiceTests
     }
 
     [Fact]
+    public void UnequipSlotWritesKindZeroAndSlot()
+    {
+        var session = new RecordingSession();
+        var commands = new CommandService(session);
+
+        commands.UnequipSlot(2);
+
+        var message = PlayerEquip.Parser.ParseFrom(session.Notification(Routes.Equip).Data);
+        Assert.Equal(0, message.Kind);
+        Assert.Equal(2, message.Slot);
+    }
+
+    [Fact]
     public void RequestIdDoesNotResetAcrossInputEpochs()
     {
         var commands = new CommandService(new RecordingSession());

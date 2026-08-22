@@ -25,8 +25,11 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 	private readonly Dictionary<ulong, RigNode> _rigs = new();
 	private readonly Dictionary<ulong, (float X, float Y)> _rigLastPos = new();
 	private readonly Dictionary<ulong, float> _heightSm = new();
+	private readonly Dictionary<ulong, (string Id, long AtMs)> _pendingSfx = new();
+	private readonly Dictionary<ulong, long> _footstepAt = new();
 	private readonly ActionPresentationController _actions;
 	private readonly ImpactPresentationController _impacts;
+	private SfxService? _sfx;
 	private TileMap? _tilemap;
 	private ulong _ownId;
 	private Func<EntityView, string?>? _nameProvider;
@@ -56,6 +59,15 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 
 	/// <summary>实体名字提供器（GameRoot 注入：资源/掉落/生物/建筑的中文名）。</summary>
 	public void SetNameProvider(Func<EntityView, string?> provider) => _nameProvider = provider;
+
+	public void SetSfx(SfxService? sfx) => _sfx = sfx;
+
+	public Vector2? LocalPositionOf(ulong id)
+	{
+		if (_rigs.TryGetValue(id, out var rig)) return rig.Position;
+		if (_nodes.TryGetValue(id, out var node)) return node.Position;
+		return null;
+	}
 
 	public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
@@ -88,7 +100,10 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 				rigNode.Configure(hpSelf?.Cur ?? 0, hpSelf?.Max ?? 0, false, "");
 				rigNode.Visible = hasPos;
 				SyncAction(id, view);
-				rigNode.SetDead(view.Components.ContainsKey("Dead"));
+				if (rigNode.SetDead(view.Components.ContainsKey("Dead")))
+				{
+					PlaySfx("sfx.player.death", rigNode.Position);
+				}
 				continue;
 			}
 
@@ -158,6 +173,7 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 		var deltaMs = _lastNow == 0 ? 16 : now - _lastNow;
 		_lastNow = now;
 		_actions.Tick();
+		FlushPendingSfx(now);
 
 		foreach (var (id, node) in _nodes)
 		{
@@ -202,8 +218,10 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 				}
 			}
 			_rigLastPos[id] = (p.X, p.Y);
-			rig.Update(deltaMs, isMoving(id));
+			var moving = isMoving(id);
+			rig.Update(deltaMs, moving);
 			rig.SetSunT(_sunT);
+			if (moving && id == _ownId) MaybeFootstep(id, now, rig.Position);
 		}
 	}
 
@@ -241,20 +259,50 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 	void IActionPresentationSink.Apply(ulong entityId, ActionKind kind)
 	{
 		if (_rigs.TryGetValue(entityId, out var rig)) rig.Apply(kind);
+		var pos = LocalPositionOf(entityId);
+		switch (kind)
+		{
+			case ActionKind.Attack:
+			case ActionKind.Chop:
+			case ActionKind.Mine:
+				PlaySfx("sfx.player.swing", pos);
+				break;
+			case ActionKind.Pick:
+				PlaySfx("sfx.gather.pick.berry", pos);
+				break;
+			case ActionKind.Sleep:
+				PlaySfx("sfx.player.sleep", pos);
+				break;
+		}
+		if (kind == ActionKind.Chop)
+		{
+			ScheduleSfx(entityId, "sfx.gather.chop.wood");
+		}
+		else if (kind == ActionKind.Mine)
+		{
+			ScheduleSfx(entityId, "sfx.gather.mine.stone");
+		}
+		else
+		{
+			_pendingSfx.Remove(entityId);
+		}
 	}
 
 	void IActionPresentationSink.Finish(ulong entityId)
 	{
+		_pendingSfx.Remove(entityId);
 		if (_rigs.TryGetValue(entityId, out var rig)) rig.FinishAction();
 	}
 
 	void IActionPresentationSink.Cancel(ulong entityId)
 	{
+		_pendingSfx.Remove(entityId);
 		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
 	}
 
 	void IActionPresentationSink.Death(ulong entityId)
 	{
+		_pendingSfx.Remove(entityId);
 		// 死亡素材尚未接入；先终止动作，保留独立映射点。
 		if (_rigs.TryGetValue(entityId, out var rig)) rig.CancelAction();
 	}
@@ -263,6 +311,7 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 	{
 		if (_rigs.TryGetValue(targetEntity, out var rig)) rig.PlayHit();
 		else if (_nodes.TryGetValue(targetEntity, out var node)) node.PlayHit();
+		PlaySfx("sfx.combat.hit.flesh", LocalPositionOf(targetEntity));
 	}
 
 	void IImpactPresentationSink.CorrectPredictedHit(ulong targetEntity, CombatImpactResult result)
@@ -273,11 +322,43 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 
 	void IImpactPresentationSink.PresentNonHit(ulong targetEntity, CombatImpactResult result)
 	{
-		// BLOCKED/IMMUNE/MISS 暂无素材；保留独立适配点，不能映射为 HIT。
+		var id = result switch
+		{
+			CombatImpactResult.Miss => "sfx.combat.miss",
+			CombatImpactResult.Blocked => "sfx.combat.blocked",
+			_ => null,
+		};
+		if (id is not null) PlaySfx(id, LocalPositionOf(targetEntity));
+	}
+
+	private void PlaySfx(string id, Vector2? pos = null) => _sfx?.Play(id, pos);
+
+	private void ScheduleSfx(ulong entityId, string id) =>
+		_pendingSfx[entityId] = (id, (long)Time.GetTicksMsec() + (long)RigPresentationMetrics.AttackImpactMs);
+
+	private void FlushPendingSfx(long now)
+	{
+		if (_pendingSfx.Count == 0) return;
+		foreach (var entityId in _pendingSfx.Keys.ToArray())
+		{
+			var due = _pendingSfx[entityId];
+			if (now < due.AtMs) continue;
+			_pendingSfx.Remove(entityId);
+			PlaySfx(due.Id, LocalPositionOf(entityId));
+		}
+	}
+
+	private void MaybeFootstep(ulong id, long now, Vector2 pos)
+	{
+		if (_footstepAt.TryGetValue(id, out var next) && now < next) return;
+		_footstepAt[id] = now + 480;
+		PlaySfx("sfx.player.footstep.grass", pos);
 	}
 
 	private void Remove(ulong id)
 	{
+		_pendingSfx.Remove(id);
+		_footstepAt.Remove(id);
 		_actions.Remove(id);
 		if (_nodes.TryGetValue(id, out var n))
 		{

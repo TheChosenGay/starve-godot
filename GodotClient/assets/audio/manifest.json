@@ -1,0 +1,795 @@
+{
+  "version": 1,
+  "style": "starve-foley",
+  "ready": 17,
+  "total": 48,
+  "sounds": [
+    {
+      "id": "sfx.ui.click",
+      "priority": "P0",
+      "category": "ui",
+      "name": "UI 点击",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 40,
+      "files": [
+        "ui/sfx.ui.click_01.mp3",
+        "ui/sfx.ui.click_02.mp3",
+        "ui/sfx.ui.click_03.mp3"
+      ],
+      "trigger": {
+        "source": "Hud",
+        "when": "button.pressed"
+      }
+    },
+    {
+      "id": "sfx.ui.deny",
+      "priority": "P0",
+      "category": "ui",
+      "name": "操作拒绝",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 120,
+      "files": [
+        "ui/sfx.ui.deny_01.mp3",
+        "ui/sfx.ui.deny_02.mp3"
+      ],
+      "trigger": {
+        "source": "GameRoot.TryAct / ActionOutcome",
+        "when": "rejected or missing tool"
+      }
+    },
+    {
+      "id": "sfx.ui.craft.open",
+      "priority": "P0",
+      "category": "ui",
+      "name": "打开制作抽屉",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "ui/sfx.ui.craft.open_01.mp3",
+        "ui/sfx.ui.craft.open_02.mp3"
+      ],
+      "trigger": {
+        "source": "Hud.ToggleCraft",
+        "when": "drawer opens"
+      }
+    },
+    {
+      "id": "sfx.ui.craft.start",
+      "priority": "P0",
+      "category": "ui",
+      "name": "开始制作",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "ui/sfx.ui.craft.start_01.mp3",
+        "ui/sfx.ui.craft.start_02.mp3"
+      ],
+      "trigger": {
+        "source": "GameRoot.DoCraftAsync",
+        "when": "BeginCraft accepted"
+      }
+    },
+    {
+      "id": "sfx.ui.craft.done",
+      "priority": "P0",
+      "category": "ui",
+      "name": "制作完成",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "ui/sfx.ui.craft.done_01.mp3",
+        "ui/sfx.ui.craft.done_02.mp3"
+      ],
+      "trigger": {
+        "source": "ActionOutcome",
+        "when": "COMPLETED + ActionKind.Craft"
+      }
+    },
+    {
+      "id": "sfx.ui.craft.fail",
+      "priority": "P0",
+      "category": "ui",
+      "name": "制作失败",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 120,
+      "files": [
+        "ui/sfx.ui.craft.fail_01.mp3",
+        "ui/sfx.ui.craft.fail_02.mp3"
+      ],
+      "trigger": {
+        "source": "GameRoot.DoCraftAsync / ActionOutcome",
+        "when": "craft failed"
+      }
+    },
+    {
+      "id": "sfx.player.footstep.grass",
+      "priority": "P0",
+      "category": "player",
+      "name": "草地脚步",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 280,
+      "volume_db": -16,
+      "files": [
+        "player/sfx.player.footstep.grass_01.mp3",
+        "player/sfx.player.footstep.grass_02.mp3",
+        "player/sfx.player.footstep.grass_03.mp3",
+        "player/sfx.player.footstep.grass_04.mp3"
+      ],
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant frames"
+      }
+    },
+    {
+      "id": "sfx.player.swing",
+      "priority": "P0",
+      "category": "player",
+      "name": "挥击起手",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "player/sfx.player.swing_01.mp3",
+        "player/sfx.player.swing_02.mp3",
+        "player/sfx.player.swing_03.mp3"
+      ],
+      "trigger": {
+        "source": "ActionPresentationController",
+        "when": "ActionKind.Attack|Chop|Mine start"
+      }
+    },
+    {
+      "id": "sfx.gather.chop.wood",
+      "priority": "P0",
+      "category": "gather",
+      "name": "砍树命中",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "gather/sfx.gather.chop.wood_01.mp3",
+        "gather/sfx.gather.chop.wood_02.mp3",
+        "gather/sfx.gather.chop.wood_03.mp3",
+        "gather/sfx.gather.chop.wood_04.mp3"
+      ],
+      "trigger": {
+        "source": "ActionKind.Chop impact",
+        "when": "windup reaches AttackImpactMs"
+      }
+    },
+    {
+      "id": "sfx.gather.mine.stone",
+      "priority": "P0",
+      "category": "gather",
+      "name": "挖矿命中",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "gather/sfx.gather.mine.stone_01.mp3",
+        "gather/sfx.gather.mine.stone_02.mp3",
+        "gather/sfx.gather.mine.stone_03.mp3",
+        "gather/sfx.gather.mine.stone_04.mp3"
+      ],
+      "trigger": {
+        "source": "ActionKind.Mine impact",
+        "when": "windup reaches AttackImpactMs"
+      }
+    },
+    {
+      "id": "sfx.gather.pick.berry",
+      "priority": "P0",
+      "category": "gather",
+      "name": "采集浆果",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [
+        "gather/sfx.gather.pick.berry_01.mp3",
+        "gather/sfx.gather.pick.berry_02.mp3",
+        "gather/sfx.gather.pick.berry_03.mp3"
+      ],
+      "trigger": {
+        "source": "ActionKind.Pick",
+        "when": "pick start or complete"
+      }
+    },
+    {
+      "id": "sfx.gather.pickup",
+      "priority": "P0",
+      "category": "gather",
+      "name": "拾取掉落",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 160,
+      "volume_db": 4,
+      "files": [
+        "gather/sfx.gather.pickup_01.mp3",
+        "gather/sfx.gather.pickup_02.mp3",
+        "gather/sfx.gather.pickup_03.mp3"
+      ],
+      "trigger": {
+        "source": "GameRoot loot despawn",
+        "when": "nearby Lootable removed"
+      }
+    },
+    {
+      "id": "sfx.combat.hit.flesh",
+      "priority": "P0",
+      "category": "combat",
+      "name": "命中血肉",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 70,
+      "files": [
+        "combat/sfx.combat.hit.flesh_01.mp3",
+        "combat/sfx.combat.hit.flesh_02.mp3",
+        "combat/sfx.combat.hit.flesh_03.mp3",
+        "combat/sfx.combat.hit.flesh_04.mp3"
+      ],
+      "trigger": {
+        "source": "ImpactPresentationController",
+        "when": "CombatImpactResult.Hit"
+      }
+    },
+    {
+      "id": "sfx.combat.miss",
+      "priority": "P0",
+      "category": "combat",
+      "name": "未命中",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 70,
+      "files": [
+        "combat/sfx.combat.miss_01.mp3",
+        "combat/sfx.combat.miss_02.mp3",
+        "combat/sfx.combat.miss_03.mp3"
+      ],
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Miss"
+      }
+    },
+    {
+      "id": "sfx.combat.blocked",
+      "priority": "P0",
+      "category": "combat",
+      "name": "格挡",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 70,
+      "files": [
+        "combat/sfx.combat.blocked_01.mp3",
+        "combat/sfx.combat.blocked_02.mp3",
+        "combat/sfx.combat.blocked_03.mp3"
+      ],
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Blocked"
+      }
+    },
+    {
+      "id": "sfx.player.death",
+      "priority": "P0",
+      "category": "player",
+      "name": "死亡转魂",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [
+        "player/sfx.player.death_01.mp3",
+        "player/sfx.player.death_02.mp3"
+      ],
+      "trigger": {
+        "source": "RigNode.SetDead",
+        "when": "dead becomes true"
+      }
+    },
+    {
+      "id": "sfx.player.sleep",
+      "priority": "P0",
+      "category": "player",
+      "name": "入睡",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 300,
+      "files": [
+        "player/sfx.player.sleep_01.mp3",
+        "player/sfx.player.sleep_02.mp3"
+      ],
+      "trigger": {
+        "source": "Hud.SleepPressed / ActionKind.Sleep",
+        "when": "sleep starts"
+      }
+    },
+    {
+      "id": "sfx.player.footstep.stone",
+      "priority": "P1",
+      "category": "player",
+      "name": "石地脚步",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 90,
+      "files": [],
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant on stone biome"
+      }
+    },
+    {
+      "id": "sfx.player.footstep.mud",
+      "priority": "P1",
+      "category": "player",
+      "name": "泥地脚步",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 90,
+      "files": [],
+      "trigger": {
+        "source": "RigNode walk cycle",
+        "when": "foot plant on swamp or wet ground"
+      }
+    },
+    {
+      "id": "sfx.player.haunt",
+      "priority": "P1",
+      "category": "player",
+      "name": "作祟",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 200,
+      "files": [],
+      "trigger": {
+        "source": "GameRoot.TryHaunt",
+        "when": "ActionKind.Haunt start"
+      }
+    },
+    {
+      "id": "sfx.player.revive",
+      "priority": "P1",
+      "category": "player",
+      "name": "复活",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [],
+      "trigger": {
+        "source": "RigNode.SetDead",
+        "when": "dead becomes false"
+      }
+    },
+    {
+      "id": "sfx.build.place",
+      "priority": "P1",
+      "category": "build",
+      "name": "放置建筑",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 100,
+      "files": [],
+      "trigger": {
+        "source": "GameRoot place confirm",
+        "when": "Place sent"
+      }
+    },
+    {
+      "id": "sfx.build.demolish",
+      "priority": "P1",
+      "category": "build",
+      "name": "拆除",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 100,
+      "files": [],
+      "trigger": {
+        "source": "Hud.DemolishPressed",
+        "when": "demolish"
+      }
+    },
+    {
+      "id": "sfx.world.campfire",
+      "priority": "P1",
+      "category": "world",
+      "name": "火堆燃烧",
+      "bus": "Ambient",
+      "spatial": true,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "FirePitFire",
+        "when": "placed BuildingKind.Campfire in range"
+      }
+    },
+    {
+      "id": "sfx.player.eat",
+      "priority": "P1",
+      "category": "player",
+      "name": "进食",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 150,
+      "files": [],
+      "trigger": {
+        "source": "Hud.BagUsePressed",
+        "when": "use food item"
+      }
+    },
+    {
+      "id": "sfx.combat.immune",
+      "priority": "P1",
+      "category": "combat",
+      "name": "免疫",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ImpactPresentationController.PresentNonHit",
+        "when": "Immune"
+      }
+    },
+    {
+      "id": "sfx.vitals.heal",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "回血",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 120,
+      "files": [],
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "local player delta > 0"
+      }
+    },
+    {
+      "id": "sfx.vitals.starve",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "饥饿掉血",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [],
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Starvation"
+      }
+    },
+    {
+      "id": "sfx.vitals.weather",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "天气伤害",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [],
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Weather"
+      }
+    },
+    {
+      "id": "amb.day",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "白天环境",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "World clock / WeatherState.phase",
+        "when": "daytime"
+      }
+    },
+    {
+      "id": "amb.night",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "夜晚环境",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "World clock / WeatherState.phase",
+        "when": "nighttime"
+      }
+    },
+    {
+      "id": "amb.rain",
+      "priority": "P1",
+      "category": "ambient",
+      "name": "降雨",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "WeatherView / WeatherSummary.Rain",
+        "when": "rain > 0.15"
+      }
+    },
+    {
+      "id": "sfx.creature.spider.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜘蛛攻击",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ActionState Attack + Creature.Spider",
+        "when": "spider attack start"
+      }
+    },
+    {
+      "id": "sfx.creature.spider.hit",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜘蛛受击",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 70,
+      "files": [],
+      "trigger": {
+        "source": "CombatImpact HIT + Creature.Spider",
+        "when": "spider is hit"
+      }
+    },
+    {
+      "id": "sfx.creature.wolf.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "狼攻击",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ActionState Attack + Creature.Wolf",
+        "when": "wolf attack start"
+      }
+    },
+    {
+      "id": "sfx.creature.rabbit.flee",
+      "priority": "P1",
+      "category": "creature",
+      "name": "兔子逃跑",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 200,
+      "files": [],
+      "trigger": {
+        "source": "Creature.state = flee",
+        "when": "rabbit flees"
+      }
+    },
+    {
+      "id": "sfx.creature.lizard.attack",
+      "priority": "P1",
+      "category": "creature",
+      "name": "蜥蜴攻击",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ActionState Attack + Creature.Lizard",
+        "when": "lizard attack start"
+      }
+    },
+    {
+      "id": "sfx.world.thunder",
+      "priority": "P1",
+      "category": "world",
+      "name": "雷鸣",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [],
+      "trigger": {
+        "source": "WeatherView.OnLightning",
+        "when": "lightning flash"
+      }
+    },
+    {
+      "id": "sfx.vitals.poison",
+      "priority": "P1",
+      "category": "vitals",
+      "name": "中毒掉血",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 400,
+      "files": [],
+      "trigger": {
+        "source": "WorldEvent.HealthChanged",
+        "when": "Poison"
+      }
+    },
+    {
+      "id": "sfx.ui.equip",
+      "priority": "P1",
+      "category": "ui",
+      "name": "装备",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "Hud.BagEquipPressed",
+        "when": "equip or unequip"
+      }
+    },
+    {
+      "id": "sfx.ui.drop",
+      "priority": "P1",
+      "category": "ui",
+      "name": "丢弃",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "Hud.BagDropPressed",
+        "when": "drop item"
+      }
+    },
+    {
+      "id": "sfx.player.sleep.cancel",
+      "priority": "P1",
+      "category": "player",
+      "name": "醒来",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 200,
+      "files": [],
+      "trigger": {
+        "source": "Hud.CancelSleepPressed",
+        "when": "sleep canceled"
+      }
+    },
+    {
+      "id": "sfx.action.cancel",
+      "priority": "P1",
+      "category": "player",
+      "name": "动作取消",
+      "bus": "SFX",
+      "spatial": false,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ActionPresentationController.ApplyOutcome",
+        "when": "CANCELED and reason != Dead"
+      }
+    },
+    {
+      "id": "sfx.creature.boar.attack",
+      "priority": "P2",
+      "category": "creature",
+      "name": "野猪攻击",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 80,
+      "files": [],
+      "trigger": {
+        "source": "ActionState Attack + Creature.Boar",
+        "when": "boar attack start"
+      }
+    },
+    {
+      "id": "sfx.creature.deer.flee",
+      "priority": "P2",
+      "category": "creature",
+      "name": "鹿逃跑",
+      "bus": "SFX",
+      "spatial": true,
+      "loop": false,
+      "cooldown_ms": 200,
+      "files": [],
+      "trigger": {
+        "source": "Creature.state = flee",
+        "when": "deer flees"
+      }
+    },
+    {
+      "id": "amb.winter",
+      "priority": "P2",
+      "category": "ambient",
+      "name": "冬季环境",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "Season.Winter",
+        "when": "winter daytime"
+      }
+    },
+    {
+      "id": "amb.snow",
+      "priority": "P2",
+      "category": "ambient",
+      "name": "降雪",
+      "bus": "Ambient",
+      "spatial": false,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "WeatherView.SetWeather",
+        "when": "season == Winter"
+      }
+    },
+    {
+      "id": "sfx.world.alchemy",
+      "priority": "P2",
+      "category": "world",
+      "name": "炼金台运转",
+      "bus": "Ambient",
+      "spatial": true,
+      "loop": true,
+      "cooldown_ms": 0,
+      "files": [],
+      "trigger": {
+        "source": "EntityLayer.EnsureAlchemy",
+        "when": "alchemy engine in range"
+      }
+    }
+  ]
+}

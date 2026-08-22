@@ -79,8 +79,11 @@ public sealed class CommandService
     public void Use(int kind) =>
         Notify(Routes.Use, new PlayerUse { Kind = kind });
 
-    public void Equip(int kind) =>
-        Notify(Routes.Equip, new PlayerEquip { Kind = kind });
+    public void Equip(int kind, int slot = 0) =>
+        Notify(Routes.Equip, new PlayerEquip { Kind = kind, Slot = slot });
+
+    /// <summary>卸下指定槽：1 头 / 2 手 / 3 身。slot=0 仍是卸全部。</summary>
+    public void UnequipSlot(int slot) => Equip(0, slot);
 
     public InputCommandRef Chop(ulong target)
     {

@@ -161,12 +161,12 @@ public partial class RigNode : Node2D
         }
     }
 
-    public void SetDead(bool dead)
+    public bool SetDead(bool dead)
     {
-        if (!_spirit.SetDead(dead)) return;
+        if (!_spirit.SetDead(dead)) return false;
         _visualRoot.Position = Vector2.Zero;
         _sprite.Modulate = Colors.White;
-        if (!dead) return;
+        if (!dead) return true;
 
         CancelAction();
         _hitQueued = false;
@@ -175,6 +175,7 @@ public partial class RigNode : Node2D
         if (_sideRig is not null) _sideRig.Visible = false;
         if (_backRig is not null) _backRig.Visible = false;
         PlayAnimFromStart("idle");
+        return true;
     }
 
     public void SetSunT(float sunT)

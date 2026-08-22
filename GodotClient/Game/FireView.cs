@@ -4,7 +4,7 @@ namespace GodotClient.Game;
 
 /// <summary>
 /// 火堆本体（世界空间）：三层程序化火焰（白芯/橙焰/红外焰）+ 余烬粒子 + 点光闪烁。
-/// 柔光晕与上收光柱（体积光）由 VolumetricView 在 LUT 之后绘制，
+/// 空间暖光团由 VolumetricView 在 LUT 之后绘制，
 /// 避免被夜间 LUT/环境光压暗染色——火焰本体在世界上仍随光照变化。
 /// </summary>
 public partial class FireView : Node2D

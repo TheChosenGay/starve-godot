@@ -1,3 +1,4 @@
+using System;
 using Godot;
 
 namespace GodotClient.Game;
@@ -5,6 +6,8 @@ namespace GodotClient.Game;
 /// <summary>固定背包格：凹槽、亮色块、数量角标、装备角标、选中金框。</summary>
 public partial class InventorySlot : Button
 {
+    public event Action? RightClicked;
+
     private static readonly StyleBoxEmpty Hollow = new();
     private ItemView? _item;
     private bool _equipped;
@@ -16,6 +19,14 @@ public partial class InventorySlot : Button
         FocusMode = FocusModeEnum.None;
         ToggleMode = false;
         ApplyFrame();
+    }
+
+    public override void _GuiInput(InputEvent @event)
+    {
+        if (@event is not InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right })
+            return;
+        RightClicked?.Invoke();
+        AcceptEvent();
     }
 
     public override void _Notification(int what)
@@ -32,7 +43,11 @@ public partial class InventorySlot : Button
         _item = next;
         _equipped = nextEquipped;
         _selected = selected;
-        TooltipText = _item is null ? "" : _item.Name;
+        TooltipText = _item is null
+            ? ""
+            : _item.MaxDurability > 0
+                ? $"{_item.Name} 耐久 {_item.Durability}/{_item.MaxDurability}"
+                : _item.Name;
         QueueRedraw();
     }
 
@@ -67,6 +82,20 @@ public partial class InventorySlot : Button
             DrawBadge(new Vector2(Size.X - 20, Size.Y - 15), _item.Count.ToString(), HudTheme.Parchment);
         if (_equipped)
             DrawBadge(new Vector2(5, 4), "装", HudTheme.GoldOld);
+        if (_item.MaxDurability > 0)
+            DrawDurabilityBar();
+    }
+
+    private void DrawDurabilityBar()
+    {
+        if (_item is null || _item.MaxDurability <= 0) return;
+        var ratio = Mathf.Clamp(_item.Durability / (float)_item.MaxDurability, 0, 1);
+        var bar = new Rect2(6, Size.Y - 8, Size.X - 12, 3);
+        DrawRect(bar, new Color(0, 0, 0, 0.55f));
+        var fill = new Rect2(bar.Position, new Vector2(bar.Size.X * ratio, bar.Size.Y));
+        var color = ratio > 0.45f ? new Color("5dcc7a") : ratio > 0.2f ? HudTheme.HungerFill : HudTheme.Blood;
+        DrawRect(fill, color);
+        DrawBadge(new Vector2(5, Size.Y - 20), $"{_item.Durability}", color);
     }
 
     private void ApplyFrame()

@@ -53,6 +53,7 @@ public partial class GameRoot : Node
     private GhostNode? _ghost;
     private Control? _uiRoot;
     private Hud? _hud;
+    private SfxService? _sfx;
     private DamageFlashOverlay? _damageFlash;
     private MoveController? _moveController;
     private int _lastRevision = -1;
@@ -78,6 +79,7 @@ public partial class GameRoot : Node
     private bool _ownDead;
     private bool _gameplayLocked;
     private Vector2 _uiRootSize;
+    private readonly Dictionary<ulong, (float X, float Y)> _lootAt = new();
 
     /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
     private static readonly Dictionary<int, string> ItemIconFiles = new()
@@ -140,6 +142,10 @@ public partial class GameRoot : Node
         _world.AddChild(_clouds);
         _entityLayer = new EntityLayer { Name = "EntityLayer" };
         _world.AddChild(_entityLayer);
+        _sfx = new SfxService();
+        AddChild(_sfx);
+        _sfx.SetSpatialRoot(_world);
+        _entityLayer.SetSfx(_sfx);
         _fogGrid = new FogGrid { Name = "FogGrid" };
         _world.AddChild(_fogGrid);
         _ghost = new GhostNode { Name = "Ghost", ZIndex = 4096, Visible = false };
@@ -272,10 +278,14 @@ public partial class GameRoot : Node
         hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
         {
             if (!CanSendGameplay()) return;
-            // M7：Equipped 下线，改用 Equip 槽位 + 玩家身上复制的主动能力组件。
-            // 服务端 kind=0 = 卸下全部；手持工具或头/身护甲已在身上时再点 = 卸下。
-            _client?.Commands.Equip(IsEquippedKind(kind) ? 0 : kind);
+            // 背包始终按 kind 装备：同槽替换（换斧只换手持）。kind=0 是卸下，不能从背包发出。
+            _client?.Commands.Equip(kind);
         });
+        hud.WornSlotUnequipPressed += slotId =>
+        {
+            if (!CanSendGameplay() || WornItem(slotId) is null) return;
+            _client?.Commands.UnequipSlot(EquipSlotNumber(slotId));
+        };
         hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
         {
             if (!CanSendGameplay()) return;
@@ -308,6 +318,8 @@ public partial class GameRoot : Node
             _client.Commands.CancelSleep();
             _entityLayer?.CancelActionLocally(_ownId);
         };
+        hud.UiClicked += () => _sfx?.Play("sfx.ui.click");
+        hud.CraftOpened += () => _sfx?.Play("sfx.ui.craft.open");
     }
 
     private async Task StartAsync()
@@ -360,11 +372,17 @@ public partial class GameRoot : Node
         while (_actionOutcomes.TryDequeue(out var outcome))
         {
             _entityLayer?.ApplyActionOutcome(outcome);
-            if (outcome.EntityId == _ownId &&
-                outcome.Result is ActionOutcomeResult.Canceled or ActionOutcomeResult.Rejected)
+            if (outcome.EntityId != _ownId) continue;
+            if (outcome.Result == ActionOutcomeResult.Completed &&
+                outcome.Kind == ActionKind.Craft)
+            {
+                _sfx?.Play("sfx.ui.craft.done");
+            }
+            if (outcome.Result is ActionOutcomeResult.Canceled or ActionOutcomeResult.Rejected)
             {
                 var result = outcome.Result == ActionOutcomeResult.Canceled ? "动作已取消" : "动作被拒绝";
                 _hud?.Log($"{result}：{ActionOutcomeReasonText(outcome.Reason)}");
+                if (outcome.Result == ActionOutcomeResult.Rejected) _sfx?.Play("sfx.ui.deny");
             }
         }
 
@@ -652,6 +670,7 @@ public partial class GameRoot : Node
             _lastServerPos[id] = (fx, fy);
         }
 
+        NoticeLootPicked(world);
         _entityLayer!.SyncEntities(world.Entities);
         UpdateBagAndCraft(world);
     }
@@ -767,11 +786,99 @@ public partial class GameRoot : Node
         return $"手持 {EquippedName()}{wear}";
     }
 
-    /// <summary>背包 kind 是否已装备（手持工具，或头/身护甲）。</summary>
-    private bool IsEquippedKind(int kind)
+    private static int EquipSlotNumber(string slotId) => slotId switch
     {
-        if (kind <= 0) return false;
-        return EquippedKind() == kind || WornArmor().Any(a => a.Kind == kind);
+        "head" => 1,
+        "hand" => 2,
+        "body" => 3,
+        _ => 0,
+    };
+
+    private ItemView? WornItem(string slotId) =>
+        WornSlots().FirstOrDefault(s => s.Id == slotId)?.Item;
+
+    /// <summary>头/手/身三格：优先 Equip 实体，手持工具无实体时用能力组件兜底。</summary>
+    private List<EquipSlotView> WornSlots()
+    {
+        Equip? eq = null;
+        if (_client is not null &&
+            _client.World.Entities.TryGetValue(_ownId, out var own))
+        {
+            eq = own.Get("Equip", Equip.Parser);
+        }
+        return
+        [
+            new EquipSlotView("head", "头", ItemFromEquipEntity(eq?.Head ?? 0)),
+            new EquipSlotView("hand", "手", ItemFromEquipEntity(eq?.Hand ?? 0) ?? ItemFromKind(EquippedKind())),
+            new EquipSlotView("body", "身", ItemFromEquipEntity(eq?.Body ?? 0)),
+        ];
+    }
+
+    private ItemView? ItemFromEquipEntity(ulong entityId)
+    {
+        if (entityId == 0 || _client is null ||
+            !_client.World.Entities.TryGetValue(entityId, out var item))
+        {
+            return null;
+        }
+        var stack = item.Get("Equipment", ItemStack.Parser);
+        var kind = stack is { Kind: > 0 } ? (int)stack.Kind : 0;
+        var cap = item.Get("Chopper", Capability.Parser) ?? item.Get("Miner", Capability.Parser);
+        var durability = cap is { Durability: > 0 } ? cap.Durability
+            : stack is { Durability: > 0 } ? stack.Durability
+            : 0;
+        return ItemViewOf(kind, 1, durability);
+    }
+
+    private ItemView? ItemFromKind(int kind)
+    {
+        if (kind <= 0) return null;
+        var cfg = _client?.World.Config;
+        return new ItemView(kind, ItemName(cfg, kind), 1, ItemColor(cfg, kind), ItemIcon(kind));
+    }
+
+    private ItemView? ItemViewOf(int kind, int count, int durability)
+    {
+        if (kind <= 0 || count <= 0) return null;
+        var cfg = _client?.World.Config;
+        var max = (int)(cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind)?.Tool?.Durability ?? 0);
+        return new ItemView(
+            kind,
+            ItemName(cfg, kind),
+            count,
+            ItemColor(cfg, kind),
+            ItemIcon(kind),
+            durability,
+            max);
+    }
+
+    private void NoticeLootPicked(WorldService world)
+    {
+        var nowLoot = new Dictionary<ulong, (float X, float Y)>();
+        foreach (var (id, view) in world.Entities)
+        {
+            if (view.LootOf() is null) continue;
+            if (view.Get("Position", Position.Parser) is not { } pos) continue;
+            nowLoot[id] = (pos.X, pos.Y);
+        }
+        (float X, float Y)? own = null;
+        if (world.Entities.TryGetValue(_ownId, out var me) &&
+            me.Get("Position", Position.Parser) is { } mePos)
+        {
+            own = (mePos.X, mePos.Y);
+        }
+        if (own is { } at)
+        {
+            foreach (var (id, pos) in _lootAt)
+            {
+                if (nowLoot.ContainsKey(id)) continue;
+                if (Math.Abs(pos.X - at.X) + Math.Abs(pos.Y - at.Y) > 3) continue;
+                _sfx?.Play("sfx.gather.pickup");
+                break;
+            }
+        }
+        _lootAt.Clear();
+        foreach (var (id, pos) in nowLoot) _lootAt[id] = pos;
     }
 
     /// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
@@ -780,14 +887,14 @@ public partial class GameRoot : Node
         if (_ownDead || GameplayLocked()) return;
         if (_client is null || !_client.World.Entities.TryGetValue(id, out var view))
         {
-            _hud?.Log("目标已消失");
+            Deny("目标已消失");
             return;
         }
         if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
             own.Get("Position", Position.Parser) is not { } mePos ||
             view.Get("Position", Position.Parser) is not { } tPos)
         {
-            _hud?.Log("目标不可达");
+            Deny("目标不可达");
             return;
         }
         var dx = mePos.X - tPos.X;
@@ -796,7 +903,7 @@ public partial class GameRoot : Node
         // 对角 2 格会被服务端静默拒绝，造成“点了没反应”）
         if (Math.Abs(dx) + Math.Abs(dy) > 2)
         {
-            _hud?.Log("距离不够，请靠近后再操作");
+            Deny("距离不够，请靠近后再操作");
             return;
         }
 
@@ -807,7 +914,7 @@ public partial class GameRoot : Node
             case Intent.Gather:
                 if (view.Get("Pickable", WorkTarget.Parser) is null)
                 {
-                    _hud?.Log("目标不可采集（不是浆果丛）");
+                    Deny("目标不可采集（不是浆果丛）");
                     return;
                 }
                 commandRef = _client.Commands.Gather(id);
@@ -816,12 +923,12 @@ public partial class GameRoot : Node
             case Intent.Chop:
                 if (view.Get("Choppable", WorkTarget.Parser) is null)
                 {
-                    _hud?.Log("目标不可砍伐（不是树木）");
+                    Deny("目标不可砍伐（不是树木）");
                     return;
                 }
                 if (!HasOwnCapability("Chopper"))
                 {
-                    _hud?.Log("徒手无法砍伐，请先装备斧头");
+                    Deny("徒手无法砍伐，请先装备斧头");
                     return;
                 }
                 commandRef = _client.Commands.Chop(id);
@@ -830,12 +937,12 @@ public partial class GameRoot : Node
             case Intent.Mine:
                 if (view.Get("Minable", WorkTarget.Parser) is null)
                 {
-                    _hud?.Log("目标不可挖掘（不是矿脉）");
+                    Deny("目标不可挖掘（不是矿脉）");
                     return;
                 }
                 if (!HasOwnCapability("Miner"))
                 {
-                    _hud?.Log("徒手无法挖掘，请先装备镐");
+                    Deny("徒手无法挖掘，请先装备镐");
                     return;
                 }
                 commandRef = _client.Commands.Mine(id);
@@ -844,16 +951,17 @@ public partial class GameRoot : Node
             case Intent.Pickup:
                 if (view.LootOf() is null)
                 {
-                    _hud?.Log("目标没有掉落物");
+                    Deny("目标没有掉落物");
                     return;
                 }
                 _client.Commands.Pickup(id);
+                _sfx?.Play("sfx.gather.pickup");
                 break;
             case Intent.Attack:
                 if (view.Get("Health", Health.Parser) is null ||
                     view.Get("Dead", Dead.Parser) is not null)
                 {
-                    _hud?.Log("目标不可攻击");
+                    Deny("目标不可攻击");
                     return;
                 }
                 commandRef = _client.Commands.Attack(id);
@@ -976,12 +1084,11 @@ public partial class GameRoot : Node
         _hudSignature = signature;
 
         var items = (inv?.Items ?? new()).Select(it =>
-            new ItemView((int)it.Kind, ItemName(cfg, (int)it.Kind), it.Count, ItemColor(cfg, (int)it.Kind),
-                ItemIcon((int)it.Kind))).ToList();
-        // M7：Equipped 下线——手持看玩家身上复制的主动能力组件，护甲从 Equip 反查护甲实体。
-        var equipped = new HashSet<int> { EquippedKind() };
-        foreach (var a in WornArmor()) equipped.Add(a.Kind);
-        _hud.RenderInventory(items, equipped, cfg?.InventorySlots ?? 12);
+            ItemViewOf((int)it.Kind, it.Count, it.Durability)
+            ?? new ItemView(0, "", 0, Colors.Transparent)).ToList();
+        // 已穿戴的在头/手/身格里看；背包同 kind 不再标「装」（装备已从背包扣走）。
+        var worn = WornSlots();
+        _hud.RenderInventory(items, new HashSet<int>(), cfg?.InventorySlots ?? 12, worn);
 
         if (cfg is null) return;
         var ownPos = own.Get("Position", Position.Parser);
@@ -1056,6 +1163,8 @@ public partial class GameRoot : Node
                 hash.Add(view.EntityId);
                 if (view.Components.TryGetValue("Equipment", out var eq)) AddBytes(ref hash, eq);
                 if (view.Components.TryGetValue("Defense", out var def)) AddBytes(ref hash, def);
+                if (view.Components.TryGetValue("Chopper", out var chop)) AddBytes(ref hash, chop);
+                if (view.Components.TryGetValue("Miner", out var mine)) AddBytes(ref hash, mine);
             }
         }
         return hash.ToHashCode();
@@ -1166,13 +1275,24 @@ public partial class GameRoot : Node
         var submission = _client.Commands.BeginCraft(recipeId);
         _entityLayer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
         var resp = await submission.ResponseTask;
-        if (resp is not { Started: true })
+        if (resp is { Started: true })
+        {
+            _sfx?.Play("sfx.ui.craft.start");
+        }
+        else
         {
             _entityLayer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
+            _sfx?.Play("sfx.ui.craft.fail");
         }
         _hud?.Log(resp is { Started: true }
             ? $"开始制作 {recipeId}（{resp.Ticks} ticks）"
             : $"制作失败: {CraftFailureText(resp?.Message)}");
+    }
+
+    private void Deny(string message)
+    {
+        _hud?.Log(message);
+        _sfx?.Play("sfx.ui.deny");
     }
 
     private static string CraftFailureText(string? code) => code switch
@@ -1366,7 +1486,7 @@ public partial class GameRoot : Node
     {
         if (_selected is null)
         {
-            _hud?.Log("先点击选中目标");
+            Deny("先点击选中目标");
             return;
         }
         act(_selected.Value);

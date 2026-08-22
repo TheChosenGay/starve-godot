@@ -5,7 +5,15 @@ using Godot;
 
 namespace GodotClient.Game;
 
-public sealed record ItemView(int Kind, string Name, int Count, Color Color, Texture2D? Icon = null);
+public sealed record ItemView(
+    int Kind,
+    string Name,
+    int Count,
+    Color Color,
+    Texture2D? Icon = null,
+    int Durability = 0,
+    int MaxDurability = 0);
+public sealed record EquipSlotView(string Id, string Label, ItemView? Item);
 public sealed record IngredientView(string Name, int Have, int Need, Texture2D? Icon = null, Color Color = default);
 public sealed record RecipeView(
     string Id,
@@ -39,15 +47,20 @@ public partial class Hud : Control
     public event Action<int>? BagEquipPressed;
     public event Action<int>? BagDropPressed;
     public event Action<int>? BagSplitPressed;
+    public event Action<string>? WornSlotUnequipPressed;
     public event Action<string>? CraftPressed;
     public event Action? CancelCraftPressed;
     public event Action? SleepPressed;
     public event Action? CancelSleepPressed;
+    public event Action? UiClicked;
+    public event Action? CraftOpened;
 
     private Label? _status;
     private VitalBar? _vitalsBar;
     private RichTextLabel? _log;
     private HBoxContainer? _bag;
+    private HBoxContainer? _equip;
+    private readonly Dictionary<string, InventorySlot> _wornSlots = new();
     private readonly List<int> _slotKinds = new();
     private Button? _bagUse;
     private Button? _bagEquip;
@@ -72,6 +85,7 @@ public partial class Hud : Control
     private string? _lastStatusText;
     private IReadOnlyList<ItemView> _lastItems = Array.Empty<ItemView>();
     private IReadOnlyCollection<int> _lastEquipped = Array.Empty<int>();
+    private IReadOnlyList<EquipSlotView> _lastWorn = Array.Empty<EquipSlotView>();
     private int _lastSlotCount;
     private IReadOnlyList<RecipeView> _lastRecipes = Array.Empty<RecipeView>();
     private CraftingView? _lastCrafting;
@@ -249,6 +263,32 @@ public partial class Hud : Control
         row.Alignment = BoxContainer.AlignmentMode.Begin;
         row.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
 
+        _equip = new HBoxContainer();
+        _equip.AddThemeConstantOverride("separation", 4);
+        _equip.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
+        foreach (var (id, label) in new[] { ("head", "头"), ("hand", "手"), ("body", "身") })
+        {
+            var col = new VBoxContainer();
+            col.AddThemeConstantOverride("separation", 0);
+            var caption = new Label
+            {
+                Text = label,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Modulate = HudTheme.ParchmentDim,
+                MouseFilter = MouseFilterEnum.Ignore,
+            };
+            caption.AddThemeFontSizeOverride("font_size", 11);
+            col.AddChild(caption);
+            var slot = new InventorySlot();
+            slot.TooltipText = $"{label}（右键卸下）";
+            slot.RightClicked += () => WornSlotUnequipPressed?.Invoke(id);
+            _wornSlots[id] = slot;
+            col.AddChild(slot);
+            _equip.AddChild(col);
+        }
+        row.AddChild(_equip);
+        row.AddChild(MakeDivider());
+
         _bag = new HBoxContainer();
         _bag.AddThemeConstantOverride("separation", 4);
         _bag.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
@@ -333,6 +373,11 @@ public partial class Hud : Control
         {
             _selectedRecipeId = null;
             _lastCardFingerprint = int.MinValue;
+            UiClicked?.Invoke();
+        }
+        else
+        {
+            CraftOpened?.Invoke();
         }
         RelayoutDrawers();
     }
@@ -505,11 +550,16 @@ public partial class Hud : Control
         _ = canMine;
     }
 
-    public void RenderInventory(IReadOnlyList<ItemView> items, IReadOnlyCollection<int> equippedKinds, int slots)
+    public void RenderInventory(
+        IReadOnlyList<ItemView> items,
+        IReadOnlyCollection<int> equippedKinds,
+        int slots,
+        IReadOnlyList<EquipSlotView>? worn = null)
     {
         if (_bag is null) return;
         _lastItems = items;
         _lastEquipped = equippedKinds;
+        _lastWorn = worn ?? Array.Empty<EquipSlotView>();
         _lastSlotCount = slots;
 
         var reuse = _bag.GetChildCount() == slots && _bag.GetChildren().All(c => c is InventorySlot);
@@ -522,6 +572,7 @@ public partial class Hud : Control
                 var slot = new InventorySlot();
                 var index = i;
                 slot.Pressed += () => SelectBagSlot(index);
+                slot.RightClicked += () => OnBagRightClicked(index);
                 _bag.AddChild(slot);
                 _slotKinds.Add(0);
             }
@@ -536,6 +587,16 @@ public partial class Hud : Control
                 slot.Configure(item, equipped, i == _selectedSlot);
             if (_slotKinds.Count <= i) _slotKinds.Add(0);
             _slotKinds[i] = item is { Kind: > 0, Count: > 0 } ? item.Kind : 0;
+        }
+        foreach (var view in _lastWorn)
+        {
+            if (!_wornSlots.TryGetValue(view.Id, out var slot)) continue;
+            slot.Configure(view.Item, view.Item is not null, false);
+            slot.TooltipText = view.Item is null
+                ? $"{view.Label}（空）"
+                : view.Item.MaxDurability > 0
+                    ? $"{view.Label} {view.Item.Name} 耐久 {view.Item.Durability}/{view.Item.MaxDurability}（右键卸下）"
+                    : $"{view.Label} {view.Item.Name}（右键卸下）";
         }
         RefreshBagButtons();
     }
@@ -596,6 +657,7 @@ public partial class Hud : Control
     private void OnCraftSlotPressed(CraftSlot slot)
     {
         if (_selectedRecipeId == slot.RecipeId && _craftOpen) return;
+        UiClicked?.Invoke();
         _selectedRecipeId = slot.RecipeId;
         _craftOpen = true;
         _lastCardFingerprint = int.MinValue;
@@ -607,8 +669,18 @@ public partial class Hud : Control
     {
         if (_selectedSlot == slot) return;
         _selectedSlot = slot;
-        RenderInventory(_lastItems, _lastEquipped, _lastSlotCount);
+        RenderInventory(_lastItems, _lastEquipped, _lastSlotCount, _lastWorn);
     }
+
+    private void OnBagRightClicked(int slot)
+    {
+        SelectBagSlot(slot);
+        if (slot < 0 || slot >= _slotKinds.Count || !IsEquipmentKind(_slotKinds[slot])) return;
+        UiClicked?.Invoke();
+        BagEquipPressed?.Invoke(slot);
+    }
+
+    private static bool IsEquipmentKind(int kind) => kind is >= 100 and <= 199;
 
     private void RebuildCraftCard()
     {
@@ -756,7 +828,7 @@ public partial class Hud : Control
         return button;
     }
 
-    private static Button MakeButton(string text, Action onPressed)
+    private Button MakeButton(string text, Action onPressed)
     {
         var b = new Button
         {
@@ -765,7 +837,11 @@ public partial class Hud : Control
             FocusMode = FocusModeEnum.None,
             MouseFilter = MouseFilterEnum.Stop,
         };
-        b.Pressed += onPressed;
+        b.Pressed += () =>
+        {
+            UiClicked?.Invoke();
+            onPressed();
+        };
         return b;
     }
 }
