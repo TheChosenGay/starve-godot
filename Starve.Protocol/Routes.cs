@@ -15,6 +15,7 @@ public static class Routes
     public const string Automate = "world.player.automate";
     public const string Sleep = "world.player.sleep";
     public const string CancelSleep = "world.player.sleep.cancel";
+    public const string Haunt = "world.player.haunt";
     public const string Craft = "world.player.craft";
     public const string CancelCraft = "world.player.craft.cancel";
     public const string Split = "world.player.split";

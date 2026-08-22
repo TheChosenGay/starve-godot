@@ -22,12 +22,29 @@ public partial class MoveController : Node
     private readonly HashSet<string> _held = new();
     private double _accum;
     private (int Dx, int Dy)? _lastDir;
+    private bool _blocked;
+
+    public void SetBlocked(bool blocked)
+    {
+        if (_blocked == blocked) return;
+        _blocked = blocked;
+        if (!blocked) return;
+        _held.Clear();
+        _accum = 0;
+        _lastDir = (0, 0);
+        OnIntent?.Invoke((0, 0));
+    }
 
     public override void _Input(InputEvent @event)
     {
         if (@event is not InputEventKey key || key.Echo) return;
         var name = OS.GetKeycodeString(key.Keycode);
         if (MoveInput.TryMap(name) is null) return;
+        if (_blocked)
+        {
+            _held.Remove(name);
+            return;
+        }
 
         if (key.Pressed)
         {
@@ -53,6 +70,7 @@ public partial class MoveController : Node
 
     public override void _Process(double delta)
     {
+        if (_blocked) return;
         if (_held.Count == 0) return;
         _accum += delta;
         if (_accum >= 0.1) // 方向保持：每 100ms 重发当前方向（防丢包；服务端最后一条输入生效）

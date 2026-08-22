@@ -89,6 +89,7 @@ public partial class RigNode : Node2D
     private bool _actionActive;
     private bool _actionFinishing;
     private string _actionAnimation = "idle";
+    private bool _haunting;
     private bool _moving;
     private readonly SpiritPresentationState _spirit = new();
 
@@ -185,14 +186,15 @@ public partial class RigNode : Node2D
     /// <summary>应用动作视觉。动作类型到素材的映射只存在于 Rig 适配层。</summary>
     public void Apply(ActionKind kind)
     {
-        if (_spirit.IsDead) return;
+        if (_spirit.IsDead && kind != ActionKind.Haunt) return;
         _actionActive = true;
         _actionFinishing = false;
+        _haunting = kind == ActionKind.Haunt;
         _actionAnimation = kind switch
         {
             ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Pick => "attack",
-            // Craft/Sleep 暂无专用素材：保持 idle，但仍锁住 walk。
-            ActionKind.Craft or ActionKind.Sleep => "idle",
+            // Craft/Sleep/Haunt 暂无专用素材：保持 idle，但仍锁住 walk。
+            ActionKind.Craft or ActionKind.Sleep or ActionKind.Haunt => "idle",
             _ => "idle",
         };
         PlayAnimFromStart(_actionAnimation);
@@ -202,6 +204,7 @@ public partial class RigNode : Node2D
     public void FinishAction()
     {
         _actionActive = false;
+        _haunting = false;
         _actionFinishing =
             _sprite.Animation == _actionAnimation &&
             _sprite.IsPlaying() &&
@@ -218,6 +221,7 @@ public partial class RigNode : Node2D
     public void CancelAction()
     {
         _actionActive = false;
+        _haunting = false;
         _actionFinishing = false;
         _actionAnimation = "idle";
         PlayAnimFromStart(_moving ? "walk" : "idle");
@@ -260,9 +264,9 @@ public partial class RigNode : Node2D
             if (_backRig is not null) _backRig.Visible = false;
             PlayAnim("idle", true);
             _sprite.Modulate = new Color(
-                0.72f * spirit.Brightness,
-                0.9f * spirit.Brightness,
-                1.15f * spirit.Brightness,
+                (_haunting ? 0.58f : 0.72f) * spirit.Brightness,
+                (_haunting ? 1.02f : 0.9f) * spirit.Brightness,
+                (_haunting ? 1.3f : 1.15f) * spirit.Brightness,
                 spirit.Alpha);
             QueueRedraw();
             return;

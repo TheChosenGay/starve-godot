@@ -318,29 +318,82 @@ public sealed class ActionPresentationControllerTests
         Assert.Empty(sink.Cleared);
     }
 
+    [Fact]
+    public void HauntPredictionBecomesUninterruptibleAuthority()
+    {
+        var sink = new RecordingSink();
+        var controller = new ActionPresentationController(sink, () => 0);
+        controller.Predict(7, ActionKind.Haunt, Ref());
+
+        controller.CancelForMovement(7);
+        controller.CancelLocally(7);
+        controller.Apply(7, State(50, ActionKind.Haunt, ActionPhase.Windup, uninterruptible: true));
+
+        var status = controller.StatusOf(7);
+        Assert.NotNull(status);
+        Assert.False(status.Value.Predicted);
+        Assert.True(status.Value.Uninterruptible);
+        Assert.Empty(sink.Cleared);
+    }
+
+    [Theory]
+    [InlineData(ActionOutcomeResult.Rejected)]
+    [InlineData(ActionOutcomeResult.Canceled)]
+    public void RejectedOrCanceledHauntUnlocksAndSuppressesResidualState(ActionOutcomeResult result)
+    {
+        var sink = new RecordingSink();
+        var controller = new ActionPresentationController(sink, () => 0);
+        var state = State(50, ActionKind.Haunt, ActionPhase.Windup, uninterruptible: true);
+        controller.Apply(7, state);
+
+        controller.ApplyOutcome(Outcome(50, result, kind: ActionKind.Haunt));
+        controller.Apply(7, state);
+
+        Assert.Null(controller.StatusOf(7));
+        Assert.Single(sink.Cleared);
+    }
+
+    [Fact]
+    public void CompletedHauntWaitsForAuthoritativeComponentRemoval()
+    {
+        var sink = new RecordingSink();
+        var controller = new ActionPresentationController(sink, () => 0);
+        controller.Apply(7, State(50, ActionKind.Haunt, ActionPhase.Recovery, uninterruptible: true));
+
+        controller.ApplyOutcome(Outcome(50, ActionOutcomeResult.Completed, kind: ActionKind.Haunt));
+        Assert.NotNull(controller.StatusOf(7));
+
+        controller.ObserveAbsent(7);
+        Assert.Null(controller.StatusOf(7));
+        Assert.Single(sink.Finished);
+    }
+
     private static InputCommandRef Ref(ulong requestId = 13, ulong seq = 1) => new(3, seq, requestId);
 
     private static ActionState State(
         ulong id,
         ActionKind kind,
         ActionPhase phase,
-        ulong requestId = 13) => new()
+        ulong requestId = 13,
+        bool uninterruptible = false) => new()
     {
         ActionId = id,
         Kind = kind,
         Phase = phase,
         RequestId = requestId,
+        Uninterruptible = uninterruptible,
     };
 
     private static ActionOutcome Outcome(
         ulong id,
         ActionOutcomeResult result,
-        ulong requestId = 13) => new()
+        ulong requestId = 13,
+        ActionKind kind = ActionKind.Attack) => new()
     {
         EntityId = 7,
         ActionId = id,
         RequestId = requestId,
-        Kind = ActionKind.Attack,
+        Kind = kind,
         Result = result,
         Tick = 20,
     };

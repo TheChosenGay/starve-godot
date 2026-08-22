@@ -105,6 +105,7 @@ public partial class MinimapView : Control
 	private static Color ColorFor(EntityView view)
 	{
 		if (view.Get("Player", Player.Parser) is not null) return new Color(0.94f, 0.78f, 0.38f);
+		if (view.Get("Hauntable", Hauntable.Parser) is not null) return new Color(0.35f, 0.9f, 1f);
 		if (view.LootOf() is not null) return new Color(1f, 0.85f, 0.31f);
 		if (view.Get("Workstation", Workstation.Parser) is not null) return new Color(1f, 0.63f, 0.29f);
 		var building = view.Get("Building", Building.Parser);

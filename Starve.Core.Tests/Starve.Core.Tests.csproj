@@ -39,6 +39,8 @@
              Link="GodotAdapter\SpiritPresentationState.cs" />
     <Compile Include="..\GodotClient\Game\HudVitalsViewModel.cs"
              Link="GodotAdapter\HudVitalsViewModel.cs" />
+    <Compile Include="..\GodotClient\Game\HauntInteractionPolicy.cs"
+             Link="GodotAdapter\HauntInteractionPolicy.cs" />
     <None Include="..\testdata\movement_golden.json"
           Link="testdata\movement_golden.json"
           CopyToOutputDirectory="PreserveNewest" />

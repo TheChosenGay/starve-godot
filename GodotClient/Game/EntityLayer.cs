@@ -15,7 +15,8 @@ public readonly record struct EntityStyle(
 	float Radius,
 	bool IsFire,
 	bool IsTree = false,
-	bool IsWorkbench = false);
+	bool IsWorkbench = false,
+	bool IsHauntable = false);
 
 /// <summary>实体层：世界实体 → 菱形占位（带投影/血条/受击闪白）或骨骼角色。</summary>
 public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPresentationSink
@@ -218,6 +219,8 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 
 	public void ApplyActionOutcome(ActionOutcome outcome) => _actions.ApplyOutcome(outcome);
 
+	public ActionPresentationStatus? ActionStatusOf(ulong id) => _actions.StatusOf(id);
+
 	public void ApplyCombatImpact(WorldEvent worldEvent, CombatImpactEvent impact) =>
 		_impacts.Apply(worldEvent, impact);
 
@@ -309,6 +312,12 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 
 	private static EntityStyle StyleFor(EntityView view)
 	{
+		if (view.Get("Hauntable", Hauntable.Parser) is not null)
+			return new EntityStyle(
+				new Color(0.55f, 0.85f, 1f),
+				13,
+				false,
+				IsHauntable: true);
 		if (view.Get("Player", Player.Parser) is not null)
 			return new EntityStyle(new Color(0.31f, 0.75f, 0.37f), 10, false);
 		// 掉落物优先于 Dead：挖完的矿/树是 Dead+Loot，应显示成可拾取的黄色，
@@ -393,6 +402,7 @@ public partial class EntityNode : Node2D
 	private Node2D? _structure;
 	private Label? _nameLabel;
 	private bool _isTree;
+	private bool _isHauntable;
 	private bool _hasStructure;
 	private int _healthCur;
 	private int _healthMax;
@@ -410,6 +420,7 @@ public partial class EntityNode : Node2D
 		_color = style.Color;
 		_radius = style.Radius;
 		_isTree = style.IsTree;
+		_isHauntable = style.IsHauntable;
 		UpdateNameLabel(name);
 		_healthCur = healthCur;
 		_healthMax = healthMax;
@@ -546,6 +557,7 @@ public partial class EntityNode : Node2D
 		{
 			_treeSprite.Rotation = Mathf.Sin(now / 560f + GetInstanceId() * 0.001f) * 0.045f;
 		}
+		if (_isHauntable) QueueRedraw();
 		if (now < _flashUntil) QueueRedraw();
 	}
 
@@ -560,7 +572,11 @@ public partial class EntityNode : Node2D
 			shadowW * 0.35f,
 			new Color(0, 0, 0, 0.16f + 0.16f * _sunT));
 
-		if (!_isTree && !_hasStructure)
+		if (_isHauntable)
+		{
+			DrawHauntStatue();
+		}
+		else if (!_isTree && !_hasStructure)
 		{
 			DrawColoredPolygon(
 				new[] { new Vector2(0, -_radius), new Vector2(_radius, 0), new Vector2(0, _radius), new Vector2(-_radius, 0) },
@@ -597,6 +613,40 @@ public partial class EntityNode : Node2D
 			pts[i] = center + new Vector2(Mathf.Cos(a) * rx, Mathf.Sin(a) * ry);
 		}
 		DrawColoredPolygon(pts, color);
+	}
+
+	private void DrawHauntStatue()
+	{
+		var glow = 0.78f + 0.12f * Mathf.Sin((float)Time.GetTicksMsec() / 420f);
+		DrawCircle(new Vector2(0, -17), 15, new Color(0.35f, 0.8f, 1f, 0.12f * glow));
+		DrawColoredPolygon(
+			new[]
+			{
+				new Vector2(-12, 5),
+				new Vector2(-8, -5),
+				new Vector2(-6, -25),
+				new Vector2(0, -32),
+				new Vector2(6, -25),
+				new Vector2(8, -5),
+				new Vector2(12, 5),
+			},
+			new Color(0.62f * glow, 0.82f * glow, 0.94f * glow));
+		DrawPolyline(
+			new[]
+			{
+				new Vector2(-12, 5),
+				new Vector2(-8, -5),
+				new Vector2(-6, -25),
+				new Vector2(0, -32),
+				new Vector2(6, -25),
+				new Vector2(8, -5),
+				new Vector2(12, 5),
+			},
+			new Color(0.88f, 0.97f, 1f, 0.9f),
+			2f);
+		DrawRect(new Rect2(-15, 5, 30, 6), new Color(0.42f, 0.62f, 0.75f));
+		DrawCircle(new Vector2(-2.5f, -20), 1.5f, new Color(0.8f, 1f, 1f));
+		DrawCircle(new Vector2(2.5f, -20), 1.5f, new Color(0.8f, 1f, 1f));
 	}
 
 }

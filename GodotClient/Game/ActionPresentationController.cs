@@ -22,7 +22,8 @@ public readonly record struct ActionPresentationStatus(
     ActionPhase Phase,
     ulong InputEpoch,
     ulong Seq,
-    ulong RequestId);
+    ulong RequestId,
+    bool Uninterruptible = false);
 
 /// <summary>
 /// 实体动作表现的唯一状态机：接收本地预测和权威 ActionState，负责去重、替换与取消。
@@ -61,6 +62,7 @@ public sealed class ActionPresentationController
             InputEpoch: command.InputEpoch,
             Seq: command.Seq,
             RequestId: command.RequestId,
+            Uninterruptible: kind == ActionKind.Haunt,
             ExpiresAtMs: checked(_nowMs() + _predictionTimeoutMs));
         _sink.Apply(entityId, kind);
     }
@@ -84,6 +86,7 @@ public sealed class ActionPresentationController
                 : suppression.RequestId != 0 && suppression.RequestId == state.RequestId;
             if (suppression.Kind == state.Kind && matchesSuppression)
             {
+                if (state.Kind == ActionKind.Haunt) return;
                 _entries[entityId] = AuthoritativeEntry(state, current);
                 return;
             }
@@ -122,12 +125,17 @@ public sealed class ActionPresentationController
         _sink.Cancel(entityId);
     }
 
-    public void CancelForMovement(ulong entityId) => CancelLocally(entityId);
+    public void CancelForMovement(ulong entityId)
+    {
+        if (IsUninterruptible(entityId)) return;
+        CancelLocally(entityId);
+    }
 
     /// <summary>本地主动中断表现，并抑制取消确认前残留的同一权威快照。</summary>
     public void CancelLocally(ulong entityId)
     {
         if (!_entries.TryGetValue(entityId, out var current)) return;
+        if (current.Uninterruptible || current.Kind == ActionKind.Haunt) return;
         if (current.Predicted)
         {
             _suppressions[entityId] = new Suppression(0, current.Kind, current.RequestId);
@@ -188,7 +196,9 @@ public sealed class ActionPresentationController
         }
 
         if (!hasCurrent) return;
-        if (current.Predicted || outcome.Result == ActionOutcomeResult.Rejected)
+        var clearsHauntLock = current.Kind == ActionKind.Haunt &&
+                              outcome.Result is ActionOutcomeResult.Rejected or ActionOutcomeResult.Canceled;
+        if (current.Predicted || outcome.Result == ActionOutcomeResult.Rejected || clearsHauntLock)
         {
             _entries.Remove(outcome.EntityId);
         }
@@ -233,7 +243,8 @@ public sealed class ActionPresentationController
                 entry.Phase,
                 entry.InputEpoch,
                 entry.Seq,
-                entry.RequestId)
+                entry.RequestId,
+                entry.Uninterruptible)
             : null;
 
     private readonly record struct Entry(
@@ -244,6 +255,7 @@ public sealed class ActionPresentationController
         ulong InputEpoch,
         ulong Seq,
         ulong RequestId,
+        bool Uninterruptible,
         long ExpiresAtMs);
 
     private readonly record struct Suppression(ulong ActionId, ActionKind Kind, ulong RequestId);
@@ -267,6 +279,11 @@ public sealed class ActionPresentationController
             InputEpoch: confirmsPrediction ? previous.InputEpoch : 0,
             Seq: confirmsPrediction ? previous.Seq : 0,
             RequestId: state.RequestId,
+            Uninterruptible: state.Uninterruptible || state.Kind == ActionKind.Haunt,
             ExpiresAtMs: 0);
     }
+
+    private bool IsUninterruptible(ulong entityId) =>
+        _entries.TryGetValue(entityId, out var current) &&
+        (current.Uninterruptible || current.Kind == ActionKind.Haunt);
 }

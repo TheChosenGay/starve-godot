@@ -53,6 +53,7 @@ public partial class GameRoot : Node
     private GhostNode? _ghost;
     private Hud? _hud;
     private DamageFlashOverlay? _damageFlash;
+    private MoveController? _moveController;
     private int _lastRevision = -1;
     private int _lastWeatherRevision = -1;
     private long? _captureAt;
@@ -74,6 +75,7 @@ public partial class GameRoot : Node
     private MovementDiagnosticsSampler? _movementDiagnosticsSampler;
     private string _movementDiagnosticsStatus = "";
     private bool _ownDead;
+    private bool _gameplayLocked;
 
     /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
     private static readonly Dictionary<int, string> ItemIconFiles = new()
@@ -170,15 +172,25 @@ public partial class GameRoot : Node
             RotateView(deg * Mathf.Pi / 180f);
         }
         var move = new MoveController();
+        _moveController = move;
         _ownSim = new OwnMovementSim(IsWalkable);
         if (_showMovementDiagnostics)
         {
             _movementDiagnosticsSampler = new MovementDiagnosticsSampler(
                 () => _ownSim?.Diagnostics ?? default);
         }
-        move.OnMove += dir => _client?.Commands.Move(dir.Dx, dir.Dy);
+        move.OnMove += dir =>
+        {
+            if (!GameplayLocked()) _client?.Commands.Move(dir.Dx, dir.Dy);
+        };
         move.OnIntent += dir =>
         {
+            if (GameplayLocked())
+            {
+                _ownSim?.SetIntent(0, 0);
+                _ownIntentMoving = false;
+                return;
+            }
             _ownSim?.SetIntent(dir.Dx, dir.Dy);
             if (dir.Dx != 0 || dir.Dy != 0)
             {
@@ -200,36 +212,54 @@ public partial class GameRoot : Node
         hud.ChopPressed += () => WithSelected(id => TryAct(id, Intent.Chop));
         hud.MinePressed += () => WithSelected(id => TryAct(id, Intent.Mine));
         hud.PickupPressed += () => WithSelected(id => TryAct(id, Intent.Pickup));
-        hud.DemolishPressed += () => WithSelected(id => _client?.Commands.Demolish(id));
-        hud.BuildPressed += kind => _ = DoBuildAsync(kind);
-        hud.BagUsePressed += slot => WithBagSlot(slot, kind => _client?.Commands.Use(kind));
+        hud.DemolishPressed += () =>
+        {
+            if (CanSendGameplay()) WithSelected(id => _client?.Commands.Demolish(id));
+        };
+        hud.BuildPressed += kind =>
+        {
+            if (CanSendGameplay()) _ = DoBuildAsync(kind);
+        };
+        hud.BagUsePressed += slot =>
+        {
+            if (CanSendGameplay()) WithBagSlot(slot, kind => _client?.Commands.Use(kind));
+        };
         hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
         {
+            if (!CanSendGameplay()) return;
             // M7：Equipped 下线，改用 Equip 槽位 + 玩家身上复制的主动能力组件。
             // 服务端 kind=0 = 卸下全部；手持工具或头/身护甲已在身上时再点 = 卸下。
             _client?.Commands.Equip(IsEquippedKind(kind) ? 0 : kind);
         });
         hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
         {
+            if (!CanSendGameplay()) return;
             var count = OwnItemCount(slot);
             if (count > 0) _client?.Commands.Drop(kind, count);
         });
         hud.BagSplitPressed += slot => WithBagSlot(slot, kind =>
         {
+            if (!CanSendGameplay()) return;
             var count = OwnItemCount(slot);
             if (count > 1) _client?.Commands.Split(slot, count / 2);
         });
-        hud.CraftPressed += recipeId => _ = DoCraftAsync(recipeId);
-        hud.CancelCraftPressed += () => _client?.Commands.CancelCraft();
+        hud.CraftPressed += recipeId =>
+        {
+            if (CanSendGameplay()) _ = DoCraftAsync(recipeId);
+        };
+        hud.CancelCraftPressed += () =>
+        {
+            if (CanSendGameplay()) _client?.Commands.CancelCraft();
+        };
         hud.SleepPressed += () =>
         {
-            if (_client is null || _ownDead) return;
+            if (_client is null || _ownDead || GameplayLocked()) return;
             var command = _client.Commands.Sleep();
             _entityLayer?.PredictAction(_ownId, ActionKind.Sleep, command);
         };
         hud.CancelSleepPressed += () =>
         {
-            if (_client is null || _ownDead) return;
+            if (_client is null || _ownDead || GameplayLocked()) return;
             _client.Commands.CancelSleep();
             _entityLayer?.CancelActionLocally(_ownId);
         };
@@ -318,9 +348,10 @@ public partial class GameRoot : Node
             }
         }
 
+        RefreshGameplayLock();
         var now = NowMs();
-        _autoActions.Tick(now, TriggerAutoAction);
-        if (DemoMove is { } dm && now >= _demoNextAt)
+        if (!_gameplayLocked) _autoActions.Tick(now, TriggerAutoAction);
+        if (!_gameplayLocked && DemoMove is { } dm && now >= _demoNextAt)
         {
             _demoNextAt = now + 100;
             _client?.Commands.Move(dm.Dx, dm.Dy);
@@ -533,7 +564,7 @@ public partial class GameRoot : Node
                 // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
                 if (mv is not null) _ownSim?.SetSpeed((float)mv.EffectiveSpeed);
                 _ownPathMoving = mv is { Path.Count: > 0 };
-                if (!_ownIntentMoving)
+                if (!_ownIntentMoving && !GameplayLocked())
                 {
                     var pathDir = _ownPathMoving ? mv!.Path[0] : null;
                     _ownSim?.SetIntent(pathDir?.Dx ?? 0, pathDir?.Dy ?? 0);
@@ -687,7 +718,7 @@ public partial class GameRoot : Node
     /// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
     private void TryAct(ulong id, Intent intent)
     {
-        if (_ownDead) return;
+        if (_ownDead || GameplayLocked()) return;
         if (_client is null || !_client.World.Entities.TryGetValue(id, out var view))
         {
             _hud?.Log("目标已消失");
@@ -776,6 +807,47 @@ public partial class GameRoot : Node
         }
     }
 
+    private void TryHaunt(ulong id)
+    {
+        if (_client is null || GameplayLocked()) return;
+        if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
+            !_client.World.Entities.TryGetValue(id, out var target) ||
+            own.Get("Position", Position.Parser) is not { } actorPos ||
+            target.Get("Position", Position.Parser) is not { } targetPos)
+        {
+            _hud?.Log("复活雕像已消失或不可达");
+            return;
+        }
+
+        var hauntable = target.Get("Hauntable", Hauntable.Parser);
+        var block = target.Get("Block", Block.Parser);
+        var validation = HauntInteractionPolicy.Validate(
+            _ownDead,
+            hauntable is not null,
+            hauntable?.RemainingUses ?? 0,
+            actorPos.X,
+            actorPos.Y,
+            targetPos.X,
+            targetPos.Y,
+            block?.Width ?? 1,
+            block?.Height ?? 1);
+        if (validation != HauntValidation.Allowed)
+        {
+            _hud?.Log(validation switch
+            {
+                HauntValidation.ActorAlive => "存活时只能查看复活雕像",
+                HauntValidation.Depleted => "这座复活雕像已耗尽",
+                HauntValidation.OutOfRange => "距离复活雕像太远，请靠近到 2 格内",
+                _ => "目标不是可作祟的复活雕像",
+            });
+            return;
+        }
+
+        var command = _client.Commands.Haunt(id);
+        _entityLayer?.PredictAction(_ownId, ActionKind.Haunt, command);
+        RefreshGameplayLock();
+    }
+
     /// <summary>选中实体的可读描述（名称/血量/工作量/可用动作）。</summary>
     private string DescribeSelected()
     {
@@ -785,6 +857,10 @@ public partial class GameRoot : Node
             return "无";
         }
         var cfg = _client.World.Config;
+        if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
+            return $"复活雕像 #{id} 剩余次数 {hauntable.RemainingUses} " +
+                   $"作祟时长 {hauntable.DurationTicks} ticks" +
+                   (_ownDead ? " [点击作祟]" : " [灵魂可用]");
         if (view.Get("Player", Player.Parser) is not null)
             return $"玩家 #{id}";
         if (view.Get("Dead", Dead.Parser) is not null)
@@ -955,6 +1031,8 @@ public partial class GameRoot : Node
         var pl = view.Get("Player", Player.Parser);
         if (pl is not null)
             return pl.Uid == _ownUid ? "我" : $"玩家 {pl.Uid}";
+        if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
+            return $"复活雕像·剩余 {hauntable.RemainingUses}";
         if (view.LootOf() is { } lt)
             return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
         if (view.Get("Choppable", WorkTarget.Parser) is not null)
@@ -1016,7 +1094,7 @@ public partial class GameRoot : Node
 
     private async Task DoCraftAsync(string recipeId)
     {
-        if (_client is null || _ownDead) return;
+        if (_client is null || _ownDead || GameplayLocked()) return;
         var submission = _client.Commands.BeginCraft(recipeId);
         _entityLayer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
         var resp = await submission.ResponseTask;
@@ -1090,6 +1168,11 @@ public partial class GameRoot : Node
             _ => (AutoActionIntent?)null,
         };
         if (intent is not { } autoIntent) return;
+        if (GameplayLocked())
+        {
+            _autoActions.Release(autoIntent);
+            return;
+        }
         if (key.Pressed)
         {
             _autoActions.Press(autoIntent, NowMs(), TriggerAutoAction);
@@ -1102,7 +1185,7 @@ public partial class GameRoot : Node
 
     private void TriggerAutoAction(AutoActionIntent intent)
     {
-        if (_ownDead) return;
+        if (_ownDead || GameplayLocked()) return;
         if (intent == AutoActionIntent.AttackOnly) _client?.Commands.AttackNearest();
         else _client?.Commands.Automate();
     }
@@ -1115,6 +1198,21 @@ public partial class GameRoot : Node
         }
         else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
+            if (GameplayLocked()) return;
+            if (_ownDead)
+            {
+                var deadPicked = ScreenToWorld(mb.Position);
+                _selected = FindNearest(deadPicked);
+                if (_selected is { } deadSelection &&
+                    deadSelection != _ownId &&
+                    _client is not null &&
+                    _client.World.Entities.TryGetValue(deadSelection, out var deadTarget) &&
+                    deadTarget.Get("Hauntable", Hauntable.Parser) is not null)
+                {
+                    TryHaunt(deadSelection);
+                }
+                return;
+            }
             if (_buildPreview is { } bp && _mouseWorld is { } mw)
             {
                 _client?.Commands.Place(bp.EntityId, (int)MathF.Round(mw.X), (int)MathF.Round(mw.Y));
@@ -1130,6 +1228,7 @@ public partial class GameRoot : Node
                 _client is not null &&
                 _client.World.Entities.TryGetValue(sel, out var selView))
             {
+                if (selView.Get("Hauntable", Hauntable.Parser) is not null) return;
                 if (selView.LootOf() is not null)
                     TryAct(sel, Intent.Pickup);
                 else if (selView.Get("Pickable", WorkTarget.Parser) is not null)
@@ -1160,7 +1259,7 @@ public partial class GameRoot : Node
 
     private async Task CheckPlaceAsync(ulong entity, int x, int y)
     {
-        if (_client is null || _buildPreview is null) return;
+        if (_client is null || _buildPreview is null || GameplayLocked()) return;
         var resp = await _client.Commands.BuildCheckAsync(entity, x, y);
         if (_buildPreview is not { } bp) return;
         _buildPreview = (bp.EntityId, bp.Kind, bp.W, bp.H, resp?.Ok ?? false);
@@ -1206,13 +1305,14 @@ public partial class GameRoot : Node
 
     private async Task DoBuildAsync(int kind)
     {
-        if (_client is null) return;
+        if (_client is null || !CanSendGameplay()) return;
         var resp = await _client.Commands.BuildAsync(kind);
         if (resp is null || !resp.Ok)
         {
             _hud?.Log($"建造失败: {resp?.Message ?? "超时"}");
             return;
         }
+        if (!CanSendGameplay()) return;
         var cfg = _client.World.Config;
         var b = cfg?.Buildings.FirstOrDefault(x => (int)x.Kind == kind);
         var w = b?.Width ?? 1;
@@ -1230,10 +1330,11 @@ public partial class GameRoot : Node
         var health = own.Get("Health", Health.Parser);
         var dead = own.Components.ContainsKey("Dead");
         _hud.SetVitals(HudVitalsViewModel.Create(health?.Cur ?? 0, health?.Max ?? 0, dead));
-        _hud.SetInteractionsDisabled(dead);
+        _hud.SetInteractionsDisabled(dead || GameplayLocked());
         if (dead && !_ownDead)
         {
-            _hud.Log("灵魂状态只能移动观察");
+            ExitBuildPreview();
+            _hud.Log("灵魂状态：靠近复活雕像并点击作祟");
         }
         _ownDead = dead;
     }
@@ -1247,6 +1348,13 @@ public partial class GameRoot : Node
         var pos = own?.Get("Position", Starve.Game.V1.Position.Parser);
         var hp = own?.Get("Health", Health.Parser);
         var hunger = own?.Get("Hunger", Hunger.Parser);
+        var hauntStatus = _entityLayer?.ActionStatusOf(_ownId);
+        var actionState = own?.Get("ActionState", ActionState.Parser);
+        var hauntText = HauntInteractionPolicy.IsGameplayLocked(hauntStatus)
+            ? HauntProgressText(w.WorldTick, hauntStatus, actionState)
+            : _ownDead
+                ? "灵魂状态：靠近复活雕像并点击作祟"
+                : "";
         // M7：Health 不再携带防御（服务端只回 cur/max），总减免从 Equip 头/身槽位反查护甲求和。
         var defense = DefensePercent();
         var defTxt = defense > 0 ? $" 防御{defense}%" : "";
@@ -1254,8 +1362,52 @@ public partial class GameRoot : Node
             $"实体数 {w.Count} | 昼夜 {w.DayLight:0.00} | 季节 {SeasonName(w.Season)}\n" +
             $"我 @({pos?.X ?? 0},{pos?.Y ?? 0}) hp={hp?.Cur}/{hp?.Max} 饥饿 {hunger?.Level} {EquipText()}{defTxt}\n" +
             $"选中: {DescribeSelected()}{_movementDiagnosticsStatus}\n" +
-            "操作：空格自动行为；F 自动寻找最近可攻击角色（按住持续攻击/超距寻路）");
+            (hauntText.Length > 0
+                ? hauntText
+                : "操作：空格自动行为；F 自动寻找最近可攻击角色（按住持续攻击/超距寻路）"));
         _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
+    }
+
+    private bool GameplayLocked() =>
+        HauntInteractionPolicy.IsGameplayLocked(_entityLayer?.ActionStatusOf(_ownId));
+
+    private bool CanSendGameplay() => !_ownDead && !GameplayLocked();
+
+    private void RefreshGameplayLock()
+    {
+        var locked = GameplayLocked();
+        if (_gameplayLocked == locked)
+        {
+            _hud?.SetInteractionsDisabled(_ownDead || locked);
+            return;
+        }
+
+        _gameplayLocked = locked;
+        _moveController?.SetBlocked(locked);
+        if (locked)
+        {
+            _ownSim?.SetIntent(0, 0);
+            _ownIntentMoving = false;
+            _ownPathMoving = false;
+            _autoActions.Release(AutoActionIntent.Any);
+            _autoActions.Release(AutoActionIntent.AttackOnly);
+            ExitBuildPreview();
+        }
+        _hud?.SetInteractionsDisabled(_ownDead || locked);
+    }
+
+    private static string HauntProgressText(
+        long worldTick,
+        ActionPresentationStatus? status,
+        ActionState? state)
+    {
+        if (status is { Predicted: true }) return "作祟中：等待服务器确认（输入已锁定，不可取消）";
+        if (state is null) return "作祟中：等待复活快照（输入已锁定，不可取消）";
+        var start = state.PhaseStartTick;
+        var end = state.EndTick > start ? state.EndTick : state.PhaseEndTick;
+        if (end <= start) return "作祟中（输入已锁定，不可取消）";
+        var pct = Math.Clamp((worldTick - start) * 100 / (end - start), 0, 100);
+        return $"作祟中：{pct}%（输入已锁定，不可取消）";
     }
 
     private static string SeasonName(int season) => season switch

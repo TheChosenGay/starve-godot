@@ -138,6 +138,19 @@ public sealed class CommandService
         return command;
     }
 
+    public InputCommandRef Haunt(ulong target)
+    {
+        var command = NextControlCommand();
+        Notify(Routes.Haunt, new PlayerHaunt
+        {
+            TargetEntity = target,
+            Seq = command.Seq,
+            InputEpoch = command.InputEpoch,
+            RequestId = command.RequestId,
+        });
+        return command;
+    }
+
     public void Drop(int kind, int count) =>
         Notify(Routes.Drop, new PlayerDrop { Kind = kind, Count = count });
 
