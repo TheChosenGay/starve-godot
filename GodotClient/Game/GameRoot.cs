@@ -459,6 +459,15 @@ public partial class GameRoot : Node
         _camera.Tick((float)(delta * 1000));
 
         var viewport = GetViewport().GetVisibleRect().Size;
+        if (!_freeCamera)
+        {
+            // 相机半径是 [view_radius, view_radius_max]；view_preload 只在服务端多下发。
+            var worldCfg = client.World.Config;
+            _camera.SetViewRange(
+                worldCfg?.ViewRadius ?? Camera.DefaultViewRadius,
+                worldCfg?.ViewRadiusMax ?? 0);
+            _camera.SyncToViewport(viewport.X, viewport.Y);
+        }
         var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
         // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
         // Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。

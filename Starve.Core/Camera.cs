@@ -10,6 +10,9 @@ namespace Starve.Core;
 /// </summary>
 public sealed class Camera
 {
+    public const int DefaultViewRadius = 24;
+    public const int DefaultViewRadiusMax = 32;
+
     private float _zoom = 1;
     private bool _following;
     private float _followX;
@@ -19,8 +22,12 @@ public sealed class Camera
     private float _panX;
     private float _panY;
     private readonly float _base;
-    private readonly float _min;
-    private readonly float _max;
+    private readonly float _minFloor;
+    private readonly float _maxFloor;
+    private float _min;
+    private float _max;
+    private int _viewRadius = DefaultViewRadius;
+    private int _viewRadiusMax = DefaultViewRadius;
 
     /// <summary>地面高度查询（菱形投影下 screenY 减去高度×step，由地形注入）。</summary>
     public Func<float, float, float>? HeightAt { get; set; }
@@ -28,6 +35,8 @@ public sealed class Camera
     public Camera(float baseScale = 40, float minZoom = 0.4f, float maxZoom = 3f)
     {
         _base = baseScale;
+        _minFloor = minZoom;
+        _maxFloor = maxZoom;
         _min = minZoom;
         _max = maxZoom;
     }
@@ -36,6 +45,96 @@ public sealed class Camera
     public float Scale => _base * _zoom;
 
     public float ZoomLevel => _zoom;
+
+    public float MinZoom => _min;
+
+    public float MaxZoom => _max;
+
+    public int ViewRadius => _viewRadius;
+
+    public int ViewRadiusMax => _viewRadiusMax;
+
+    /// <summary>
+    /// 服务端快照视野下限（切比雪夫格数）。与服务端 NormalizeViewRadius 一致：
+    /// 0 → 默认 24；负数 → -1（不裁剪，不限制相机）。
+    /// 未同时设置上限时，上限等于下限。
+    /// </summary>
+    public void SetViewRadius(int radius) => SetViewRange(radius, 0);
+
+    /// <summary>
+    /// 相机半径范围：radius 拉近下限，radiusMax 拉远上限（最大加载）。
+    /// 0 上限 = 等于下限；任一为负 = 不裁剪。
+    /// </summary>
+    public void SetViewRange(int radius, int radiusMax)
+    {
+        if (radius < 0 || radiusMax < 0)
+        {
+            _viewRadius = -1;
+            _viewRadiusMax = -1;
+            return;
+        }
+
+        _viewRadius = radius == 0 ? DefaultViewRadius : radius;
+        _viewRadiusMax = radiusMax == 0 ? _viewRadius : Math.Max(_viewRadius, radiusMax);
+    }
+
+    /// <summary>
+    /// 按当前视口把缩放/拖拽限制在服务端视野内：屏幕四角相对玩家不超过 view_radius_max。
+    /// 若上限大于下限，拉近也不会小于 view_radius。
+    /// </summary>
+    public void SyncToViewport(float viewW, float viewH)
+    {
+        if (_viewRadiusMax < 0)
+        {
+            _min = _minFloor;
+            _max = _maxFloor;
+            SetZoom(_zoom);
+            return;
+        }
+
+        var halfAtOne = ViewportChebyshev(viewW, viewH, 1f);
+        _min = MathF.Max(_minFloor, halfAtOne / _viewRadiusMax);
+        if (_viewRadius > 0 && _viewRadius < _viewRadiusMax)
+        {
+            // 范围模式：拉近停在 view_radius，服务端范围优先于本地 maxZoom。
+            _max = MathF.Max(_min, halfAtOne / _viewRadius);
+        }
+        else
+        {
+            // 上下限相同：只限制拉远，仍允许在本地 maxZoom 内继续拉近。
+            _max = MathF.Max(_maxFloor, _min);
+        }
+        SetZoom(_zoom);
+        ClampPan(viewW, viewH);
+    }
+
+    /// <summary>当前缩放下，屏幕四角相对相机中心的最大切比雪夫格数。</summary>
+    public static float ViewportChebyshev(float viewW, float viewH, float zoom)
+    {
+        if (zoom <= 0)
+        {
+            return float.PositiveInfinity;
+        }
+
+        float maxCheb = 0;
+        ReadOnlySpan<(float X, float Y)> corners =
+        [
+            (0, 0),
+            (viewW, 0),
+            (0, viewH),
+            (viewW, viewH),
+        ];
+        foreach (var (sx, sy) in corners)
+        {
+            var a = (sx - viewW / 2) / (20 * zoom);
+            var b = (sy - viewH / 2) / (10 * zoom);
+            var dx = (a + b) / 2;
+            var dy = (b - a) / 2;
+            maxCheb = MathF.Max(maxCheb, MathF.Max(MathF.Abs(dx), MathF.Abs(dy)));
+        }
+
+        return maxCheb;
+    }
 
     /// <summary>跟随目标；传 null 则自由视角（此时中心 = 平移量）。</summary>
     public void Follow(float? x, float? y)
@@ -65,7 +164,7 @@ public sealed class Camera
         _smoothY += (_followY - _smoothY) * k;
     }
 
-    public void SetZoom(float level) => _zoom = Clamp(level, _min, _max);
+    public void SetZoom(float level) => _zoom = Clamp(level, _min, MathF.Max(_max, _min));
 
     /// <summary>以屏幕中心为锚点缩放（factor &gt; 1 放大）。</summary>
     public void ZoomBy(float factor) => SetZoom(_zoom * factor);
@@ -130,6 +229,31 @@ public sealed class Camera
             }
         }
         return Vector2.Zero;
+    }
+
+    private void ClampPan(float viewW, float viewH)
+    {
+        if (_viewRadiusMax < 0)
+        {
+            return;
+        }
+
+        var half = ViewportChebyshev(viewW, viewH, _zoom);
+        var budget = _viewRadiusMax - half;
+        if (budget <= 0)
+        {
+            _panX = 0;
+            _panY = 0;
+            return;
+        }
+
+        var cheb = MathF.Max(MathF.Abs(_panX), MathF.Abs(_panY));
+        if (cheb > budget)
+        {
+            var scale = budget / cheb;
+            _panX *= scale;
+            _panY *= scale;
+        }
     }
 
     private static float Clamp(float v, float lo, float hi) => MathF.Max(lo, MathF.Min(hi, v));
