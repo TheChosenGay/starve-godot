@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Godot;
 using Starve.Core;
 using TileMap = Starve.Core.TileMap;
@@ -7,8 +6,7 @@ using TileMap = Starve.Core.TileMap;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 地形网格构建：按角类型选图集变体（确定性哈希），四角真实高度 + 菱形 UV，
-/// 顶点色烘焙 高度/坡度着色 + AO（公式与 web 端 terrain-splat.ts 一致）。
+/// 地形网格：世界 XY 连续 UV；高差格拆成平台 + 崖壁。顶点色仍烘焙高度/AO。
 /// </summary>
 public static class MapMeshBuilder
 {
@@ -24,76 +22,62 @@ public static class MapMeshBuilder
         {
             for (var cx = cx0; cx < cx1; cx++)
             {
-                var hs = new[]
+                var ao = 1f - TileAo(tm, cx, cy) * 0.5f;
+                foreach (var quad in SlopeMesh.BuildTile(tm, cx, cy))
                 {
-                    tm.CornerHeight(cx, cy),
-                    tm.CornerHeight(cx + 1, cy),
-                    tm.CornerHeight(cx + 1, cy + 1),
-                    tm.CornerHeight(cx, cy + 1),
-                };
-                var types = new[]
-                {
-                    tm.CornerType(cx, cy),
-                    tm.CornerType(cx + 1, cy),
-                    tm.CornerType(cx + 1, cy + 1),
-                    tm.CornerType(cx, cy + 1),
-                };
+                    var kind = quad.Cliff ? SlopeMesh.CliffTerrainKind : quad.TerrainKind;
+                    var rect = quad.Cliff
+                        ? FirstVariant(atlas, kind)
+                        : PickVariant(atlas, kind, cx, cy);
+                    var tint = TintColor(quad.HeightAvg, quad.FaceSlope) * ao;
+                    if (quad.Cliff) tint *= new Color(0.72f, 0.68f, 0.62f);
 
-                var water = types.Count(t => t == 1);
-                var hMax = hs.Max();
-                var hAvg = hs.Average();
-                var slope = hMax - hs.Min();
+                    AddVert(st, quad.V0, rect, tint, cx, cy, quad);
+                    AddVert(st, quad.V1, rect, tint, cx, cy, quad);
+                    AddVert(st, quad.V2, rect, tint, cx, cy, quad);
+                    AddVert(st, quad.V3, rect, tint, cx, cy, quad);
 
-                var kind = water >= 3 ? 1 : DominantType(types);
-                var rect = PickVariant(atlas, kind, cx, cy);
-                var tint = TintColor(hAvg, slope) * (1f - TileAo(tm, cx, cy) * 0.5f);
-
-                Godot.Vector2 p0, p1, p2, p3;
-                if (water >= 3)
-                {
-                    // 水：四角统一到最高角，湖面平整
-                    var flat = ToGodot(IsoMath.WorldToLocal(cx, cy, hMax));
-                    p0 = flat;
-                    p1 = flat + new Vector2(20, 10);
-                    p2 = flat + new Vector2(0, 20);
-                    p3 = flat + new Vector2(-20, 10);
+                    var baseIdx = vertexCount;
+                    vertexCount += 4;
+                    st.AddIndex(baseIdx);
+                    st.AddIndex(baseIdx + 1);
+                    st.AddIndex(baseIdx + 2);
+                    st.AddIndex(baseIdx);
+                    st.AddIndex(baseIdx + 2);
+                    st.AddIndex(baseIdx + 3);
                 }
-                else
-                {
-                    p0 = ToGodot(IsoMath.WorldToLocal(cx, cy, hs[0]));
-                    p1 = ToGodot(IsoMath.WorldToLocal(cx + 1, cy, hs[1]));
-                    p2 = ToGodot(IsoMath.WorldToLocal(cx + 1, cy + 1, hs[2]));
-                    p3 = ToGodot(IsoMath.WorldToLocal(cx, cy + 1, hs[3]));
-                }
-
-                // 菱形 UV：画布四边中点 = 菱形四角
-                var uv0 = UvInRect(rect, 0.5f, 0f);
-                var uv1 = UvInRect(rect, 1f, 0.5f);
-                var uv2 = UvInRect(rect, 0.5f, 1f);
-                var uv3 = UvInRect(rect, 0f, 0.5f);
-
-                st.SetColor(tint);
-                st.SetUV(uv0);
-                st.AddVertex(ToV3(p0));
-                st.SetUV(uv1);
-                st.AddVertex(ToV3(p1));
-                st.SetUV(uv2);
-                st.AddVertex(ToV3(p2));
-                st.SetUV(uv3);
-                st.AddVertex(ToV3(p3));
-
-                var baseIdx = vertexCount;
-                vertexCount += 4;
-                st.AddIndex(baseIdx);
-                st.AddIndex(baseIdx + 1);
-                st.AddIndex(baseIdx + 2);
-                st.AddIndex(baseIdx);
-                st.AddIndex(baseIdx + 2);
-                st.AddIndex(baseIdx + 3);
             }
         }
 
         return st.Commit();
+    }
+
+    private static void AddVert(
+        SurfaceTool st, SlopeVertex v, Rect2 rect, Color tint, int cx, int cy, SlopeQuad quad)
+    {
+        Vector2 uv;
+        if (quad.Cliff)
+        {
+            var span = MathF.Max(quad.TileHeightMax - quad.TileHeightMin, 0.001f);
+            var t = Math.Clamp((quad.TileHeightMax - v.Height) / span, 0f, 1f);
+            uv = UvInRect(rect, Fract(v.Wx + v.Wy), t);
+        }
+        else
+        {
+            // 世界 UV：一格对应整张无缝贴图。子格用相对父格的 0..1，插值不跨 fract 缝。
+            uv = UvInRect(rect, v.Wx - cx, v.Wy - cy);
+        }
+
+        st.SetColor(tint);
+        st.SetUV(uv);
+        st.AddVertex(new Vector3(v.LocalX, v.LocalY, 0));
+    }
+
+    private static Rect2 FirstVariant(TileAtlasBuilder atlas, int kind)
+    {
+        if (!atlas.TypeVariants.TryGetValue(kind, out var list) || list.Length == 0)
+            return new Rect2(0, 0, 1, 1);
+        return list[0];
     }
 
     private static Rect2 PickVariant(TileAtlasBuilder atlas, int kind, int cx, int cy)
@@ -142,28 +126,10 @@ public static class MapMeshBuilder
         return ao / 4f;
     }
 
-    private static int DominantType(int[] types)
-    {
-        var best = types[0];
-        var bestCount = 0;
-        foreach (var t in types)
-        {
-            var c = types.Count(x => x == t);
-            if (c > bestCount)
-            {
-                best = t;
-                bestCount = c;
-            }
-        }
-        return best;
-    }
-
     private static Vector2 UvInRect(Rect2 rect, float u, float v) =>
         new(rect.Position.X + u * rect.Size.X, rect.Position.Y + v * rect.Size.Y);
 
-    private static Godot.Vector2 ToGodot(System.Numerics.Vector2 v) => new(v.X, v.Y);
-
-    private static Godot.Vector3 ToV3(Godot.Vector2 v) => new(v.X, v.Y, 0);
+    private static float Fract(float v) => v - MathF.Floor(v);
 
     private sealed class Mulberry32
     {

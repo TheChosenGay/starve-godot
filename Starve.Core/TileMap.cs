@@ -17,13 +17,18 @@ public sealed class TileMap
     private readonly byte[] _types;
 
     public TileMap(MapConfig cfg)
+        : this(cfg.Width, cfg.Height, cfg.CornerHeights.ToByteArray(), cfg.CornerTypes.ToByteArray())
     {
-        Width = cfg.Width;
-        Height = cfg.Height;
+    }
+
+    public TileMap(int width, int height, byte[] heights, byte[] types)
+    {
+        Width = width;
+        Height = height;
         CornerW = Width + 1;
         CornerH = Height + 1;
-        _heights = cfg.CornerHeights.ToByteArray();
-        _types = cfg.CornerTypes.ToByteArray();
+        _heights = heights;
+        _types = types;
     }
 
     /// <summary>角高度（0~255；越界返回 0）。</summary>
@@ -42,19 +47,8 @@ public sealed class TileMap
         return i < _types.Length ? _types[i] : 0;
     }
 
-    /// <summary>地面高度查询：所在格子四角双线性插值。</summary>
-    public float HeightAt(float wx, float wy)
-    {
-        var x0 = (int)MathF.Floor(wx);
-        var y0 = (int)MathF.Floor(wy);
-        var fx = wx - x0;
-        var fy = wy - y0;
-        var h00 = CornerHeight(x0, y0);
-        var h10 = CornerHeight(x0 + 1, y0);
-        var h01 = CornerHeight(x0, y0 + 1);
-        var h11 = CornerHeight(x0 + 1, y0 + 1);
-        return h00 + (h10 - h00) * fx + (h01 + (h11 - h01) * fx - (h00 + (h10 - h00) * fx)) * fy;
-    }
+    /// <summary>地面高度：缓坡双线性；高差 ≥ 1 的边收成崖壁带，与坡度网格一致。</summary>
+    public float HeightAt(float wx, float wy) => SlopeMesh.SampleHeight(this, wx, wy);
 
     /// <summary>画家排序深度：wx + wy + 高度（越高越靠前/靠上）。</summary>
     public float DepthAt(float wx, float wy) => wx + wy + HeightAt(wx, wy);

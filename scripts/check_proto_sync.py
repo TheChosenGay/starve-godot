@@ -13,6 +13,7 @@ PAIRS = (
     ("proto/game.proto", "pkg/proto/game/game.proto"),
     ("proto/message.proto", "pkg/proto/message.proto"),
     ("testdata/movement_golden.json", "testdata/movement_golden.json"),
+    ("testdata/slope_speed_golden.json", "testdata/slope_speed_golden.json"),
 )
 
 

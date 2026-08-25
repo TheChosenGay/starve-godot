@@ -5,9 +5,8 @@ using Godot;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 地形贴图图集：把 sheet-cut 菱形切图预处理（裁菱形 → 旋转 45° 填满 128×128）
-/// 打包进一张图集，供地形网格按 UV 采样；水/未知用程序 value-noise 贴图。
-/// 变体映射与 web 端 terrain-splat.ts 保持一致。
+/// 地形贴图图集：无缝草/沙/雪与岩切图打包进一张图集。
+/// 地面按世界 XY 在格内 fract 采样；水/未知用程序 value-noise 贴图。
 /// </summary>
 public sealed class TileAtlasBuilder
 {
@@ -85,7 +84,7 @@ public sealed class TileAtlasBuilder
         return builder;
     }
 
-    /// <summary>加载 1024² 无缝贴图并缩到 128²（菱形 UV 直接采样整幅图）。</summary>
+    /// <summary>加载 1024² 无缝贴图并缩到 128²，供世界 UV 在图集格内重复采样。</summary>
     private static Image LoadSeamless(string path)
     {
         var tex = GD.Load<Texture2D>($"res://assets/terrain_seamless/{path}.png");

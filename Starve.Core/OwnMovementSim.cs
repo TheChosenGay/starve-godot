@@ -33,6 +33,8 @@ public sealed class OwnMovementSim
     private int _softCorrections;
     private int _hardSnaps;
 
+    public Func<float, float, float>? HeightAt { get; set; }
+
     public OwnMovementSim(Func<int, int, bool> walkable) => _walkable = walkable;
 
     public bool Has => _has;
@@ -66,8 +68,8 @@ public sealed class OwnMovementSim
 
     /// <summary>
     /// 推进一帧，与服务端 MoveSystem 同公式：
-    /// 位移 = speed×dt，对角归一化（÷√2），跨格校验可走、不可走贴墙停在边界，
-    /// 停止时子格对齐整格。公式一致 ⇒ 服务端校正误差趋近 0，不再有“拉一下”。
+    /// 位移 = effective_speed × 坡度因子 × dt，对角归一化（÷√2），跨格校验可走、不可走贴墙停在边界。
+    /// 坡度因子由 HeightAt 与未旋转等距投影边长比得出，无高度场时为 1。
     /// </summary>
     public void Tick(float dtMs)
     {
@@ -82,7 +84,9 @@ public sealed class OwnMovementSim
         while (remainingMs > 0)
         {
             var sliceMs = MathF.Min(remainingMs, 50f);
-            var dist = _speed * sliceMs / 1000f;
+            var pos = Position;
+            var factor = SlopeSpeed.Factor(pos.X, pos.Y, _dirX, _dirY, HeightAt);
+            var dist = _speed * factor * sliceMs / 1000f;
             if (_dirX != 0 && _dirY != 0)
             {
                 dist /= MathF.Sqrt(2f); // 对角归一化：任意方向同速

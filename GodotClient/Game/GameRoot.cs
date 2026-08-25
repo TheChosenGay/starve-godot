@@ -610,6 +610,7 @@ public partial class GameRoot : Node
         {
             _tilemap = new TileMap(map);
             _camera.HeightAt = _tilemap.HeightAt;
+            if (_ownSim is not null) _ownSim.HeightAt = _tilemap.HeightAt;
             _mapView!.SetMap(_tilemap);
             _entityLayer!.SetTilemap(_tilemap);
             _entityLayer.SetViewRotation(_viewRotation);

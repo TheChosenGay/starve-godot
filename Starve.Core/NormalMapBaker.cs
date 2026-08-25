@@ -3,7 +3,7 @@ using System;
 namespace Starve.Core;
 
 /// <summary>
-/// 全图法线图：每格一个纹素，RGB 编码该格地面法线（高度场梯度 → 归一化）。
+/// 全图法线图：每格一个纹素，RGB 编码该格地面法线（坡度网格高度梯度 → 归一化）。
 /// 水面格法线取平；slopeScale 让坡面不至于过陡。纯逻辑，输出 RGBA 缓冲。
 /// </summary>
 public static class NormalMapBaker
@@ -18,12 +18,8 @@ public static class NormalMapBaker
         {
             for (var cx = 0; cx < w; cx++)
             {
-                var h00 = tm.CornerHeight(cx, cy);
-                var h10 = tm.CornerHeight(cx + 1, cy);
-                var h01 = tm.CornerHeight(cx, cy + 1);
-                var h11 = tm.CornerHeight(cx + 1, cy + 1);
-                var dx = ((h10 - h00) + (h11 - h01)) / 2f;
-                var dy = ((h01 - h00) + (h11 - h10)) / 2f;
+                var dx = tm.HeightAt(cx + 0.85f, cy + 0.5f) - tm.HeightAt(cx + 0.15f, cy + 0.5f);
+                var dy = tm.HeightAt(cx + 0.5f, cy + 0.85f) - tm.HeightAt(cx + 0.5f, cy + 0.15f);
 
                 var water = (tm.CornerType(cx, cy) == 1 ? 1 : 0) +
                             (tm.CornerType(cx + 1, cy) == 1 ? 1 : 0) +

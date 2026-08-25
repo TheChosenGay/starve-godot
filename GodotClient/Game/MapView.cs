@@ -38,14 +38,18 @@ public partial class MapView : Node2D
         }
     }
 
-    /// <summary>canvas_item shader：采样图集 × 顶点色（顶点色烘焙高度/坡度/AO）。</summary>
+    /// <summary>canvas_item：图集 UV 已在 CPU 按世界 XY / 崖壁高度算好，顶点色为高度与 AO。</summary>
     private static ShaderMaterial MakeAtlasMaterial(Texture2D atlas)
     {
         var shader = new Shader
         {
-            Code = "shader_type canvas_item;\n" +
-                   "uniform sampler2D uAtlas;\n" +
-                   "void fragment() { COLOR = texture(uAtlas, UV) * COLOR; }",
+            Code = """
+shader_type canvas_item;
+uniform sampler2D uAtlas;
+void fragment() {
+	COLOR = texture(uAtlas, UV) * vec4(COLOR.rgb, 1.0);
+}
+""",
         };
         var mat = new ShaderMaterial();
         mat.Shader = shader;
