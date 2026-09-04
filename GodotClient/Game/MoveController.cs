@@ -16,6 +16,9 @@ public partial class MoveController : Node
     public Action<(int Dx, int Dy)>? OnMove;
     public Action<(int Dx, int Dy)>? OnIntent;
 
+    /// <summary>当前视角偏航（弧度）。Q/E 环绕后把屏幕方向转成世界 dx/dy。</summary>
+    public float ViewYaw { get; private set; }
+
     private readonly HashSet<string> _held = new();
     private double _accum;
     private (int Dx, int Dy)? _lastDir;
@@ -30,6 +33,13 @@ public partial class MoveController : Node
         _accum = 0;
         _lastDir = (0, 0);
         OnIntent?.Invoke((0, 0));
+    }
+
+    public void SetViewYaw(float radians)
+    {
+        if (MathF.Abs(ViewYaw - radians) < 1e-5f) return;
+        ViewYaw = radians;
+        if (_held.Count > 0 && !_blocked) SendHeld();
     }
 
     public override void _Input(InputEvent @event)
@@ -77,7 +87,8 @@ public partial class MoveController : Node
     {
         if (_held.Count == 0) return;
         var dirs = _held.Select(k => MoveInput.TryMap(k)!.Value);
-        SendDir(MoveInput.Combine(dirs));
+        var combined = MoveInput.Combine(dirs);
+        SendDir(MoveInput.WithViewYaw(combined.Dx, combined.Dy, ViewYaw));
     }
 
     private void SendDir((int Dx, int Dy) dir)

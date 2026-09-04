@@ -17,8 +17,13 @@ public static class IsoCamera3D
     /// <summary>偏航角（度）：绕世界 Y 转 45°，让 XZ 轴在屏幕上成菱形。</summary>
     public const float YawDegrees = 45f;
 
-    /// <summary>相机到注视点的距离（正交投影下不影响画面大小，只影响近远裁剪）。</summary>
-    public const float Distance = 64f;
+    /// <summary>相机到注视点的距离。正交下几乎不影响构图，但太远近裁剪会切到角色。</summary>
+    public const float Distance = 36f;
+
+    /// <summary>
+    /// 3D 正交视野相对「与 2D 同跨度」的倍率。越小角色越大、看得越近。
+    /// </summary>
+    public const float ViewScale = 0.5f;
 
     /// <summary>世界格坐标 → 3D（X=wx，Y=高度，Z=wy）。</summary>
     public static Vector3 WorldTo3D(float wx, float wy, float height = 0) =>
@@ -33,7 +38,7 @@ public static class IsoCamera3D
         -WorldTo3D(camX, camY, height);
 
     /// <summary>
-    /// 正交相机垂直尺寸：让视口高度覆盖与 2D 等距相同的 (wx+wy) 跨度。
+    /// 正交相机垂直尺寸：默认比 2D 等距更近（ViewScale），角色在画面里更大。
     /// </summary>
     public static float OrthoSize(float viewHeightPx, float zoom)
     {
@@ -42,7 +47,7 @@ public static class IsoCamera3D
         // 地面上 Δ(wx+wy)=1 时，相机局部 Y 的增量 = sin(pitch)/√2
         var cameraYPerWxPlusWy = MathF.Sin(pitch) / MathF.Sqrt(2f);
         var visibleWxPlusWy = viewHeightPx / ((IsoMath.Step / 2f) * z);
-        return cameraYPerWxPlusWy * visibleWxPlusWy;
+        return cameraYPerWxPlusWy * visibleWxPlusWy * ViewScale;
     }
 
     /// <summary>
@@ -51,12 +56,20 @@ public static class IsoCamera3D
     /// </summary>
     public static (Vector3 Position, Vector3 RotationDegrees) CameraPose(float viewYawRadians = 0)
     {
-        var rotation = new Vector3(
-            -PitchDegrees,
-            YawDegrees + viewYawRadians * (180f / MathF.PI),
-            0);
+        var yaw = YawDegrees + viewYawRadians * (180f / MathF.PI);
+        var rotation = new Vector3(-PitchDegrees, yaw, 0);
         var forward = ForwardYxz(rotation);
         return (-forward * Distance, rotation);
+    }
+
+    /// <summary>
+    /// 相机挂在绕 Y 旋转的枢轴下时的本地偏移：+Z 后方、+Y 抬高，俯仰 PitchDegrees。
+    /// 枢轴放在玩家身上并只转 Y，即为水平环绕，世界本身不转。
+    /// </summary>
+    public static Vector3 OrbitLocalOffset()
+    {
+        var elev = PitchDegrees * (MathF.PI / 180f);
+        return new Vector3(0, Distance * MathF.Sin(elev), Distance * MathF.Cos(elev));
     }
 
     /// <summary>相机跟随玩家：世界不动，相机绕目标点摆在等距方位。</summary>

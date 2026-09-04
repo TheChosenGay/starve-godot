@@ -39,5 +39,21 @@ public static class MoveInput
         return (Clamp(dx), Clamp(dy));
     }
 
+    /// <summary>
+    /// 把默认等距世界方向绕竖直轴转 viewYaw，使 WASD 始终对应当前画面上/下/左/右。
+    /// </summary>
+    public static (int Dx, int Dy) WithViewYaw(int dx, int dy, float viewYawRadians)
+    {
+        if (dx == 0 && dy == 0) return (0, 0);
+        var c = MathF.Cos(viewYawRadians);
+        var s = MathF.Sin(viewYawRadians);
+        var wx = dx * c + dy * s;
+        var wy = -dx * s + dy * c;
+        return (SnapAxis(wx), SnapAxis(wy));
+    }
+
+    private static int SnapAxis(float v) =>
+        v > 0.38f ? 1 : v < -0.38f ? -1 : 0;
+
     private static int Clamp(int v) => Math.Clamp(v, -1, 1);
 }

@@ -99,8 +99,15 @@ public partial class PigmanActor3D : Node3D
         if (visual is null) return;
         foreach (var child in visual.FindChildren("*", "MeshInstance3D", true, false))
         {
-            if (child is MeshInstance3D mesh && mesh.MaterialOverride is ShaderMaterial sm)
-                ToonMaterials.SetFlash(sm, on);
+            if (child is not MeshInstance3D mesh) continue;
+            if (mesh.MaterialOverride is ShaderMaterial over)
+                ToonMaterials.SetFlash(over, on);
+            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            for (var i = 0; i < surfaces; i++)
+            {
+                if (mesh.GetSurfaceOverrideMaterial(i) is ShaderMaterial surface)
+                    ToonMaterials.SetFlash(surface, on);
+            }
         }
     }
 

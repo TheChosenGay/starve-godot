@@ -20,7 +20,7 @@ public partial class MapView3D : Node3D
 
         var cols = Mathf.CeilToInt(tm.Width / (float)MapMeshBuilder.ChunkTiles);
         var rows = Mathf.CeilToInt(tm.Height / (float)MapMeshBuilder.ChunkTiles);
-        var mat = MakeAtlasMaterial(_atlas.Atlas);
+        var mat = ToonMaterials.CreateTerrain(_atlas.Atlas);
         for (var r = 0; r < rows; r++)
         {
             for (var c = 0; c < cols; c++)
@@ -38,26 +38,5 @@ public partial class MapView3D : Node3D
                 });
             }
         }
-    }
-
-    /// <summary>spatial：图集 UV 已在 CPU 算好，顶点色为高度与 AO。</summary>
-    private static ShaderMaterial MakeAtlasMaterial(Texture2D atlas)
-    {
-        var shader = new Shader
-        {
-            Code = """
-shader_type spatial;
-render_mode cull_back, specular_disabled;
-uniform sampler2D uAtlas : source_color, filter_linear_mipmap;
-void fragment() {
-	ALBEDO = texture(uAtlas, UV).rgb * COLOR.rgb;
-	ROUGHNESS = 0.92;
-}
-""",
-        };
-        var mat = new ShaderMaterial();
-        mat.Shader = shader;
-        mat.SetShaderParameter("uAtlas", atlas);
-        return mat;
     }
 }

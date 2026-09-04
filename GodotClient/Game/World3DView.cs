@@ -6,7 +6,7 @@ using TileMap = Starve.Core.TileMap;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 3D 世界容器：世界固定，相机 45° 俯视跟随玩家；地面来自 TileMap 高度场。
+/// 3D 世界容器：世界钉在原点不转；相机枢轴跟玩家，只绕 Y 水平环绕。
 /// </summary>
 public partial class World3DView : Node3D
 {
@@ -18,11 +18,15 @@ public partial class World3DView : Node3D
     private readonly Node3D _world;
     private readonly MeshInstance3D _flatGround;
     private readonly Node3D _probes;
+    private MeshInstance3D? _toonMark;
 
     public World3DView()
     {
         Name = "World3D";
-        var (pos, rot) = IsoCamera3D.CameraPose();
+
+        _pivot = new Node3D { Name = "CameraPivot" };
+        AddChild(_pivot);
+        var offset = IsoCamera3D.OrbitLocalOffset();
         _camera = new Camera3D
         {
             Name = "IsoCamera",
@@ -31,24 +35,22 @@ public partial class World3DView : Node3D
             Size = IsoCamera3D.OrthoSize(1080, 1),
             Near = 0.1f,
             Far = 200,
-            Position = ToGodot(pos),
-            RotationDegrees = ToGodot(rot),
+            Position = ToGodot(offset),
+            RotationDegrees = new Vector3(-IsoCamera3D.PitchDegrees, 0, 0),
         };
-        AddChild(_camera);
+        _pivot.AddChild(_camera);
 
         AddChild(new DirectionalLight3D
         {
             Name = "Sun",
-            RotationDegrees = new Vector3(-55, 25, 0),
-            LightEnergy = 1.35f,
-            LightColor = new Color(1f, 0.96f, 0.88f),
+            RotationDegrees = new Vector3(-50, 35, 0),
+            LightEnergy = 1.55f,
+            LightColor = new Color(1f, 0.95f, 0.82f),
             ShadowEnabled = false,
         });
 
-        _pivot = new Node3D { Name = "WorldPivot3D" };
-        AddChild(_pivot);
         _world = new Node3D { Name = "World" };
-        _pivot.AddChild(_world);
+        AddChild(_world);
         _flatGround = MakeGround();
         _world.AddChild(_flatGround);
         _probes = new Node3D { Name = "DebugProbes" };
@@ -75,12 +77,69 @@ public partial class World3DView : Node3D
     public void SyncView(float camX, float camY, float height, float zoom, float viewRotation, Vector2 viewport)
     {
         var target = IsoCamera3D.WorldTo3D(camX, camY, height);
-        var (rel, rot) = IsoCamera3D.CameraPose(viewRotation);
-        _camera.Position = ToGodot(target + rel);
-        _camera.RotationDegrees = ToGodot(rot);
+        _pivot.Position = ToGodot(target);
+        _pivot.RotationDegrees = new Vector3(
+            0,
+            IsoCamera3D.YawDegrees + viewRotation * (180f / MathF.PI),
+            0);
+        _camera.Position = ToGodot(IsoCamera3D.OrbitLocalOffset());
+        _camera.RotationDegrees = new Vector3(-IsoCamera3D.PitchDegrees, 0, 0);
         _camera.Size = IsoCamera3D.OrthoSize(viewport.Y, zoom);
-        _pivot.Rotation = Vector3.Zero;
         _world.Position = Vector3.Zero;
+        _world.Rotation = Vector3.Zero;
+    }
+
+    /// <summary>按相机射线点选最近实体（点模型身体，不依赖脚底落点）。</summary>
+    public bool TryPickVisual(Vector2 screen, out ulong id, out Node3D node)
+    {
+        id = 0;
+        node = null!;
+        var origin = _camera.ProjectRayOrigin(screen);
+        var dir = _camera.ProjectRayNormal(screen);
+        if (dir.LengthSquared() < 1e-10f) return false;
+        dir = dir.Normalized();
+
+        var best = 1.6f;
+        foreach (var (eid, visual) in Entities.VisualsById)
+        {
+            if (!GodotObject.IsInstanceValid(visual)) continue;
+            var center = visual.GlobalPosition + new Vector3(0, 0.7f, 0);
+            var t = (center - origin).Dot(dir);
+            if (t < 0.15f) continue;
+            var dist = (origin + dir * t).DistanceTo(center);
+            if (dist >= best) continue;
+            best = dist;
+            id = eid;
+            node = visual;
+        }
+        return node is not null;
+    }
+
+    public void ShowToonMark(Node3D? host)
+    {
+        _toonMark ??= MakeToonMark();
+        var parent = _toonMark.GetParent();
+        if (parent is not null) parent.RemoveChild(_toonMark);
+        if (host is null || !GodotObject.IsInstanceValid(host)) return;
+        host.AddChild(_toonMark);
+        _toonMark.Position = new Vector3(0, 0.05f, 0);
+        _toonMark.Visible = true;
+    }
+
+    private static MeshInstance3D MakeToonMark()
+    {
+        var mat = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(1f, 0.85f, 0.2f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        };
+        return new MeshInstance3D
+        {
+            Name = "ToonSelectMark",
+            Mesh = new TorusMesh { InnerRadius = 0.42f, OuterRadius = 0.52f, Material = mat },
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
     }
 
     /// <summary>屏幕点 → 世界格：射线与高度场求交，迭代一次修正高度。</summary>

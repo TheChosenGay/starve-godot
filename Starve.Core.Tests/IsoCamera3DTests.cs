@@ -40,7 +40,7 @@ public sealed class IsoCamera3DTests
         var wide = IsoCamera3D.OrthoSize(1080f, 1f);
         var tight = IsoCamera3D.OrthoSize(1080f, 2f);
         Assert.InRange(tight, wide / 2f - 1e-4f, wide / 2f + 1e-4f);
-        Assert.Equal(54f, wide, 3);
+        Assert.Equal(54f * IsoCamera3D.ViewScale, wide, 3);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public sealed class IsoCamera3DTests
         const float viewH = 1080f;
         const float zoom = 1f;
         var pitch = IsoCamera3D.PitchDegrees * (MathF.PI / 180f);
-        var expected = MathF.Sin(pitch) / MathF.Sqrt(2f) * (viewH / (IsoMath.Step / 2f * zoom));
+        var expected = MathF.Sin(pitch) / MathF.Sqrt(2f) * (viewH / (IsoMath.Step / 2f * zoom)) * IsoCamera3D.ViewScale;
         Assert.Equal(expected, IsoCamera3D.OrthoSize(viewH, zoom), 4);
     }
 
@@ -68,6 +68,33 @@ public sealed class IsoCamera3DTests
         Assert.Equal(0f, lookAt.Y, 4);
         Assert.Equal(0f, lookAt.Z, 4);
         Assert.Equal(IsoCamera3D.Distance, position.Length(), 4);
+    }
+
+    [Fact]
+    public void CameraPose_QuarterTurnStillLooksAtOrigin()
+    {
+        var (position, rotation) = IsoCamera3D.CameraPose(MathF.PI / 2f);
+        var forward = IsoCamera3D.ForwardYxz(rotation);
+        var lookAt = position + forward * IsoCamera3D.Distance;
+        Assert.Equal(0f, lookAt.X, 4);
+        Assert.Equal(0f, lookAt.Y, 4);
+        Assert.Equal(0f, lookAt.Z, 4);
+        Assert.Equal(IsoCamera3D.YawDegrees + 90f, rotation.Y, 3);
+    }
+
+    [Fact]
+    public void OrbitLocalOffset_MatchesCameraPoseAtDefaultYaw()
+    {
+        var local = IsoCamera3D.OrbitLocalOffset();
+        var yaw = IsoCamera3D.YawDegrees * (MathF.PI / 180f);
+        var world = new System.Numerics.Vector3(
+            local.Z * MathF.Sin(yaw),
+            local.Y,
+            local.Z * MathF.Cos(yaw));
+        var (pos, _) = IsoCamera3D.CameraPose();
+        Assert.Equal(pos.X, world.X, 4);
+        Assert.Equal(pos.Y, world.Y, 4);
+        Assert.Equal(pos.Z, world.Z, 4);
     }
 
     [Fact]

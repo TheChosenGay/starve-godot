@@ -54,6 +54,7 @@ public partial class GameRoot : Node
     private GhostNode? _ghost;
     private Control? _uiRoot;
     private Hud? _hud;
+    private ToonTunePanel? _toonPanel;
     private SfxService? _sfx;
     private DamageFlashOverlay? _damageFlash;
     private MoveController? _moveController;
@@ -141,8 +142,8 @@ public partial class GameRoot : Node
             env.BackgroundMode = Godot.Environment.BGMode.Color;
             env.BackgroundColor = new Color(0.52f, 0.68f, 0.82f);
             env.AmbientLightSource = Godot.Environment.AmbientSource.Color;
-            env.AmbientLightColor = new Color(0.55f, 0.6f, 0.7f);
-            env.AmbientLightEnergy = 0.45f;
+            env.AmbientLightColor = new Color(0.42f, 0.48f, 0.58f);
+            env.AmbientLightEnergy = 0.22f;
         }
         AddChild(new WorldEnvironment { Environment = env });
 
@@ -219,14 +220,18 @@ public partial class GameRoot : Node
         FitUiRoot();
         CallDeferred(MethodName.FitUiRoot);
         if (_render3D) _hud.Log("渲染：3D 主场景 · 玩家=猪人（--render-2d 回 2D）");
+        if (_render3D && OS.IsDebugBuild())
+        {
+            _toonPanel = new ToonTunePanel
+            {
+                CollectActors = () => _world3D!.Entities.Visuals,
+                TerrainRoot = _world3D!.Terrain,
+            };
+            _uiRoot.AddChild(_toonPanel);
+            _hud.Log("Toon 调参：F1 显隐，勾选「点选物体」后点击角色只改材质");
+        }
 
         AddChild(new CameraController { Camera = _camera });
-        // 截图/演示辅助：STARVE_DEMO_ROTATE=45 启动即旋转视角
-        if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
-            float.TryParse(rr, out var deg))
-        {
-            RotateView(deg * Mathf.Pi / 180f);
-        }
         var move = new MoveController();
         _moveController = move;
         _ownSim = new OwnMovementSim(IsWalkable);
@@ -256,6 +261,11 @@ public partial class GameRoot : Node
             _ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
         };
         AddChild(move);
+        if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
+            float.TryParse(rr, out var deg))
+        {
+            RotateView(deg * Mathf.Pi / 180f);
+        }
 
         _hud.Log("连接中…");
         _ = StartAsync();
@@ -492,6 +502,14 @@ public partial class GameRoot : Node
             : null;
         if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
         _camera.Tick((float)(delta * 1000));
+        if (_render3D)
+        {
+            var orbit = 0f;
+            if (Input.IsPhysicalKeyPressed(Key.Q)) orbit -= 1f;
+            if (Input.IsPhysicalKeyPressed(Key.E)) orbit += 1f;
+            if (orbit != 0f)
+                RotateView(orbit * MathF.PI / 2f * (float)delta);
+        }
 
         var viewport = GetViewport().GetVisibleRect().Size;
         if (!_freeCamera)
@@ -1409,8 +1427,13 @@ public partial class GameRoot : Node
         var name = OS.GetKeycodeString(key.Keycode);
         if (key.Pressed)
         {
-            if (name == "Q") RotateView(-Mathf.Pi / 4);
-            else if (name == "E") RotateView(Mathf.Pi / 4);
+            if (_render3D && name == "F1" && _toonPanel is not null)
+                _toonPanel.Visible = !_toonPanel.Visible;
+            if (!_render3D)
+            {
+                if (name == "Q") RotateView(-Mathf.Pi / 4);
+                else if (name == "E") RotateView(Mathf.Pi / 4);
+            }
         }
         var intent = name switch
         {
@@ -1450,6 +1473,20 @@ public partial class GameRoot : Node
         else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
             if (PointerOnHud(mb.Position)) return;
+            if (_toonPanel is { Visible: true, PickMode: true } && _world3D is not null)
+            {
+                if (_world3D.TryPickVisual(mb.Position, out var pickId, out var visual))
+                {
+                    _toonPanel.BindSelected(pickId, visual);
+                    _world3D.ShowToonMark(visual);
+                    _hud?.Log($"Toon 已选 {visual.Name}，拖滑条只改这个");
+                }
+                else
+                {
+                    _hud?.Log("没点到模型，对准角色身体再点");
+                }
+                return;
+            }
             if (GameplayLocked()) return;
             if (_ownDead)
             {
@@ -1620,8 +1657,11 @@ public partial class GameRoot : Node
     {
         if (_hud is null) return false;
         if (_hud.HitsInteractive(screen)) return true;
+        if (_toonPanel is { Visible: true } && _toonPanel.Hits(screen)) return true;
         var hovered = GetViewport()?.GuiGetHoveredControl();
-        return hovered is not null && (hovered == _hud || _hud.IsAncestorOf(hovered));
+        if (hovered is null) return false;
+        if (hovered == _hud || _hud.IsAncestorOf(hovered)) return true;
+        return _toonPanel is not null && (hovered == _toonPanel || _toonPanel.IsAncestorOf(hovered));
     }
 
     private bool GameplayLocked() =>
@@ -1682,11 +1722,12 @@ public partial class GameRoot : Node
         _ => "?",
     };
 
-    /// <summary>Q/E 旋转视角：WorldPivot 固定在屏幕中心，世界围绕跟随中的玩家旋转。</summary>
+    /// <summary>Q/E：2D 为 45° 步进转菱形；3D 为按住绕玩家水平环绕。</summary>
     private void RotateView(float delta)
     {
         _viewRotation += delta;
         _worldRenderer?.SetViewRotation(_viewRotation);
+        _moveController?.SetViewYaw(_viewRotation);
     }
 
     /// <summary>屏幕坐标经场景变换逆投影为世界坐标，覆盖 2D 旋转/缩放或 3D 正交射线。</summary>

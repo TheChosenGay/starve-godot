@@ -41,6 +41,11 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     public void SetViewRotation(float radians) { }
     public void SetDayLight(float dayLight) { }
 
+    public IEnumerable<Node3D> Visuals => _nodes.Values;
+    public IReadOnlyDictionary<ulong, Node3D> VisualsById => _nodes;
+
+    public bool TryGetVisual(ulong id, out Node3D node) => _nodes.TryGetValue(id, out node!);
+
     public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
     {
         foreach (var id in _nodes.Keys.ToArray())
