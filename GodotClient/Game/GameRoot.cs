@@ -249,10 +249,12 @@ public partial class GameRoot : Node
             if (GameplayLocked())
             {
                 _ownSim?.SetIntent(0, 0);
+                _worldRenderer?.SetOwnMoveDir(0, 0);
                 _ownIntentMoving = false;
                 return;
             }
             _ownSim?.SetIntent(dir.Dx, dir.Dy);
+            _worldRenderer?.SetOwnMoveDir(dir.Dx, dir.Dy);
             if (dir.Dx != 0 || dir.Dy != 0)
             {
                 _worldRenderer?.CancelActionForMovement(_ownId);
@@ -471,6 +473,7 @@ public partial class GameRoot : Node
             _demoNextAt = now + 100;
             _client?.Commands.Move(dm.Dx, dm.Dy);
             _ownSim?.SetIntent(dm.Dx, dm.Dy);
+            _worldRenderer?.SetOwnMoveDir(dm.Dx, dm.Dy);
             if (dm.Dx != 0 || dm.Dy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
         }
         if (_client is { } predictionClient &&
@@ -507,6 +510,7 @@ public partial class GameRoot : Node
             var orbit = 0f;
             if (Input.IsPhysicalKeyPressed(Key.Q)) orbit -= 1f;
             if (Input.IsPhysicalKeyPressed(Key.E)) orbit += 1f;
+            _moveController?.SetOrbiting(orbit != 0f);
             if (orbit != 0f)
                 RotateView(orbit * MathF.PI / 2f * (float)delta);
         }
@@ -725,7 +729,11 @@ public partial class GameRoot : Node
                 if (!_ownIntentMoving && !GameplayLocked())
                 {
                     var pathDir = _ownPathMoving ? mv!.Path[0] : null;
-                    _ownSim?.SetIntent(pathDir?.Dx ?? 0, pathDir?.Dy ?? 0);
+                    var pdx = pathDir?.Dx ?? 0;
+                    var pdy = pathDir?.Dy ?? 0;
+                    _ownSim?.SetIntent(pdx, pdy);
+                    if (_ownPathMoving)
+                        _worldRenderer?.SetOwnMoveDir(pdx, pdy);
                 }
                 // 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
                 var serverStopped = mv is { DirX: 0, DirY: 0 } &&
@@ -1683,6 +1691,7 @@ public partial class GameRoot : Node
         if (locked)
         {
             _ownSim?.SetIntent(0, 0);
+            _worldRenderer?.SetOwnMoveDir(0, 0);
             _ownIntentMoving = false;
             _ownPathMoving = false;
             _autoActions.Release(AutoActionIntent.Any);

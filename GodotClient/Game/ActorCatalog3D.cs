@@ -32,7 +32,7 @@ public static class ActorCatalog3D
         Clip = PigmanActor3D.PigmanClip.Walk,
         Playing = false,
         YawDegrees = 0f,
-        ApplyToon = true,
+        ApplyToon = false,
     };
 
     private static Node3D CreateSprite(CharacterPreviewKind kind) => new ActorPreview3D

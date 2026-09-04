@@ -23,6 +23,7 @@ public partial class MoveController : Node
     private double _accum;
     private (int Dx, int Dy)? _lastDir;
     private bool _blocked;
+    private bool _orbiting;
 
     public void SetBlocked(bool blocked)
     {
@@ -39,7 +40,17 @@ public partial class MoveController : Node
     {
         if (MathF.Abs(ViewYaw - radians) < 1e-5f) return;
         ViewYaw = radians;
-        if (_held.Count > 0 && !_blocked) SendHeld();
+        // 转相机时不重映射走路方向，避免 8 向吸附每帧改意图导致抖动。
+        if (_orbiting || _held.Count == 0 || _blocked) return;
+        SendHeld();
+    }
+
+    public void SetOrbiting(bool orbiting)
+    {
+        if (_orbiting == orbiting) return;
+        _orbiting = orbiting;
+        if (!orbiting && _held.Count > 0 && !_blocked)
+            SendHeld();
     }
 
     public override void _Input(InputEvent @event)
@@ -86,6 +97,11 @@ public partial class MoveController : Node
     private void SendHeld()
     {
         if (_held.Count == 0) return;
+        if (_orbiting && _lastDir is { } last && (last.Dx != 0 || last.Dy != 0))
+        {
+            SendDir(last);
+            return;
+        }
         var dirs = _held.Select(k => MoveInput.TryMap(k)!.Value);
         var combined = MoveInput.Combine(dirs);
         SendDir(MoveInput.WithViewYaw(combined.Dx, combined.Dy, ViewYaw));
@@ -94,6 +110,11 @@ public partial class MoveController : Node
     private void SendDir((int Dx, int Dy) dir)
     {
         _accum = 0;
+        if (_lastDir == dir)
+        {
+            OnMove?.Invoke(dir);
+            return;
+        }
         _lastDir = dir;
         OnMove?.Invoke(dir);
         OnIntent?.Invoke(dir);

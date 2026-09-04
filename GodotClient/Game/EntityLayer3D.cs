@@ -26,6 +26,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     private SfxService? _sfx;
     private TileMap? _tilemap;
     private ulong _ownId;
+    private int _ownDx;
+    private int _ownDy;
     private long _lastNow;
 
     public EntityLayer3D()
@@ -40,6 +42,11 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     public void SetTilemap(TileMap? tm) => _tilemap = tm;
     public void SetViewRotation(float radians) { }
     public void SetDayLight(float dayLight) { }
+    public void SetOwnMoveDir(int dx, int dy)
+    {
+        _ownDx = dx;
+        _ownDy = dy;
+    }
 
     public IEnumerable<Node3D> Visuals => _nodes.Values;
     public IReadOnlyDictionary<ulong, Node3D> VisualsById => _nodes;
@@ -110,19 +117,19 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             var world = IsoCamera3D.WorldTo3D(p.X, p.Y, h);
             node.Position = new Vector3(world.X, world.Y, world.Z);
 
+            var moving = isMoving(id);
+            var dx = 0f;
+            var dy = 0f;
             if (_lastPos.TryGetValue(id, out var last))
             {
-                var dx = p.X - last.X;
-                var dy = p.Y - last.Y;
-                if (MathF.Abs(dx) + MathF.Abs(dy) > 0.03f)
-                {
-                    node.Rotation = new Vector3(0, IsoCamera3D.FacingYaw(dx, dy), 0);
-                }
+                dx = p.X - last.X;
+                dy = p.Y - last.Y;
             }
+            FaceFromIntentOrMotion(id, node, dx, dy, moving);
             _lastPos[id] = (p.X, p.Y);
 
             if (node is PigmanActor3D pigman)
-                pigman.SetLocomotion(isMoving(id));
+                pigman.SetLocomotion(moving);
 
             if (_flashUntil.TryGetValue(id, out var until))
             {
@@ -136,7 +143,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                     ToonMaterials.SetFlash(mat, flashing);
             }
 
-            if (isMoving(id) && id == _ownId) MaybeFootstep(id, now);
+            if (moving && id == _ownId) MaybeFootstep(id, now);
         }
     }
 
@@ -269,6 +276,22 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _heightSm.Remove(id);
         _flashUntil.Remove(id);
         _footstepAt.Remove(id);
+    }
+
+    private void FaceFromIntentOrMotion(ulong id, Node3D node, float dx, float dy, bool moving)
+    {
+        float yaw;
+        if (id == _ownId)
+        {
+            if (_ownDx == 0 && _ownDy == 0) return;
+            yaw = IsoCamera3D.FacingYaw(_ownDx, _ownDy);
+        }
+        else
+        {
+            if (!moving || MathF.Abs(dx) + MathF.Abs(dy) <= 0.08f) return;
+            yaw = IsoCamera3D.FacingYaw(dx, dy);
+        }
+        node.Rotation = new Vector3(0, Mathf.LerpAngle(node.Rotation.Y, yaw, 0.45f), 0);
     }
 
     private float SmoothHeight(ulong id, float target, float deltaMs)

@@ -26,7 +26,7 @@ public partial class ToonTunePanel : Control
     private readonly CheckButton _pick = new() { Text = "点选物体调参（已开）", ButtonPressed = true };
     private PanelContainer? _frame;
     private readonly OptionButton _scope = new();
-    private readonly Label _target = new() { Text = "目标：全部角色" };
+    private readonly Label _target = new() { Text = "目标：已选物体（先点选）" };
     private readonly CheckButton _hideOutline = new() { Text = "关掉轮廓（地形无效）" };
     private Node3D? _selectedNode;
     private ulong _selectedId;
@@ -63,12 +63,13 @@ public partial class ToonTunePanel : Control
         box.AddChild(new Label { Text = "Toon 调参  F1 显隐" });
         box.AddChild(new Label
         {
-            Text = "范围：全部角色 / 地形 / 已选单个。点选开着时点模型只改它。",
+            Text = "范围：已选物体 / 全部已套用 Toon 的角色 / 地形。点模型后点「套用 Toon」。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
         _scope.AddItem("全部角色", (int)Scope.Actors);
         _scope.AddItem("地形", (int)Scope.Terrain);
         _scope.AddItem("已选物体", (int)Scope.Selected);
+        _scope.Selected = (int)Scope.Selected;
         _scope.ItemSelected += _ =>
         {
             LoadSliders();
@@ -83,6 +84,15 @@ public partial class ToonTunePanel : Control
             if (on) _scope.Selected = (int)Scope.Selected;
             UpdateTargetLabel();
         };
+
+        var toonRow = new HBoxContainer();
+        var enableToon = new Button { Text = "套用 Toon", SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        var disableToon = new Button { Text = "去掉 Toon", SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        enableToon.Pressed += EnableSelectedToon;
+        disableToon.Pressed += DisableSelectedToon;
+        toonRow.AddChild(enableToon);
+        toonRow.AddChild(disableToon);
+        box.AddChild(toonRow);
 
         _bands = AddSlider(box, "色阶级数", 2, 6, 1, ToonMaterials.ActorDefaults.Bands);
         _shadeMin = AddSlider(box, "暗部亮度", 0, 1, 0.01f, ToonMaterials.ActorDefaults.ShadeMin);
@@ -99,7 +109,7 @@ public partial class ToonTunePanel : Control
         box.AddChild(reset);
         box.AddChild(new Label
         {
-            Text = "点选开启时左键选模型（脚底黄环=已选），不会攻击。关掉即可正常交互。",
+            Text = "点选开启时左键选模型（脚底黄环=已选），不会攻击。Toon 只作用在点过「套用 Toon」的物体上。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
     }
@@ -116,7 +126,24 @@ public partial class ToonTunePanel : Control
             _overrides[id] = ToonMaterials.ActorDefaults.Clone();
         LoadSliders();
         UpdateTargetLabel();
+        if (ToonMaterials.HasActorToon(node))
+            Push();
+    }
+
+    private void EnableSelectedToon()
+    {
+        if (_selectedNode is null) return;
+        _scope.Selected = (int)Scope.Selected;
+        ToonMaterials.EnableOn(_selectedNode);
         Push();
+        UpdateTargetLabel();
+    }
+
+    private void DisableSelectedToon()
+    {
+        if (_selectedNode is null) return;
+        ToonMaterials.DisableOn(_selectedNode);
+        UpdateTargetLabel();
     }
 
     private void ResetCurrent()
@@ -201,6 +228,7 @@ public partial class ToonTunePanel : Control
         if (CollectActors is null) return;
         foreach (var node in CollectActors())
         {
+            if (!ToonMaterials.HasActorToon(node)) continue;
             if (node.Name.ToString() is { } name &&
                 name.StartsWith("Entity_") &&
                 ulong.TryParse(name[7..], out var id) &&
@@ -215,9 +243,10 @@ public partial class ToonTunePanel : Control
         _target.Text = CurrentScope switch
         {
             Scope.Terrain => "目标：地形",
-            Scope.Selected when _selectedNode is not null => $"目标：{_selectedNode.Name}",
+            Scope.Selected when _selectedNode is not null =>
+                $"目标：{_selectedNode.Name}" + (ToonMaterials.HasActorToon(_selectedNode) ? "（已 Toon）" : "（未 Toon）"),
             Scope.Selected => "目标：已选物体（先点选）",
-            _ => "目标：全部角色",
+            _ => "目标：已套用 Toon 的角色",
         };
     }
 

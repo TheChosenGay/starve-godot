@@ -143,6 +143,12 @@ public static class ToonMaterials
         foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
         {
             if (child is not MeshInstance3D mesh) continue;
+            if (mesh.MaterialOverride is not null)
+            {
+                if (!IsActor(mesh.MaterialOverride))
+                    mesh.MaterialOverride = FromExisting(mesh.MaterialOverride);
+                continue;
+            }
             var surfaceCount = mesh.Mesh?.GetSurfaceCount() ?? 0;
             if (surfaceCount <= 0)
             {
@@ -150,7 +156,54 @@ public static class ToonMaterials
                 continue;
             }
             for (var i = 0; i < surfaceCount; i++)
+            {
+                if (IsActor(mesh.GetSurfaceOverrideMaterial(i))) continue;
                 mesh.SetSurfaceOverrideMaterial(i, FromExisting(mesh.GetActiveMaterial(i)));
+            }
+        }
+    }
+
+    public static bool HasActorToon(Node root)
+    {
+        foreach (var _ in CollectActorMaterials(root))
+            return true;
+        return false;
+    }
+
+    public static void EnableOn(Node root)
+    {
+        if (root is PigmanActor3D pig)
+        {
+            pig.ApplyToon = true;
+            return;
+        }
+        if (HasActorToon(root)) return;
+        ApplyToMeshTree(root);
+    }
+
+    public static void DisableOn(Node root)
+    {
+        if (root is PigmanActor3D pig)
+        {
+            pig.ApplyToon = false;
+            return;
+        }
+        RestoreMeshTree(root);
+    }
+
+    public static void RestoreMeshTree(Node root)
+    {
+        foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh) continue;
+            if (IsActor(mesh.MaterialOverride))
+                mesh.MaterialOverride = ToLit((ShaderMaterial)mesh.MaterialOverride);
+            var count = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            for (var i = 0; i < count; i++)
+            {
+                if (IsActor(mesh.GetSurfaceOverrideMaterial(i)))
+                    mesh.SetSurfaceOverrideMaterial(i, ToLit((ShaderMaterial)mesh.GetSurfaceOverrideMaterial(i)!));
+            }
         }
     }
 
@@ -167,6 +220,21 @@ public static class ToonMaterials
 
     public static void SetFlash(ShaderMaterial mat, bool on) =>
         mat.SetShaderParameter(FlashParam, on ? 1f : 0f);
+
+    private static StandardMaterial3D ToLit(ShaderMaterial sm)
+    {
+        var albedo = sm.GetShaderParameter(AlbedoParam).AsColor();
+        var useTex = sm.GetShaderParameter("use_albedo_tex").AsBool();
+        Texture2D? tex = null;
+        if (useTex)
+            tex = sm.GetShaderParameter("albedo_tex").AsGodotObject() as Texture2D;
+        return new StandardMaterial3D
+        {
+            AlbedoColor = albedo,
+            AlbedoTexture = tex,
+            Roughness = 0.85f,
+        };
+    }
 
     private static ShaderMaterial FromExisting(Material? current)
     {

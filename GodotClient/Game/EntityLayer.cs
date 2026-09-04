@@ -24,6 +24,8 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 	private SfxService? _sfx;
 	private TileMap? _tilemap;
 	private ulong _ownId;
+	private int _ownDx;
+	private int _ownDy;
 	private Func<EntityView, string?>? _nameProvider;
 	private long _lastNow;
 	private float _sunT = 1f;
@@ -39,6 +41,12 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 	public void SetTilemap(TileMap? tm) => _tilemap = tm;
 
 	public void SetDayLight(float dayLight) => _sunT = 1f - Mathf.Max(0, 1f - dayLight * 2f);
+
+	public void SetOwnMoveDir(int dx, int dy)
+	{
+		_ownDx = dx;
+		_ownDy = dy;
+	}
 
 	/// <summary>视图旋转角（弧度）：Z 排序按旋转后的屏幕 Y，实体随世界节点一起转。</summary>
 	public void SetViewRotation(float radians)
@@ -200,17 +208,20 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 			var local = IsoMath.WorldToLocal(p.X, p.Y, h);
 			rig.Position = new Vector2(local.X, local.Y);
 			rig.ZIndex = (int)(local.X * _viewSin + local.Y * _viewCos);
-			if (_rigLastPos.TryGetValue(id, out var last))
+			var moving = isMoving(id);
+			if (id == _ownId)
+			{
+				if (_ownDx != 0 || _ownDy != 0)
+					rig.SetMovementDirection(_ownDx, _ownDy, _viewSin, _viewCos);
+			}
+			else if (_rigLastPos.TryGetValue(id, out var last))
 			{
 				var dx = p.X - last.X;
 				var dy = p.Y - last.Y;
-				if (MathF.Abs(dx) + MathF.Abs(dy) > 0.03f)
-				{
+				if (moving && MathF.Abs(dx) + MathF.Abs(dy) > 0.08f)
 					rig.SetMovementDirection(dx, dy, _viewSin, _viewCos);
-				}
 			}
 			_rigLastPos[id] = (p.X, p.Y);
-			var moving = isMoving(id);
 			rig.Update(deltaMs, moving);
 			rig.SetSunT(_sunT);
 			if (moving && id == _ownId) MaybeFootstep(id, now, rig.Position);

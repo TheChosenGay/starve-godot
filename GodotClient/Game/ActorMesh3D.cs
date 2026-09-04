@@ -11,8 +11,11 @@ public static class ActorMesh3D
     public static Node3D Create(EntityStyle style)
     {
         var root = new Node3D();
-        var mat = ToonMaterials.Create(style.Color);
-        root.SetMeta("toon", mat);
+        var mat = new StandardMaterial3D
+        {
+            AlbedoColor = style.Color,
+            Roughness = 0.85f,
+        };
 
         if (style.IsTree)
             BuildTree(root, mat);
@@ -26,14 +29,24 @@ public static class ActorMesh3D
 
     public static ShaderMaterial? MaterialOf(Node3D root)
     {
-        if (!root.HasMeta("toon")) return null;
-        return root.GetMeta("toon").AsGodotObject() as ShaderMaterial;
+        foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is MeshInstance3D mesh && mesh.MaterialOverride is ShaderMaterial sm)
+                return sm;
+        }
+        return null;
     }
 
     public static void ApplyStyle(Node3D root, EntityStyle style)
     {
-        var mat = MaterialOf(root);
-        if (mat is not null) ToonMaterials.SetAlbedo(mat, style.Color);
+        foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh) continue;
+            if (mesh.MaterialOverride is ShaderMaterial sm)
+                ToonMaterials.SetAlbedo(sm, style.Color);
+            else if (mesh.MaterialOverride is StandardMaterial3D std)
+                std.AlbedoColor = style.Color;
+        }
         root.Scale = Vector3.One * ScaleOf(style);
     }
 

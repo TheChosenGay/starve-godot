@@ -60,7 +60,13 @@ public partial class PigmanActor3D : Node3D
     public bool ApplyToon
     {
         get => _applyToon;
-        set { _applyToon = value; RequestRebuild(); }
+        set
+        {
+            if (_applyToon == value) return;
+            _applyToon = value;
+            if (IsInsideTree()) Rebuild();
+            else RequestRebuild();
+        }
     }
 
     [Export]

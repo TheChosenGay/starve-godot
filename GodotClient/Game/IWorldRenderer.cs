@@ -19,6 +19,7 @@ public interface IWorldRenderer
     void SetTilemap(TileMap? tm);
     void SetViewRotation(float radians);
     void SetDayLight(float dayLight);
+    void SetOwnMoveDir(int dx, int dy);
 
     void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities);
     void UpdatePositions(
