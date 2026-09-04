@@ -13,6 +13,9 @@ public sealed class TileMap
     public int CornerW { get; }
     public int CornerH { get; }
 
+    /// <summary>true：高度用四角双线性（3D 缓坡）；false：2D 平台+崖壁带。</summary>
+    public bool SmoothSlopes { get; set; }
+
     private readonly byte[] _heights;
     private readonly byte[] _types;
 
@@ -47,8 +50,11 @@ public sealed class TileMap
         return i < _types.Length ? _types[i] : 0;
     }
 
-    /// <summary>地面高度：缓坡双线性；高差 ≥ 1 的边收成崖壁带，与坡度网格一致。</summary>
-    public float HeightAt(float wx, float wy) => SlopeMesh.SampleHeight(this, wx, wy);
+    /// <summary>地面高度：SmoothSlopes 时四角双线性，否则高差 ≥ 1 收成崖壁带。</summary>
+    public float HeightAt(float wx, float wy) =>
+        SmoothSlopes
+            ? SlopeMesh.SampleHeightBilinear(this, wx, wy)
+            : SlopeMesh.SampleHeight(this, wx, wy);
 
     /// <summary>画家排序深度：wx + wy + 高度（越高越靠前/靠上）。</summary>
     public float DepthAt(float wx, float wy) => wx + wy + HeightAt(wx, wy);

@@ -6,10 +6,26 @@ namespace GodotClient.Game;
 public static class RigPresentationMetrics
 {
     public const float FishmanVisualHeight = 64f;
+    public const float SpiderVisualHeight = 48f;
+    public const float SpiderSubjectHeight = 520f;
+    public const float SpiderFootY = 820f / 1024f;
     public const double AttackDurationMs = 800;
     public const double AttackImpactMs = 400;
     public const float FishmanAttackFps = 18.75f;
     public const float LizardAttackFps = 10f;
+}
+
+/// <summary>按朝向选择 idle/walk 剪辑；缺侧/背时回退正面，再回退 idle。</summary>
+public static class DirectionalSpriteClip
+{
+    public static string Locomotion(bool moving, bool side, bool back, Func<string, bool> hasClip)
+    {
+        var prefix = moving ? "walk" : "idle";
+        var named = back ? prefix + "_back" : side ? prefix + "_side" : prefix;
+        if (hasClip(named)) return named;
+        if (hasClip(prefix)) return prefix;
+        return hasClip("idle") ? "idle" : named;
+    }
 }
 
 public readonly record struct DirectionalPartGeometry(

@@ -1,0 +1,127 @@
+[gd_scene format=3 uid="uid://csoyu2x25fppy"]
+
+[ext_resource type="Script" uid="uid://cjc2avqg08e30" path="res://Game/CharacterStudio3D.cs" id="1_studio"]
+[ext_resource type="Script" uid="uid://kfcue25ocl8v" path="res://Game/ActorPreview3D.cs" id="2_actor"]
+[ext_resource type="Script" uid="uid://dbsyauqoju8yx" path="res://Game/PigmanActor3D.cs" id="3_pigman"]
+
+[sub_resource type="Environment" id="Environment_studio"]
+background_mode = 1
+background_color = Color(0.52, 0.68, 0.82, 1)
+ambient_light_source = 1
+ambient_light_color = Color(0.55, 0.6, 0.7, 1)
+ambient_light_energy = 0.5
+glow_enabled = true
+
+[sub_resource type="Shader" id="Shader_1wx3p"]
+code = "shader_type spatial;
+render_mode unshaded, shadows_disabled;
+
+uniform vec4 albedo : source_color = vec4(0.45, 0.62, 0.38, 1.0);
+uniform vec4 grid : source_color = vec4(0.38, 0.52, 0.32, 1.0);
+varying vec3 world_pos;
+
+void vertex() {
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	vec2 cell = abs(fract(world_pos.xz) - 0.5);
+	float line = 1.0 - step(0.03, min(cell.x, cell.y));
+	ALBEDO = mix(albedo.rgb, grid.rgb, line * 0.55);
+}"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_ylwq4"]
+render_priority = 0
+shader = SubResource("Shader_1wx3p")
+shader_parameter/albedo = Color(0.45, 0.62, 0.38, 1)
+shader_parameter/grid = Color(0.38, 0.52, 0.32, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+material = SubResource("ShaderMaterial_ylwq4")
+size = Vector2(24, 24)
+
+[node name="CharacterStudio3D" type="Node3D" unique_id=361235516]
+script = ExtResource("1_studio")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1809995700]
+environment = SubResource("Environment_studio")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=200289433]
+transform = Transform3D(0.819152, 0.40558, -0.40558, 0, 0.707107, 0.707107, 0.573577, -0.579228, 0.579228, 0, 0, 0)
+light_color = Color(1, 0.96, 0.88, 1)
+light_energy = 1.35
+
+[node name="IsoCamera" type="Camera3D" parent="." unique_id=1315624357]
+transform = Transform3D(0.70710695, -0.5, 0.5, 0, 0.7071068, 0.7071068, -0.70710695, -0.5, 0.5, 8, 11.313709, 8)
+projection = 1
+size = 8.0
+near = 0.1
+far = 80.0
+
+[node name="Ground" type="MeshInstance3D" parent="." unique_id=1156160692]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0470469, -0.12065983, -0.041773796)
+mesh = SubResource("PlaneMesh_ground")
+
+[node name="PigmanWalk" type="Node3D" parent="." unique_id=1822470943]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.4, 0, 0)
+script = ExtResource("3_pigman")
+
+[node name="PigmanWalkLabel" type="Label3D" parent="PigmanWalk" unique_id=32285600]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9, 0)
+pixel_size = 0.012
+billboard = 1
+text = "猪人 · 走"
+outline_size = 8
+
+[node name="PigmanRun" type="Node3D" parent="." unique_id=1200741050]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.8, 0, 0)
+script = ExtResource("3_pigman")
+
+[node name="PigmanRunLabel" type="Label3D" parent="PigmanRun" unique_id=1215390058]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9, 0)
+pixel_size = 0.012
+billboard = 1
+text = "猪人 · 跑"
+outline_size = 8
+
+[node name="Fishman" type="Node3D" parent="." unique_id=759624341]
+script = ExtResource("2_actor")
+
+[node name="FishmanLabel" type="Label3D" parent="Fishman" unique_id=1238954453]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+pixel_size = 0.012
+billboard = 1
+text = "鱼人"
+outline_size = 8
+
+[node name="Lizard" type="Node3D" parent="." unique_id=981292432]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.2, 0, 0)
+script = ExtResource("2_actor")
+
+[node name="LizardLabel" type="Label3D" parent="Lizard" unique_id=898098076]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+pixel_size = 0.012
+billboard = 1
+text = "蜥蜴"
+outline_size = 8
+
+[node name="Spider" type="Node3D" parent="." unique_id=594001292]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.4, 0, 0)
+script = ExtResource("2_actor")
+
+[node name="SpiderLabel" type="Label3D" parent="Spider" unique_id=980515153]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, 0)
+pixel_size = 0.012
+billboard = 1
+text = "蜘蛛"
+outline_size = 8
+
+[node name="Hint" type="Label3D" parent="." unique_id=310999426]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.2, 2.4, 0)
+pixel_size = 0.01
+billboard = 1
+modulate = Color(1, 1, 1, 0.85)
+text = "选中角色 → 右侧检查器改属性
+猪人可开 Apply Toon，或改 Yaw / Scale"
+font_size = 28
+outline_size = 6

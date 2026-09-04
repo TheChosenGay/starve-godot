@@ -6,13 +6,21 @@ using TileMap = Starve.Core.TileMap;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 地形网格：世界 XY 连续 UV；高差格拆成平台 + 崖壁。顶点色仍烘焙高度/AO。
+/// 地形网格：2D 为平台+崖壁；3D 为四角双线性缓坡。顶点色烘焙高度/AO。
 /// </summary>
 public static class MapMeshBuilder
 {
     public const int ChunkTiles = 40;
 
-    public static ArrayMesh BuildChunk(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas)
+    public static ArrayMesh BuildChunk(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas) =>
+        BuildChunk(tm, cx0, cy0, cx1, cy1, atlas, world3D: false);
+
+    /// <summary>同一套 UV/顶点色，顶点放在 (wx, height, wy)；缓坡、正面朝上。</summary>
+    public static ArrayMesh BuildChunk3D(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas) =>
+        BuildChunk(tm, cx0, cy0, cx1, cy1, atlas, world3D: true);
+
+    private static ArrayMesh BuildChunk(
+        TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas, bool world3D)
     {
         var st = new SurfaceTool();
         st.Begin(Mesh.PrimitiveType.Triangles);
@@ -23,7 +31,9 @@ public static class MapMeshBuilder
             for (var cx = cx0; cx < cx1; cx++)
             {
                 var ao = 1f - TileAo(tm, cx, cy) * 0.5f;
-                foreach (var quad in SlopeMesh.BuildTile(tm, cx, cy))
+                foreach (var quad in world3D
+                    ? SlopeMesh.BuildTileSmooth(tm, cx, cy)
+                    : SlopeMesh.BuildTile(tm, cx, cy))
                 {
                     var kind = quad.Cliff ? SlopeMesh.CliffTerrainKind : quad.TerrainKind;
                     var rect = quad.Cliff
@@ -32,13 +42,14 @@ public static class MapMeshBuilder
                     var tint = TintColor(quad.HeightAvg, quad.FaceSlope) * ao;
                     if (quad.Cliff) tint *= new Color(0.72f, 0.68f, 0.62f);
 
-                    AddVert(st, quad.V0, rect, tint, cx, cy, quad);
-                    AddVert(st, quad.V1, rect, tint, cx, cy, quad);
-                    AddVert(st, quad.V2, rect, tint, cx, cy, quad);
-                    AddVert(st, quad.V3, rect, tint, cx, cy, quad);
+                    AddVert(st, quad.V0, rect, tint, cx, cy, quad, world3D);
+                    AddVert(st, quad.V1, rect, tint, cx, cy, quad, world3D);
+                    AddVert(st, quad.V2, rect, tint, cx, cy, quad, world3D);
+                    AddVert(st, quad.V3, rect, tint, cx, cy, quad, world3D);
 
                     var baseIdx = vertexCount;
                     vertexCount += 4;
+                    // Godot 正面是顺时针：俯视时 V0→V1→V2（X+ 再 Z+）才朝上。
                     st.AddIndex(baseIdx);
                     st.AddIndex(baseIdx + 1);
                     st.AddIndex(baseIdx + 2);
@@ -49,11 +60,12 @@ public static class MapMeshBuilder
             }
         }
 
+        if (world3D) st.GenerateNormals(true);
         return st.Commit();
     }
 
     private static void AddVert(
-        SurfaceTool st, SlopeVertex v, Rect2 rect, Color tint, int cx, int cy, SlopeQuad quad)
+        SurfaceTool st, SlopeVertex v, Rect2 rect, Color tint, int cx, int cy, SlopeQuad quad, bool world3D)
     {
         Vector2 uv;
         if (quad.Cliff)
@@ -70,7 +82,15 @@ public static class MapMeshBuilder
 
         st.SetColor(tint);
         st.SetUV(uv);
-        st.AddVertex(new Vector3(v.LocalX, v.LocalY, 0));
+        if (world3D)
+        {
+            var p = IsoCamera3D.WorldTo3D(v.Wx, v.Wy, v.Height);
+            st.AddVertex(new Vector3(p.X, p.Y, p.Z));
+        }
+        else
+        {
+            st.AddVertex(new Vector3(v.LocalX, v.LocalY, 0));
+        }
     }
 
     private static Rect2 FirstVariant(TileAtlasBuilder atlas, int kind)

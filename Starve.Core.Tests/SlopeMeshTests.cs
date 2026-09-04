@@ -48,6 +48,28 @@ public sealed class SlopeMeshTests
     }
 
     [Fact]
+    public void HeightAt_SmoothSlopesLerpsAcrossTile()
+    {
+        var tm = Map(1, 1, [0, 0, 2, 2]);
+        tm.SmoothSlopes = true;
+        Assert.Equal(0f, tm.HeightAt(0.5f, 0f), 3);
+        Assert.Equal(1f, tm.HeightAt(0.5f, 0.5f), 3);
+        Assert.Equal(2f, tm.HeightAt(0.5f, 1f), 3);
+    }
+
+    [Fact]
+    public void BuildTileSmooth_RampIsSingleNonCliffQuad()
+    {
+        var tm = Map(1, 1, [2, 2, 1, 1]);
+        var q = Assert.Single(SlopeMesh.BuildTileSmooth(tm, 0, 0));
+        Assert.False(q.Cliff);
+        Assert.Equal(2f, q.V0.Height, 3);
+        Assert.Equal(2f, q.V1.Height, 3);
+        Assert.Equal(1f, q.V2.Height, 3);
+        Assert.Equal(1f, q.V3.Height, 3);
+    }
+
+    [Fact]
     public void HeightAt_SharedEdgeMatchesNeighborTile()
     {
         // 两格东西相邻，中间竖边两端高度 2 / 1

@@ -62,9 +62,36 @@ public sealed class RigPresentationContractTests
             MathF.Abs((side.NormalizedBounds.Left + side.NormalizedBounds.Right) * 0.5f),
             0,
             0.001f);
-        Assert.InRange(
-            MathF.Abs((back.NormalizedBounds.Left + back.NormalizedBounds.Right) * 0.5f),
-            0,
-            0.001f);
+        Assert.InRange(MathF.Abs((back.NormalizedBounds.Left + back.NormalizedBounds.Right) * 0.5f), 0, 0.001f);
+    }
+
+    [Fact]
+    public void SpiderIsShorterThanPlayerAndSharesNormalizedFootline()
+    {
+        Assert.True(RigPresentationMetrics.SpiderVisualHeight < RigPresentationMetrics.FishmanVisualHeight);
+        var scale = RigPresentationMetrics.SpiderVisualHeight / RigPresentationMetrics.SpiderSubjectHeight;
+        var footline =
+            1024 * scale * (0.5f - RigPresentationMetrics.SpiderFootY) +
+            1024 * scale * (RigPresentationMetrics.SpiderFootY - 0.5f);
+        Assert.InRange(MathF.Abs(footline), 0, 0.001f);
+        Assert.InRange(MathF.Abs(1024 * RigPresentationMetrics.SpiderFootY - 820f), 0, 0.001f);
+        Assert.Equal(48f, RigPresentationMetrics.SpiderVisualHeight);
+        Assert.Equal(520f, RigPresentationMetrics.SpiderSubjectHeight);
+    }
+
+    [Fact]
+    public void DirectionalSpriteClipPrefersFacingThenFrontThenIdle()
+    {
+        var spider = new HashSet<string> { "idle", "walk", "idle_side", "walk_side", "idle_back", "walk_back" };
+        Assert.Equal("walk_side", DirectionalSpriteClip.Locomotion(true, true, false, spider.Contains));
+        Assert.Equal("idle_back", DirectionalSpriteClip.Locomotion(false, false, true, spider.Contains));
+        Assert.Equal("walk", DirectionalSpriteClip.Locomotion(true, false, false, spider.Contains));
+
+        var frontOnly = new HashSet<string> { "idle", "walk" };
+        Assert.Equal("walk", DirectionalSpriteClip.Locomotion(true, true, false, frontOnly.Contains));
+        Assert.Equal("idle", DirectionalSpriteClip.Locomotion(false, false, true, frontOnly.Contains));
+
+        var idleOnly = new HashSet<string> { "idle" };
+        Assert.Equal("idle", DirectionalSpriteClip.Locomotion(true, true, false, idleOnly.Contains));
     }
 }

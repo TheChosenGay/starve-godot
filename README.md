@@ -92,6 +92,7 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 - 攻击表现统一为 800ms：鱼人 15 帧 18.75fps、蜥蜴 8 帧 10fps，服务端 400ms 命中点约在中帧。
   鱼人四方向以 `FishmanVisualHeight=64px` 归一；侧/背 tight-crop 分件通过
   `DirectionalRigNormalizer` 对齐整体高度、水平中心与 bottom=0 脚底线，左右仅镜像同一 SideRig。
+  蜘蛛用 1024² 抠图帧，`SpiderVisualHeight=48px`（小于玩家），按朝向切 idle/walk/side/back，左右镜像。
 - NPC 攻击只读取 `ActionState`，不根据 `AI.state` 推测。
 - `ActionNetworkFaultTests` 以纯确定性方式覆盖 loss/latency/reorder：start 或 outcome 丢包、
   500ms 延迟超时、结果与旧快照重排，以及旧动作之后的新 `action_id` 恢复；不 sleep、不依赖真实网络。
@@ -118,7 +119,8 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 
 - 地形：sheet-cut 156 张贴图按变体映射打包图集，菱形填充预处理 + 高度/坡度/AO 顶点色
 - 角色：主角 = 鱼人（人鱼）；正面 idle/walk/attack/hit 各 15 帧并统一脚底锚点，
-  侧面/背面使用 8 分件程序化骨骼行走；角色与工作站灰底、水印均离线抠成透明
+  侧面/背面使用 8 分件程序化骨骼行走；角色与工作站灰底、水印均离线抠成透明。
+  蜘蛛已接线：正面 idle-v3 / walk-v2，侧向 idle+walk、背面 walk，统一 520px 主体与脚底线
 - 法线图：高度场梯度烘焙，全屏光照 shader 采样（地面随太阳/点光明暗起伏）
 - LUT：白天/黄昏/夜晚三套预设按昼夜权重混合（青橙电影/胶片/阴天预留）
 - 幽灵预览：建造后绿/红占格跟随鼠标，build.check 节流，点击放置

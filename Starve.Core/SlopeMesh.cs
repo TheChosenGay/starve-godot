@@ -65,6 +65,40 @@ public static class SlopeMesh
         return EdgeHeight(hN, hS, fy);
     }
 
+    /// <summary>四角双线性，不做崖壁带。3D 缓坡与脚底高度用这个。</summary>
+    public static float HeightOnTileBilinear(float h00, float h10, float h01, float h11, float fx, float fy)
+    {
+        fx = Math.Clamp(fx, 0f, 1f);
+        fy = Math.Clamp(fy, 0f, 1f);
+        var hN = h00 + (h10 - h00) * fx;
+        var hS = h01 + (h11 - h01) * fx;
+        return hN + (hS - hN) * fy;
+    }
+
+    public static float SampleHeightBilinear(TileMap tm, float wx, float wy)
+    {
+        if (tm.Width <= 0 || tm.Height <= 0) return 0;
+
+        var x0 = (int)MathF.Floor(wx);
+        var y0 = (int)MathF.Floor(wy);
+        if (x0 < 0) { x0 = 0; wx = 0; }
+        else if (x0 >= tm.Width) { x0 = tm.Width - 1; wx = tm.Width; }
+        if (y0 < 0) { y0 = 0; wy = 0; }
+        else if (y0 >= tm.Height) { y0 = tm.Height - 1; wy = tm.Height; }
+
+        var fx = wx - x0;
+        var fy = wy - y0;
+        var h00 = tm.CornerHeight(x0, y0);
+        var h10 = tm.CornerHeight(x0 + 1, y0);
+        var h01 = tm.CornerHeight(x0, y0 + 1);
+        var h11 = tm.CornerHeight(x0 + 1, y0 + 1);
+
+        if (WaterCorners(tm, x0, y0) >= 3)
+            return MathF.Max(MathF.Max(h00, h10), MathF.Max(h01, h11));
+
+        return HeightOnTileBilinear(h00, h10, h01, h11, fx, fy);
+    }
+
     public static int WaterCorners(TileMap tm, int cx, int cy) =>
         (tm.CornerType(cx, cy) == 1 ? 1 : 0) +
         (tm.CornerType(cx + 1, cy) == 1 ? 1 : 0) +
@@ -143,6 +177,37 @@ public static class SlopeMesh
             }
         }
         return quads;
+    }
+
+    /// <summary>一格一块四角双线性面，不做平台/崖壁切割。供 3D 地形。</summary>
+    public static IReadOnlyList<SlopeQuad> BuildTileSmooth(TileMap tm, int cx, int cy)
+    {
+        var h00 = tm.CornerHeight(cx, cy);
+        var h10 = tm.CornerHeight(cx + 1, cy);
+        var h01 = tm.CornerHeight(cx, cy + 1);
+        var h11 = tm.CornerHeight(cx + 1, cy + 1);
+        var hMax = MathF.Max(MathF.Max(h00, h10), MathF.Max(h01, h11));
+        var hMin = MathF.Min(MathF.Min(h00, h10), MathF.Min(h01, h11));
+        var water = WaterCorners(tm, cx, cy) >= 3;
+        var kind = water ? 1 : DominantType(tm, cx, cy);
+        if (water)
+        {
+            return
+            [
+                MakeQuad(
+                    cx, cy, 0, 0, 1, 1,
+                    hMax, hMax, hMax, hMax,
+                    kind, cliff: false, water: true, hMin, hMax),
+            ];
+        }
+
+        return
+        [
+            MakeQuad(
+                cx, cy, 0, 0, 1, 1,
+                h00, h10, h11, h01,
+                kind, cliff: false, water: false, hMin, hMax),
+        ];
     }
 
     private static SlopeQuad MakeQuad(

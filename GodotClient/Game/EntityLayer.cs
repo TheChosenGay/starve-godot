@@ -10,16 +10,8 @@ using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
-public readonly record struct EntityStyle(
-	Color Color,
-	float Radius,
-	bool IsFire,
-	bool IsTree = false,
-	bool IsWorkbench = false,
-	bool IsHauntable = false);
-
 /// <summary>实体层：世界实体 → 菱形占位（带投影/血条/受击闪白）或骨骼角色。</summary>
-public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPresentationSink
+public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSink, IImpactPresentationSink
 {
 	private readonly Dictionary<ulong, EntityNode> _nodes = new();
 	private readonly Dictionary<ulong, RigNode> _rigs = new();
@@ -118,7 +110,7 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 				continue;
 			}
 
-			// M7 生物视觉：鱼人/蜥蜴等注册了骨架的生物用帧动画，其余维持菱形占位。
+			// M7 生物视觉：鱼人/蜥蜴/蜘蛛等注册了骨架的生物用帧动画，其余维持菱形占位。
 			var rig = view.Get("Creature", Creature.Parser) is { } cr
 				&& !view.Components.ContainsKey("Dead")
 				? RigRegistry.RigOf((int)cr.Kind)
@@ -159,7 +151,7 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 			}
 			node.Visible = true;
 			var hp = view.Get("Health", Health.Parser);
-			node.Configure(StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0,
+			node.Configure(EntityVisual.StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0,
 				_nameProvider?.Invoke(view) ?? "");
 		}
 	}
@@ -390,87 +382,6 @@ public partial class EntityLayer : Node2D, IActionPresentationSink, IImpactPrese
 	}
 
 	private static long NowMs() => checked((long)Time.GetTicksMsec());
-
-	private static EntityStyle StyleFor(EntityView view)
-	{
-		if (view.Get("Hauntable", Hauntable.Parser) is not null)
-			return new EntityStyle(
-				new Color(0.55f, 0.85f, 1f),
-				13,
-				false,
-				IsHauntable: true);
-		if (view.Get("Player", Player.Parser) is not null)
-			return new EntityStyle(new Color(0.31f, 0.75f, 0.37f), 10, false);
-		// 掉落物优先于 Dead：挖完的矿/树是 Dead+Loot，应显示成可拾取的黄色，
-		// 而不是尸体的灰色（否则看不出能捡）。
-		if (view.LootOf() is not null)
-			return new EntityStyle(new Color(1f, 0.85f, 0.31f), 6, false);
-		if (view.Components.ContainsKey("Dead"))
-			return new EntityStyle(new Color(0.47f, 0.47f, 0.47f), 8, false);
-
-		var station = view.Get("Workstation", Workstation.Parser);
-		if (station is not null)
-			return (int)station.Type == 1
-				? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, true)
-				: new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false, IsWorkbench: true);
-
-		// M7 交互重构：受激能力拆成 Choppable/Minable/Pickable（载荷都是 WorkTarget），
-		// 树/矿/浆果按组件名区分，不再用旧的 Workable。
-		var reactive = view.Get("Choppable", WorkTarget.Parser)
-			?? view.Get("Minable", WorkTarget.Parser)
-			?? view.Get("Pickable", WorkTarget.Parser);
-		if (reactive is not null)
-		{
-			var kind = (int)reactive.Kind;
-			var isTree = view.Get("Choppable", WorkTarget.Parser) is not null;
-			return new EntityStyle(kind switch
-			{
-				1 => new Color(0.89f, 0.34f, 0.30f),
-				2 => new Color(0.60f, 0.42f, 0.25f),
-				3 => new Color(0.60f, 0.63f, 0.66f),
-				4 => new Color(0.85f, 0.42f, 0.31f),
-				_ => new Color(0.71f, 0.54f, 0.85f),
-			}, isTree ? 16 : 7, false, isTree);
-		}
-
-		// 兼容旧档/旧协议：仍下发 Workable 时兜底。
-		var workable = view.Get("Workable", Workable.Parser);
-		if (workable is not null)
-		{
-			return new EntityStyle((int)workable.Kind switch
-			{
-				1 => new Color(0.89f, 0.34f, 0.30f),
-				2 => new Color(0.60f, 0.42f, 0.25f),
-				3 => new Color(0.60f, 0.63f, 0.66f),
-				4 => new Color(0.85f, 0.42f, 0.31f),
-				_ => new Color(0.71f, 0.54f, 0.85f),
-			}, (int)workable.Kind == 2 ? 16 : 7, false, (int)workable.Kind == 2);
-		}
-
-		var creature = view.Get("Creature", Creature.Parser);
-		if (creature is not null)
-		{
-			return new EntityStyle((int)creature.Kind switch
-			{
-				1 => new Color(0.63f, 0.44f, 0.31f),
-				2 => new Color(0.54f, 0.56f, 0.60f),
-				3 => new Color(0.36f, 0.25f, 0.22f),
-				4 => new Color(0.84f, 0.72f, 0.60f),
-				5 => new Color(0.29f, 0.14f, 0.35f),
-				6 => new Color(0.22f, 0.55f, 0.58f), // 鱼人
-				7 => new Color(0.55f, 0.75f, 0.35f), // 蜥蜴
-				_ => new Color(1f, 1f, 1f),
-			}, 9, false);
-		}
-
-		var building = view.Get("Building", Building.Parser);
-		if (building is not null)
-			return (int)building.Kind == 1
-				? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, building.Placed)
-				: new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 8, false);
-
-		return new EntityStyle(new Color(1f, 1f, 1f), 8, false);
-	}
 }
 
 /// <summary>单个实体占位：彩色菱形 + 方向投影 + 血条 + 受击闪白 + 火盆/工作站结构视觉。</summary>

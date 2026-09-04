@@ -1,0 +1,162 @@
+{
+  "kind": "normal",
+  "source": "normal/front/idle.png",
+  "image_size": [
+    1024,
+    1024
+  ],
+  "parts": {
+    "head": {
+      "file": "head.png",
+      "box": [
+        292,
+        425,
+        669,
+        801
+      ],
+      "size": [
+        377,
+        376
+      ]
+    },
+    "abdomen": {
+      "file": "abdomen.png",
+      "box": [
+        302,
+        222,
+        695,
+        556
+      ],
+      "size": [
+        393,
+        334
+      ]
+    },
+    "leg_l1": {
+      "file": "leg_l1.png",
+      "box": [
+        76,
+        305,
+        472,
+        804
+      ],
+      "size": [
+        396,
+        499
+      ],
+      "hip_in_source": [
+        410,
+        458
+      ],
+      "hip_in_part": [
+        334,
+        153
+      ]
+    },
+    "leg_l2": {
+      "file": "leg_l2.png",
+      "box": [
+        160,
+        409,
+        441,
+        840
+      ],
+      "size": [
+        281,
+        431
+      ],
+      "hip_in_source": [
+        379,
+        506
+      ],
+      "hip_in_part": [
+        219,
+        97
+      ]
+    },
+    "leg_l3": {
+      "file": "leg_l3.png",
+      "box": [
+        215,
+        501,
+        452,
+        831
+      ],
+      "size": [
+        237,
+        330
+      ],
+      "hip_in_source": [
+        390,
+        559
+      ],
+      "hip_in_part": [
+        175,
+        58
+      ]
+    },
+    "leg_r1": {
+      "file": "leg_r1.png",
+      "box": [
+        489,
+        305,
+        954,
+        788
+      ],
+      "size": [
+        465,
+        483
+      ],
+      "hip_in_source": [
+        550,
+        459
+      ],
+      "hip_in_part": [
+        61,
+        154
+      ]
+    },
+    "leg_r2": {
+      "file": "leg_r2.png",
+      "box": [
+        520,
+        395,
+        894,
+        810
+      ],
+      "size": [
+        374,
+        415
+      ],
+      "hip_in_source": [
+        581,
+        506
+      ],
+      "hip_in_part": [
+        61,
+        111
+      ]
+    },
+    "leg_r3": {
+      "file": "leg_r3.png",
+      "box": [
+        510,
+        500,
+        790,
+        841
+      ],
+      "size": [
+        280,
+        341
+      ],
+      "hip_in_source": [
+        571,
+        558
+      ],
+      "hip_in_part": [
+        61,
+        58
+      ]
+    }
+  }
+}

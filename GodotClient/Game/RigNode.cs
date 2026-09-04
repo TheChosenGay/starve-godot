@@ -27,7 +27,7 @@ public sealed record RigSpec(
 
 /// <summary>
 /// 生物骨架注册表：CreatureKind → 动画角色。
-/// 主角用鱼人（Player）；蜥蜴为服务端预留 kind（7），资源已就位，服务端下发即生效。
+/// 主角用鱼人（Player）；蜥蜴/蜘蛛资源已就位，服务端下发即生效。
 /// </summary>
 public static class RigRegistry
 {
@@ -37,7 +37,17 @@ public static class RigRegistry
     public static RigSpec? RigOf(int creatureKind) => creatureKind switch
     {
         (int)CreatureKind.Lizard => Lizard,
+        (int)CreatureKind.Spider => Spider,
+        (int)CreatureKind.Fishman => Fishman,
         _ => null,
+    };
+
+    /// <summary>编辑器预览 / 3D 占位用：按角色 id 取规格。</summary>
+    public static RigSpec Named(string id) => id switch
+    {
+        "lizard" => Lizard,
+        "spider" => Spider,
+        _ => Fishman,
     };
 
     // 鱼人（人鱼）：1024² 透明帧，主体统一为 360px 高并按脚底线对齐。
@@ -60,6 +70,22 @@ public static class RigRegistry
             ["idle"] = new("res://assets/lizard/anim/idle/cutout/idle_{0}.png", 8, 8, true, 0),
             ["walk"] = new("res://assets/lizard/anim/walk/cutout/walk_{0}.png", 8, 10, true, 0),
             ["attack"] = new("res://assets/lizard/anim/attack/cutout/attack_{0}.png", 8, RigPresentationMetrics.LizardAttackFps, false, 0),
+        });
+
+    // 蜘蛛：1024² 抠图帧，主体 520px 高并对齐脚底；无 attack/hit，动作回退当前朝向 idle。
+    // 正面 idle-v3 + walk-v2；侧/背有独立剪辑，左右仅镜像侧向帧。视觉高 48px（小于玩家）。
+    private static readonly RigSpec Spider = new(
+        "spider", 1024, 1024,
+        RigPresentationMetrics.SpiderVisualHeight / RigPresentationMetrics.SpiderSubjectHeight,
+        RigPresentationMetrics.SpiderFootY,
+        new Dictionary<string, AnimSpec>
+        {
+            ["idle"] = new("res://assets/spider/anim/idle/cutout/frame_{0:000}.png", 1, 1, true, 0),
+            ["walk"] = new("res://assets/spider/anim/walk/cutout/frame_{0:000}.png", 4, 8, true, 0),
+            ["idle_side"] = new("res://assets/spider/anim/idle_side/cutout/frame_{0:000}.png", 1, 1, true, 0),
+            ["walk_side"] = new("res://assets/spider/anim/walk_side/cutout/frame_{0:000}.png", 8, 10, true, 0),
+            ["idle_back"] = new("res://assets/spider/anim/idle_back/cutout/frame_{0:000}.png", 1, 1, true, 0),
+            ["walk_back"] = new("res://assets/spider/anim/walk_back/cutout/frame_{0:000}.png", 4, 8, true, 0),
         });
 }
 
@@ -115,7 +141,7 @@ public partial class RigNode : Node2D
     }
 
     /// <summary>组装 SpriteFrames：按 AnimSpec 逐个加载帧图（缓存，多个同类角色共享）。</summary>
-    private static SpriteFrames SpriteFramesOf(RigSpec rig)
+    public static SpriteFrames SpriteFramesOf(RigSpec rig)
     {
         if (FramesCache.TryGetValue(rig.Id, out var cached)) return cached;
         var sf = new SpriteFrames();
@@ -157,7 +183,7 @@ public partial class RigNode : Node2D
         _hitQueued = false;
         if (_sprite.Animation == "hit")
         {
-            PlayAnimFromStart(_actionActive ? _actionAnimation : _moving ? "walk" : "idle");
+            PlayAnimFromStart(_actionActive ? _actionAnimation : LocomotionName(_moving));
         }
     }
 
@@ -193,13 +219,12 @@ public partial class RigNode : Node2D
         _actionActive = true;
         _actionFinishing = false;
         _haunting = kind == ActionKind.Haunt;
-        _actionAnimation = kind switch
+        _actionAnimation = ResolveAnim(kind switch
         {
             ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Pick => "attack",
-            // Craft/Sleep/Haunt 暂无专用素材：保持 idle，但仍锁住 walk。
-            ActionKind.Craft or ActionKind.Sleep or ActionKind.Haunt => "idle",
-            _ => "idle",
-        };
+            // Craft/Sleep/Haunt 暂无专用素材：保持当前朝向 idle，但仍锁住 walk。
+            _ => LocomotionName(false),
+        });
         PlayAnimFromStart(_actionAnimation);
     }
 
@@ -216,7 +241,7 @@ public partial class RigNode : Node2D
         if (!_actionFinishing)
         {
             _actionAnimation = "idle";
-            PlayAnimFromStart(_moving ? "walk" : "idle");
+            PlayAnimFromStart(LocomotionName(_moving));
         }
     }
 
@@ -227,7 +252,7 @@ public partial class RigNode : Node2D
         _haunting = false;
         _actionFinishing = false;
         _actionAnimation = "idle";
-        PlayAnimFromStart(_moving ? "walk" : "idle");
+        PlayAnimFromStart(LocomotionName(_moving));
     }
 
     /// <summary>按移动方向水平翻转（-1/1；静止时保持上一朝向）。</summary>
@@ -236,7 +261,8 @@ public partial class RigNode : Node2D
         if (dir == 0 || dir == _facing) return;
         _facing = dir;
         _sprite.Scale = new Vector2(Mathf.Abs(_sprite.Scale.X) * dir, _sprite.Scale.Y);
-        _turnT = 1f; // 转身瞬间给一点旋转，让方向变化在正面帧上也看得出来
+        if (!HasDirectionalSprites)
+            _turnT = 1f; // 转身瞬间给一点旋转，让方向变化在正面帧上也看得出来
     }
 
     public void SetMovementDirection(float worldDX, float worldDY, float viewSin, float viewCos)
@@ -245,14 +271,20 @@ public partial class RigNode : Node2D
         var isoY = (worldDX + worldDY) * 0.5f;
         var screenX = isoX * viewCos - isoY * viewSin;
         var screenY = isoX * viewSin + isoY * viewCos;
-        if (_sideRig is null || _backRig is null)
-        {
-            SetFacing(MathF.Sign(screenX));
-            return;
-        }
         _characterFacing = MathF.Abs(screenY) >= MathF.Abs(screenX)
             ? screenY < 0 ? CharacterFacing.Back : CharacterFacing.Front
             : screenX < 0 ? CharacterFacing.SideLeft : CharacterFacing.SideRight;
+        if (_sideRig is not null && _backRig is not null)
+            return;
+        if (HasDirectionalSprites)
+        {
+            var dir = _characterFacing == CharacterFacing.SideLeft ? -1f
+                : _characterFacing == CharacterFacing.SideRight ? 1f
+                : MathF.Sign(screenX);
+            SetFacing(dir);
+            return;
+        }
+        SetFacing(MathF.Sign(screenX));
     }
 
     public void Update(double deltaMs, bool moving)
@@ -309,7 +341,7 @@ public partial class RigNode : Node2D
         {
             _actionFinishing = false;
             _actionAnimation = "idle";
-            PlayAnim(moving ? "walk" : "idle", true);
+            PlayAnim(LocomotionName(moving), true);
         }
 
         var flash = (long)Time.GetTicksMsec() < _flashUntil;
@@ -345,9 +377,27 @@ public partial class RigNode : Node2D
         }
     }
 
+    private bool HasDirectionalSprites =>
+        _rig.Anims.ContainsKey("idle_side") || _rig.Anims.ContainsKey("walk_side") ||
+        _rig.Anims.ContainsKey("idle_back") || _rig.Anims.ContainsKey("walk_back");
+
+    private string LocomotionName(bool moving) =>
+        DirectionalSpriteClip.Locomotion(
+            moving,
+            _characterFacing is CharacterFacing.SideLeft or CharacterFacing.SideRight,
+            _characterFacing == CharacterFacing.Back,
+            _rig.Anims.ContainsKey);
+
+    private string ResolveAnim(string name)
+    {
+        if (_rig.Anims.ContainsKey(name)) return name;
+        var loc = LocomotionName(name == "walk" || _moving);
+        return _rig.Anims.ContainsKey(loc) ? loc : "idle";
+    }
+
     private void PlayAnim(string name, bool loop)
     {
-        if (!_rig.Anims.ContainsKey(name)) name = "idle";
+        name = ResolveAnim(name);
         if (!_rig.Anims.ContainsKey(name)) return;
         if (_sprite.Animation == name && _sprite.IsPlaying()) return;
         _sprite.Play(name);
@@ -355,7 +405,7 @@ public partial class RigNode : Node2D
 
     private void PlayAnimFromStart(string name)
     {
-        if (!_rig.Anims.ContainsKey(name)) name = "idle";
+        name = ResolveAnim(name);
         if (!_rig.Anims.ContainsKey(name)) return;
         _sprite.Stop();
         _sprite.Play(name);

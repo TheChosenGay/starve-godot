@@ -41,7 +41,8 @@ public partial class GameRoot : Node
     private Node2D? _worldPivot;
     private Node2D? _world;
     private MapView? _mapView;
-    private EntityLayer? _entityLayer;
+    private IWorldRenderer? _worldRenderer;
+    private World3DView? _world3D;
     private CloudShadowView? _clouds;
     private ParallaxView? _parallax;
     private WeatherView? _weather;
@@ -67,6 +68,7 @@ public partial class GameRoot : Node
     private long _lastBuildCheckAt;
     private long _lightningAmbientUntil;
     private readonly bool _freeCamera = CameraArg is not null;
+    private readonly bool _render3D = Render3DMode;
     private readonly AutoActionInputState _autoActions = new();
     private long _demoNextAt;
     private float _viewRotation;
@@ -111,6 +113,12 @@ public partial class GameRoot : Node
         .SkipWhile(a => a != "--cam")
         .Skip(1)
         .FirstOrDefault();
+    /// <summary>
+    /// 默认走 3D 主场景（玩家为猪人）。加 --render-2d 或 STARVE_RENDER_2D=1 回到 2D 鱼人。
+    /// </summary>
+    private static bool Render3DMode =>
+        !OS.GetCmdlineUserArgs().Contains("--render-2d") &&
+        System.Environment.GetEnvironmentVariable("STARVE_RENDER_2D") != "1";
     /// <summary>演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。</summary>
     private static (int Dx, int Dy)? DemoMove =>
         System.Environment.GetEnvironmentVariable("STARVE_DEMO_MOVE") is { } s &&
@@ -128,6 +136,14 @@ public partial class GameRoot : Node
         env.GlowStrength = 1.1f;
         env.GlowBloom = 0.12f;
         env.GlowHdrThreshold = 0.55f; // 2D HDR 下让火堆加法亮部真正泛光
+        if (_render3D)
+        {
+            env.BackgroundMode = Godot.Environment.BGMode.Color;
+            env.BackgroundColor = new Color(0.52f, 0.68f, 0.82f);
+            env.AmbientLightSource = Godot.Environment.AmbientSource.Color;
+            env.AmbientLightColor = new Color(0.55f, 0.6f, 0.7f);
+            env.AmbientLightEnergy = 0.45f;
+        }
         AddChild(new WorldEnvironment { Environment = env });
 
         _parallax = new ParallaxView { Name = "Parallax" };
@@ -140,12 +156,23 @@ public partial class GameRoot : Node
         _world.AddChild(_mapView);
         _clouds = new CloudShadowView { Name = "CloudShadows" };
         _world.AddChild(_clouds);
-        _entityLayer = new EntityLayer { Name = "EntityLayer" };
-        _world.AddChild(_entityLayer);
         _sfx = new SfxService();
         AddChild(_sfx);
         _sfx.SetSpatialRoot(_world);
-        _entityLayer.SetSfx(_sfx);
+        if (_render3D)
+        {
+            _world3D = new World3DView();
+            AddChild(_world3D);
+            _worldRenderer = _world3D.Entities;
+            _worldPivot.Visible = false;
+        }
+        else
+        {
+            var entityLayer = new EntityLayer { Name = "EntityLayer" };
+            _world.AddChild(entityLayer);
+            _worldRenderer = entityLayer;
+        }
+        _worldRenderer.SetSfx(_sfx);
         _fogGrid = new FogGrid { Name = "FogGrid" };
         _world.AddChild(_fogGrid);
         _ghost = new GhostNode { Name = "Ghost", ZIndex = 4096, Visible = false };
@@ -161,6 +188,13 @@ public partial class GameRoot : Node
         AddChild(_lut);
         _volumetric = new VolumetricView { Name = "Volumetric" };
         AddChild(_volumetric);
+        if (_render3D)
+        {
+            if (_parallax is not null) _parallax.Visible = false;
+            _lighting.Visible = false;
+            _volumetric.Visible = false;
+            GD.Print("RENDER 3D main scene, player=pigman");
+        }
 
         var ui = new CanvasLayer { Layer = 10 };
         AddChild(ui);
@@ -184,6 +218,7 @@ public partial class GameRoot : Node
         WireHud(_hud);
         FitUiRoot();
         CallDeferred(MethodName.FitUiRoot);
+        if (_render3D) _hud.Log("渲染：3D 主场景 · 玩家=猪人（--render-2d 回 2D）");
 
         AddChild(new CameraController { Camera = _camera });
         // 截图/演示辅助：STARVE_DEMO_ROTATE=45 启动即旋转视角
@@ -215,7 +250,7 @@ public partial class GameRoot : Node
             _ownSim?.SetIntent(dir.Dx, dir.Dy);
             if (dir.Dx != 0 || dir.Dy != 0)
             {
-                _entityLayer?.CancelActionForMovement(_ownId);
+                _worldRenderer?.CancelActionForMovement(_ownId);
             }
             // 自己的动画严格跟随本地输入，松键立即 idle；服务端位置只负责校正。
             _ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
@@ -310,13 +345,13 @@ public partial class GameRoot : Node
         {
             if (_client is null || _ownDead || GameplayLocked()) return;
             var command = _client.Commands.Sleep();
-            _entityLayer?.PredictAction(_ownId, ActionKind.Sleep, command);
+            _worldRenderer?.PredictAction(_ownId, ActionKind.Sleep, command);
         };
         hud.CancelSleepPressed += () =>
         {
             if (_client is null || _ownDead || GameplayLocked()) return;
             _client.Commands.CancelSleep();
-            _entityLayer?.CancelActionLocally(_ownId);
+            _worldRenderer?.CancelActionLocally(_ownId);
         };
         hud.UiClicked += () => _sfx?.Play("sfx.ui.click");
         hud.CraftOpened += () => _sfx?.Play("sfx.ui.craft.open");
@@ -333,8 +368,8 @@ public partial class GameRoot : Node
             _ownUid = uid;
             var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
             _ownId = info.EntityId;
-            _entityLayer?.SetOwnId(_ownId);
-            _entityLayer?.SetNameProvider(EntityName);
+            _worldRenderer?.SetOwnId(_ownId);
+            _worldRenderer?.SetNameProvider(EntityName);
             if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
                 float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
             {
@@ -371,7 +406,7 @@ public partial class GameRoot : Node
 
         while (_actionOutcomes.TryDequeue(out var outcome))
         {
-            _entityLayer?.ApplyActionOutcome(outcome);
+            _worldRenderer?.ApplyActionOutcome(outcome);
             if (outcome.EntityId != _ownId) continue;
             if (outcome.Result == ActionOutcomeResult.Completed &&
                 outcome.Kind == ActionKind.Craft)
@@ -403,7 +438,7 @@ public partial class GameRoot : Node
         {
             if (worldEvent.Impact is { } impact)
             {
-                _entityLayer?.ApplyCombatImpact(worldEvent, impact);
+                _worldRenderer?.ApplyCombatImpact(worldEvent, impact);
                 _damageFlash?.ApplyImpact(
                     impact.Result,
                     impact.TargetEntity == _ownId);
@@ -426,7 +461,7 @@ public partial class GameRoot : Node
             _demoNextAt = now + 100;
             _client?.Commands.Move(dm.Dx, dm.Dy);
             _ownSim?.SetIntent(dm.Dx, dm.Dy);
-            if (dm.Dx != 0 || dm.Dy != 0) _entityLayer?.CancelActionForMovement(_ownId);
+            if (dm.Dx != 0 || dm.Dy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
         }
         if (_client is { } predictionClient &&
             predictionClient.Transport.IsConnected &&
@@ -469,19 +504,28 @@ public partial class GameRoot : Node
             _camera.SyncToViewport(viewport.X, viewport.Y);
         }
         var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
-        // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
-        // Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。
-        var camLocal = IsoMath.WorldToLocal(_camera.CenterX(), _camera.CenterY(), hCam);
-        _worldPivot!.Position = viewport / 2;
-        _worldPivot.Rotation = _viewRotation;
-        _worldPivot.Scale = Vector2.One * _camera.ZoomLevel;
-        _world!.Position = new Vector2(-camLocal.X, -camLocal.Y);
-        _world.Scale = Vector2.One;
+        if (_render3D && _world3D is not null)
+        {
+            _world3D.SyncView(
+                _camera.CenterX(), _camera.CenterY(), hCam,
+                _camera.ZoomLevel, _viewRotation, viewport);
+        }
+        else
+        {
+            // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
+            // Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。
+            var camLocal = IsoMath.WorldToLocal(_camera.CenterX(), _camera.CenterY(), hCam);
+            _worldPivot!.Position = viewport / 2;
+            _worldPivot.Rotation = _viewRotation;
+            _worldPivot.Scale = Vector2.One * _camera.ZoomLevel;
+            _world!.Position = new Vector2(-camLocal.X, -camLocal.Y);
+            _world.Scale = Vector2.One;
 
-        var fx = (_camera.CenterX() - _camera.CenterY()) * IsoMath.Step * _camera.ZoomLevel;
-        var fy = ((_camera.CenterX() + _camera.CenterY()) * IsoMath.Step / 2 - hCam * IsoMath.Step) *
-                 _camera.ZoomLevel;
-        _parallax!.UpdateParallax(fx, fy, viewport);
+            var fx = (_camera.CenterX() - _camera.CenterY()) * IsoMath.Step * _camera.ZoomLevel;
+            var fy = ((_camera.CenterX() + _camera.CenterY()) * IsoMath.Step / 2 - hCam * IsoMath.Step) *
+                     _camera.ZoomLevel;
+            _parallax!.UpdateParallax(fx, fy, viewport);
+        }
 
         if (client.World.Revision != _lastWeatherRevision)
         {
@@ -493,36 +537,39 @@ public partial class GameRoot : Node
         }
 
         _weather!.Tick(delta, viewport);
-        UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
-        _lighting!.Size = viewport;
         _lut!.Size = viewport;
-        var fires = new List<Vector2>();
-        var seeds = new List<long>();
-        foreach (var view in client.World.Entities.Values)
+        if (!_render3D)
         {
-            var p = view.Get("Position", Starve.Game.V1.Position.Parser);
-            if (p is null) continue;
-            var ws = view.Get("Workstation", Workstation.Parser);
-            var bld = view.Get("Building", Building.Parser);
-            var isFire = (ws is not null && (int)ws.Type == 1) ||
-                         (bld is not null && bld.Placed && (int)bld.Kind == 1);
-            if (isFire)
+            UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
+            _lighting!.Size = viewport;
+            var fires = new List<Vector2>();
+            var seeds = new List<long>();
+            foreach (var view in client.World.Entities.Values)
             {
-                fires.Add(new Vector2(p.X, p.Y));
-                seeds.Add((long)view.EntityId);
+                var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+                if (p is null) continue;
+                var ws = view.Get("Workstation", Workstation.Parser);
+                var bld = view.Get("Building", Building.Parser);
+                var isFire = (ws is not null && (int)ws.Type == 1) ||
+                             (bld is not null && bld.Placed && (int)bld.Kind == 1);
+                if (isFire)
+                {
+                    fires.Add(new Vector2(p.X, p.Y));
+                    seeds.Add((long)view.EntityId);
+                }
             }
+            _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
         }
-        _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
         if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
-        _entityLayer!.UpdatePositions(
+        _worldRenderer!.UpdatePositions(
             _smoothers,
             id => id == _ownId
                 ? _ownIntentMoving || _ownPathMoving
                 : _movingUntil.GetValueOrDefault(id) > now,
             now,
             own);
-        _entityLayer.SetDayLight(client.World.DayLight);
+        _worldRenderer.SetDayLight(client.World.DayLight);
         _minimap!.SetView(
             client.World.Entities,
             new Vector2(_camera.CenterX(), _camera.CenterY()),
@@ -608,20 +655,26 @@ public partial class GameRoot : Node
         var map = world.Map;
         if (map is not null && _tilemap is null)
         {
-            _tilemap = new TileMap(map);
+            _tilemap = new TileMap(map) { SmoothSlopes = _render3D };
             _camera.HeightAt = _tilemap.HeightAt;
             if (_ownSim is not null) _ownSim.HeightAt = _tilemap.HeightAt;
-            _mapView!.SetMap(_tilemap);
-            _entityLayer!.SetTilemap(_tilemap);
-            _entityLayer.SetViewRotation(_viewRotation);
+            if (_render3D)
+                _world3D!.SetMap(_tilemap);
+            else
+                _mapView!.SetMap(_tilemap);
+            _worldRenderer!.SetTilemap(_tilemap);
+            _worldRenderer.SetViewRotation(_viewRotation);
             _minimap!.SetMap(_tilemap);
             _lighting!.SetNormalMap(BakeNormalTexture(_tilemap));
             _lighting!.SetMapSize(new Vector2(_tilemap.Width, _tilemap.Height));
             if (SmokeMode)
             {
+                var chunks = _render3D
+                    ? _world3D!.Terrain.GetChildCount()
+                    : _mapView!.GetChildCount();
                 GD.Print(
                     $"SMOKE map={_tilemap.Width}x{_tilemap.Height} " +
-                    $"chunks={_mapView.GetChildCount()} entities={world.Count}");
+                    $"chunks={chunks} entities={world.Count}");
                 GetTree().Quit();
             }
         }
@@ -681,7 +734,7 @@ public partial class GameRoot : Node
         }
 
         NoticeLootPicked(world);
-        _entityLayer!.SyncEntities(world.Entities);
+        _worldRenderer!.SyncEntities(world.Entities);
         UpdateBagAndCraft(world);
     }
 
@@ -980,7 +1033,7 @@ public partial class GameRoot : Node
         }
         if (predictedKind is { } kind && commandRef is { } command)
         {
-            _entityLayer?.PredictAction(_ownId, kind, command);
+            _worldRenderer?.PredictAction(_ownId, kind, command);
         }
     }
 
@@ -1021,7 +1074,7 @@ public partial class GameRoot : Node
         }
 
         var command = _client.Commands.Haunt(id);
-        _entityLayer?.PredictAction(_ownId, ActionKind.Haunt, command);
+        _worldRenderer?.PredictAction(_ownId, ActionKind.Haunt, command);
         RefreshGameplayLock();
     }
 
@@ -1283,7 +1336,7 @@ public partial class GameRoot : Node
     {
         if (_client is null || _ownDead || GameplayLocked()) return;
         var submission = _client.Commands.BeginCraft(recipeId);
-        _entityLayer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
+        _worldRenderer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
         var resp = await submission.ResponseTask;
         if (resp is { Started: true })
         {
@@ -1291,7 +1344,7 @@ public partial class GameRoot : Node
         }
         else
         {
-            _entityLayer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
+            _worldRenderer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
             _sfx?.Play("sfx.ui.craft.fail");
         }
         _hud?.Log(resp is { Started: true }
@@ -1545,7 +1598,7 @@ public partial class GameRoot : Node
         if (_hud is null || _client is null) return;
         var w = _client.World;
         RefreshOwnVitals(w);
-        var hauntStatus = _entityLayer?.ActionStatusOf(_ownId);
+        var hauntStatus = _worldRenderer?.ActionStatusOf(_ownId);
         var actionState = w.Entities.TryGetValue(_ownId, out var own)
             ? own.Get("ActionState", ActionState.Parser)
             : null;
@@ -1572,7 +1625,7 @@ public partial class GameRoot : Node
     }
 
     private bool GameplayLocked() =>
-        HauntInteractionPolicy.IsGameplayLocked(_entityLayer?.ActionStatusOf(_ownId));
+        HauntInteractionPolicy.IsGameplayLocked(_worldRenderer?.ActionStatusOf(_ownId));
 
     private bool CanSendGameplay() => !_ownDead && !GameplayLocked();
 
@@ -1633,15 +1686,17 @@ public partial class GameRoot : Node
     private void RotateView(float delta)
     {
         _viewRotation += delta;
-        _entityLayer?.SetViewRotation(_viewRotation);
+        _worldRenderer?.SetViewRotation(_viewRotation);
     }
 
-    /// <summary>屏幕坐标经 Godot 场景变换逆投影为世界坐标，自动覆盖旋转、缩放和平移。</summary>
+    /// <summary>屏幕坐标经场景变换逆投影为世界坐标，覆盖 2D 旋转/缩放或 3D 正交射线。</summary>
     private System.Numerics.Vector2 ScreenToWorld(Vector2 screen)
     {
+        Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
+        if (_render3D && _world3D is not null)
+            return _world3D.ScreenToWorld(screen, heightAt);
         if (_world is null) return System.Numerics.Vector2.Zero;
         var local = _world.ToLocal(screen);
-        Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
         return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
     }
 
