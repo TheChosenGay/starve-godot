@@ -9,8 +9,27 @@ public sealed class IsoCamera3DTests
     {
         var p = IsoCamera3D.WorldTo3D(3f, 5f, 2f);
         Assert.Equal(3f, p.X);
-        Assert.Equal(2f, p.Y);
+        Assert.Equal(2f * IsoCamera3D.HeightScale, p.Y);
         Assert.Equal(5f, p.Z);
+    }
+
+    [Fact]
+    public void HeightScale_ClampsAndScalesVisualY()
+    {
+        var prev = IsoCamera3D.HeightScale;
+        try
+        {
+            IsoCamera3D.HeightScale = 0.01f;
+            Assert.Equal(0.12f, IsoCamera3D.HeightScale);
+            IsoCamera3D.HeightScale = 4f;
+            Assert.Equal(1f, IsoCamera3D.HeightScale);
+            IsoCamera3D.HeightScale = 0.5f;
+            Assert.Equal(1f, IsoCamera3D.VisualY(2f));
+        }
+        finally
+        {
+            IsoCamera3D.HeightScale = prev;
+        }
     }
 
     [Fact]

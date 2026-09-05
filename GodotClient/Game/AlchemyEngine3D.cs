@@ -10,6 +10,7 @@ namespace GodotClient.Game;
 public partial class AlchemyEngine3D : Node3D
 {
     public const string ModelPath = "res://assets/models/alchemy-engine/alchemy-engine.glb";
+    public const string AlbedoTexPath = "res://assets/models/alchemy-engine/alchemy-engine_base_color.jpg";
     public const float GroundLift = 0.952f;
 
     private float _modelScale = 1f;
@@ -34,6 +35,17 @@ public partial class AlchemyEngine3D : Node3D
     public float ApproachRadius { get; set; } = 2.6f;
 
     public bool IsBouncing => _bouncing;
+
+    public bool ApplyToon { get; private set; }
+
+    public void SetApplyToon(bool on)
+    {
+        if (on == ApplyToon && IsInsideTree() && on == ToonMaterials.HasActorToon(this))
+            return;
+        ApplyToon = on;
+        if (IsInsideTree())
+            Rebuild();
+    }
 
     public override void _Ready()
     {
@@ -77,6 +89,7 @@ public partial class AlchemyEngine3D : Node3D
     private void Rebuild()
     {
         _bounceMats.Clear();
+        var keepToon = ApplyToon;
         var old = GetNodeOrNull<Node>("Visual");
         if (old is not null)
         {
@@ -120,6 +133,39 @@ public partial class AlchemyEngine3D : Node3D
         var model = packed.Instantiate<Node3D>();
         model.Position = new Vector3(0, GroundLift, 0);
         visual.AddChild(model);
-        AlchemyBounce.BindTree(model, _bounceMats);
+        if (keepToon)
+            BindToon(model);
+        else
+            AlchemyBounce.BindTree(model, _bounceMats);
+    }
+
+    private void BindToon(Node model)
+    {
+        var fallback = ResourceLoader.Exists(AlbedoTexPath)
+            ? GD.Load<Texture2D>(AlbedoTexPath)
+            : null;
+        foreach (var child in model.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh || child is MultiMeshInstance3D) continue;
+            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            if (surfaces <= 0)
+            {
+                var src = ToonMaterials.SourceMaterial(mesh, 0);
+                mesh.MaterialOverride = ToonMaterials.Create(
+                    ToonMaterials.ExtractAlbedoColor(src),
+                    ToonMaterials.ExtractAlbedoTex(src) ?? fallback);
+                continue;
+            }
+
+            for (var i = 0; i < surfaces; i++)
+            {
+                var src = ToonMaterials.SourceMaterial(mesh, i);
+                mesh.SetSurfaceOverrideMaterial(i, ToonMaterials.Create(
+                    ToonMaterials.ExtractAlbedoColor(src),
+                    ToonMaterials.ExtractAlbedoTex(src) ?? fallback));
+            }
+        }
+
+        AlchemyBounce.BindExisting(model, _bounceMats);
     }
 }

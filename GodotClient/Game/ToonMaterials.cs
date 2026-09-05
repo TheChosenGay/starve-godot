@@ -76,6 +76,7 @@ public static class ToonMaterials
     public const string VariantBands = "bands";
     public const string VariantCel = "cel";
     public const string DayLightParam = "day_light";
+    public const string AlbedoTexMeta = "albedo_tex_keep";
 
     /// <summary>新建角色 Toon 时用哪套 shader。切换面板选项会改这个。</summary>
     public static ToonShaderKind CreateKind { get; set; } = ToonShaderKind.Bands;
@@ -83,10 +84,10 @@ public static class ToonMaterials
     public static ToonStyle ActorDefaults { get; } = new();
     public static ToonStyle TerrainDefaults { get; } = new()
     {
-        Bands = 3f,
+        Bands = 5f,
         Rim = 0f,
-        ShadeMin = 0.4f,
-        Fill = 0.16f,
+        ShadeMin = 0.5f,
+        Fill = 0.2f,
         ShadowTint = new Color(0.42f, 0.48f, 0.62f),
         OutlineWidth = 0f,
     };
@@ -99,9 +100,7 @@ public static class ToonMaterials
         mat.SetMeta(VariantMeta, VariantName(kind));
         mat.SetShaderParameter(AlbedoParam, albedo);
         mat.SetShaderParameter(FlashParam, 0f);
-        mat.SetShaderParameter("use_albedo_tex", albedoTex is not null);
-        if (albedoTex is not null)
-            mat.SetShaderParameter("albedo_tex", albedoTex);
+        KeepAlbedo(mat, albedoTex);
         var style = ActorDefaults.Clone();
         style.Kind = kind;
         ApplyActor(mat, style);
@@ -127,8 +126,47 @@ public static class ToonMaterials
         return mat;
     }
 
+    public static Texture2D? ExtractAlbedoTex(Material? mat)
+    {
+        switch (mat)
+        {
+            case StandardMaterial3D std when std.AlbedoTexture is not null:
+                return std.AlbedoTexture;
+            case BaseMaterial3D baseMat when baseMat.AlbedoTexture is not null:
+                return baseMat.AlbedoTexture;
+            case ShaderMaterial sm:
+                foreach (var key in new[] { "albedo_tex", "texture_albedo", "albedo_texture" })
+                {
+                    if (sm.GetShaderParameter(key).AsGodotObject() is Texture2D tex)
+                        return tex;
+                }
+                if (sm.HasMeta(AlbedoTexMeta) && sm.GetMeta(AlbedoTexMeta).AsGodotObject() is Texture2D kept)
+                    return kept;
+                break;
+        }
+        return null;
+    }
+
+    public static Color ExtractAlbedoColor(Material? mat) =>
+        mat switch
+        {
+            BaseMaterial3D b => b.AlbedoColor,
+            ShaderMaterial sm when sm.GetShaderParameter(AlbedoParam).VariantType == Variant.Type.Color
+                => sm.GetShaderParameter(AlbedoParam).AsColor(),
+            _ => Colors.White,
+        };
+
+    public static void KeepAlbedo(ShaderMaterial mat, Texture2D? tex)
+    {
+        if (tex is null) return;
+        mat.SetMeta(AlbedoTexMeta, tex);
+        mat.SetShaderParameter("use_albedo_tex", true);
+        mat.SetShaderParameter("albedo_tex", tex);
+    }
+
     public static void ApplyActor(ShaderMaterial mat, ToonStyle style)
     {
+        var tex = ExtractAlbedoTex(mat);
         EnsureKind(mat, style.Kind);
         if (style.Kind == ToonShaderKind.Cel)
         {
@@ -153,6 +191,7 @@ public static class ToonMaterials
         }
         if (mat.NextPass is ShaderMaterial outline)
             ApplyOutline(outline, style);
+        KeepAlbedo(mat, tex);
     }
 
     public static ToonShaderKind ReadKind(ShaderMaterial mat)
@@ -225,21 +264,29 @@ public static class ToonMaterials
             if (mesh.MaterialOverride is not null)
             {
                 if (!IsActor(mesh.MaterialOverride))
-                    mesh.MaterialOverride = FromExisting(mesh.MaterialOverride);
+                    mesh.MaterialOverride = FromExisting(SourceMaterial(mesh, 0) ?? mesh.MaterialOverride);
                 continue;
             }
             var surfaceCount = mesh.Mesh?.GetSurfaceCount() ?? 0;
             if (surfaceCount <= 0)
             {
-                mesh.MaterialOverride = FromExisting(mesh.GetActiveMaterial(0));
+                mesh.MaterialOverride = FromExisting(SourceMaterial(mesh, 0));
                 continue;
             }
             for (var i = 0; i < surfaceCount; i++)
             {
                 if (IsActor(mesh.GetSurfaceOverrideMaterial(i))) continue;
-                mesh.SetSurfaceOverrideMaterial(i, FromExisting(mesh.GetActiveMaterial(i)));
+                mesh.SetSurfaceOverrideMaterial(i, FromExisting(SourceMaterial(mesh, i)));
             }
         }
+    }
+
+    public static Material? SourceMaterial(MeshInstance3D mesh, int surface)
+    {
+        if (mesh.Mesh is { } meshRes && surface < meshRes.GetSurfaceCount()
+            && meshRes.SurfaceGetMaterial(surface) is { } fromMesh)
+            return fromMesh;
+        return mesh.GetActiveMaterial(surface);
     }
 
     public static bool HasActorToon(Node root)
@@ -256,6 +303,11 @@ public static class ToonMaterials
             pig.ApplyToon = true;
             return;
         }
+        if (root is AlchemyEngine3D engine)
+        {
+            engine.SetApplyToon(true);
+            return;
+        }
         if (HasActorToon(root)) return;
         ApplyToMeshTree(root);
     }
@@ -265,6 +317,11 @@ public static class ToonMaterials
         if (root is PigmanActor3D pig)
         {
             pig.ApplyToon = false;
+            return;
+        }
+        if (root is AlchemyEngine3D engine)
+        {
+            engine.SetApplyToon(false);
             return;
         }
         RestoreMeshTree(root);
@@ -363,22 +420,8 @@ public static class ToonMaterials
         };
     }
 
-    private static ShaderMaterial FromExisting(Material? current)
-    {
-        Texture2D? tex = null;
-        var albedo = Colors.White;
-        if (current is StandardMaterial3D std)
-        {
-            tex = std.AlbedoTexture;
-            albedo = std.AlbedoColor;
-        }
-        else if (current is BaseMaterial3D baseMat)
-        {
-            tex = baseMat.AlbedoTexture;
-            albedo = baseMat.AlbedoColor;
-        }
-        return Create(albedo, tex);
-    }
+    private static ShaderMaterial FromExisting(Material? current) =>
+        Create(ExtractAlbedoColor(current), ExtractAlbedoTex(current));
 
     private static Shader? _bandsShader;
     private static Shader? _celShader;
@@ -392,12 +435,84 @@ public static class ToonMaterials
     private static Shader BandsShader => _bandsShader ??= MakeToonShader();
     private static Shader CelShader => _celShader ??= MakeCelShader();
 
+    // 内联进 Toon：运行时 new Shader 的 Code 解析不了 #include。
+    // Godot 要求所有 uniform 写在函数前面，所以 uniforms / 函数拆开拼。
+    private const string BounceUniforms = """
+uniform float bounce_t = 0.0;
+uniform float foot_y = -0.95;
+""";
+
+    private const string BounceDeform = """
+vec3 hop_pose(float u, float peak, float from_crouch, float deform) {
+	u = clamp(u, 0.0, 1.0);
+	float release = smoothstep(0.0, 0.20, u);
+	float lift = 4.0 * u * (1.0 - u);
+	float land = smoothstep(0.76, 1.0, u);
+	float takeoff = 1.0 - smoothstep(0.0, 0.42, u);
+	float fall = smoothstep(0.48, 0.80, u) * (1.0 - land);
+	float start_sy = from_crouch > 0.5 ? mix(0.62, 1.0, release) : 1.0;
+	float sy = clamp(
+		start_sy + peak * 1.15 * lift + 0.10 * deform * takeoff + 0.10 * deform * fall - 0.32 * deform * land,
+		0.55,
+		1.70
+	);
+	return vec3(0.0, sy, inversesqrt(sy));
+}
+
+vec3 bounce_pose(float t) {
+	const float t_crouch = 0.20;
+	const float t_hop1 = 0.42;
+	const float t_hop2 = 0.28;
+	const float t_hop3 = 0.22;
+	const float t_settle = 0.12;
+	if (t <= 0.001) {
+		return vec3(0.0, 1.0, 1.0);
+	}
+	if (t < t_crouch) {
+		float u = t / t_crouch;
+		float e = smoothstep(0.0, 0.78, u);
+		e *= e;
+		float sy = mix(1.0, 0.62, e);
+		return vec3(0.0, sy, inversesqrt(sy));
+	}
+	t -= t_crouch;
+	if (t < t_hop1) {
+		return hop_pose(t / t_hop1, 0.38, 1.0, 1.0);
+	}
+	t -= t_hop1;
+	if (t < t_hop2) {
+		return hop_pose(t / t_hop2, 0.16, 0.0, 0.55);
+	}
+	t -= t_hop2;
+	if (t < t_hop3) {
+		return hop_pose(t / t_hop3, 0.06, 0.0, 0.28);
+	}
+	t -= t_hop3;
+	float u = clamp(t / t_settle, 0.0, 1.0);
+	float e = u * u * (3.0 - 2.0 * u);
+	float sy = mix(0.84, 1.0, e);
+	return vec3(0.0, sy, inversesqrt(sy));
+}
+""";
+
+    // VERTEX/NORMAL 只能写在 vertex() 里，不能放进辅助函数。
+    private const string BounceVertex = """
+	vec3 pose = bounce_pose(bounce_t);
+	float h = VERTEX.y - foot_y;
+	VERTEX.y = foot_y + h * pose.y;
+	VERTEX.x *= pose.z;
+	VERTEX.z *= pose.z;
+	NORMAL.y /= pose.y;
+	NORMAL.xz /= pose.z;
+	NORMAL = normalize(NORMAL);
+""";
+
     private static Shader MakeToonShader() => new()
     {
         Code = """
 shader_type spatial;
 render_mode cull_back, specular_disabled, shadows_disabled, ambient_light_disabled;
-
+""" + BounceUniforms + """
 uniform vec4 albedo : source_color = vec4(0.4, 0.75, 0.45, 1.0);
 uniform sampler2D albedo_tex : source_color, hint_default_white;
 uniform bool use_albedo_tex = false;
@@ -408,6 +523,11 @@ uniform float rim : hint_range(0.0, 1.0) = 0.22;
 uniform float shade_min : hint_range(0.0, 1.0) = 0.22;
 uniform float fill : hint_range(0.0, 0.8) = 0.18;
 uniform float day_light : hint_range(0.0, 1.0) = 1.0;
+
+""" + BounceDeform + """
+void vertex() {
+""" + BounceVertex + """
+}
 
 void fragment() {
 	vec3 baseCol = use_albedo_tex ? texture(albedo_tex, UV).rgb : albedo.rgb;
@@ -436,7 +556,7 @@ void light() {
         Code = """
 shader_type spatial;
 render_mode cull_back, ambient_light_disabled;
-
+""" + BounceUniforms + """
 uniform vec4 albedo : source_color = vec4(0.4, 0.75, 0.45, 1.0);
 uniform sampler2D albedo_tex : source_color, hint_default_white;
 uniform bool use_albedo_tex = false;
@@ -452,6 +572,11 @@ uniform float rim_power = 4.0;
 uniform float rim_strength : hint_range(0.0, 2.0) = 1.0;
 uniform vec3 rim_color : source_color = vec3(1.0, 1.0, 1.0);
 uniform bool lit_part_fresnel_only = false;
+
+""" + BounceDeform + """
+void vertex() {
+""" + BounceVertex + """
+}
 
 void fragment() {
 	vec3 baseCol = use_albedo_tex ? texture(albedo_tex, UV).rgb : albedo.rgb;
@@ -492,11 +617,13 @@ void light() {
         Code = """
 shader_type spatial;
 render_mode unshaded, cull_front, shadows_disabled, depth_draw_opaque;
-
+""" + BounceUniforms + """
 uniform vec4 outline_color : source_color = vec4(0.07, 0.05, 0.09, 1.0);
 uniform float outline_width = 0.022;
 
+""" + BounceDeform + """
 void vertex() {
+""" + BounceVertex + """
 	vec3 n = normalize((MODELVIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	vec4 view = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	view.xyz += n * outline_width;
@@ -517,9 +644,9 @@ render_mode cull_back, specular_disabled, shadows_disabled, ambient_light_disabl
 
 uniform sampler2D uAtlas : source_color, filter_linear_mipmap;
 uniform vec4 shadow_tint : source_color = vec4(0.42, 0.48, 0.62, 1.0);
-uniform float bands = 3.0;
-uniform float shade_min : hint_range(0.0, 1.0) = 0.4;
-uniform float fill : hint_range(0.0, 0.8) = 0.16;
+uniform float bands = 5.0;
+uniform float shade_min : hint_range(0.0, 1.0) = 0.5;
+uniform float fill : hint_range(0.0, 0.8) = 0.2;
 uniform float day_light : hint_range(0.0, 1.0) = 1.0;
 uniform float coverage : hint_range(0.0, 1.0) = 0.22;
 uniform float thickness : hint_range(10.0, 100.0) = 42.0;
@@ -591,7 +718,9 @@ float cloud_shade(vec3 pos) {
 
 void fragment() {
 	float cs = cloud_shade(world_pos);
-	ALBEDO = texture(uAtlas, UV).rgb * COLOR.rgb * mix(1.0, 0.32, cs);
+	vec3 ground = texture(uAtlas, UV).rgb;
+	vec3 steep = texture(uAtlas, UV2).rgb;
+	ALBEDO = mix(ground, steep, COLOR.a) * COLOR.rgb * mix(1.0, 0.32, cs);
 	ROUGHNESS = 1.0;
 	EMISSION = ALBEDO * fill * mix(0.1, 1.0, day_light) * vec3(0.88, 1.0, 1.15) * mix(1.0, 0.18, cs);
 }

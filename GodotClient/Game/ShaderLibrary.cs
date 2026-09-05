@@ -15,14 +15,15 @@ public static class ShaderLibrary
 
     public static Shader Load(string path)
     {
-        if (GD.Load(path) is Shader imported)
-            return imported;
         if (FileAccess.FileExists(path))
         {
             var code = FileAccess.GetFileAsString(path);
-            if (!string.IsNullOrWhiteSpace(code))
+            if (!string.IsNullOrWhiteSpace(code) && !code.Contains("#include"))
                 return new Shader { Code = code };
         }
+
+        if (GD.Load(path) is Shader imported)
+            return imported;
 
         throw new InvalidOperationException("缺少 shader " + path);
     }

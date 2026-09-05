@@ -36,6 +36,9 @@ public partial class ActorTunePanel : Control
     private HSlider? _cloudThick;
     private HSlider? _cloudWind;
     private HSlider? _cloudHeight;
+    private HSlider? _heightScale;
+    private HSlider? _subdiv;
+    private Timer? _terrainRebuild;
 
     public override void _Ready()
     {
@@ -72,6 +75,10 @@ public partial class ActorTunePanel : Control
         box.AddChild(new Label { Text = "相机" });
         _pitch = AddSlider(box, "俯仰°", 18, 55, 1, IsoCamera3D.PitchDegrees);
 
+        box.AddChild(new Label { Text = "地形缓坡（只改外形）" });
+        _heightScale = AddSlider(box, "高度比例", 0.12f, 1f, 0.02f, IsoCamera3D.HeightScale);
+        _subdiv = AddSlider(box, "细分", 1, 8, 1, MapMeshBuilder.SmoothSubdiv);
+
         box.AddChild(new Label { Text = "自己" });
         _move = AddSlider(box, "移动速度", 0.3f, 2f, 0.05f, 1f);
 
@@ -101,6 +108,10 @@ public partial class ActorTunePanel : Control
         var reset = new Button { Text = "恢复默认" };
         reset.Pressed += ResetAll;
         box.AddChild(reset);
+
+        _terrainRebuild = new Timer { OneShot = true, WaitTime = 0.18 };
+        _terrainRebuild.Timeout += () => World?.RebuildTerrain();
+        AddChild(_terrainRebuild);
     }
 
     public bool Hits(Vector2 screen) =>
@@ -123,6 +134,8 @@ public partial class ActorTunePanel : Control
     {
         _syncing = true;
         if (_pitch is not null) _pitch.Value = 45;
+        if (_heightScale is not null) _heightScale.Value = IsoCamera3D.DefaultHeightScale;
+        if (_subdiv is not null) _subdiv.Value = MapMeshBuilder.DefaultSmoothSubdiv;
         if (_move is not null) _move.Value = 1;
         if (_scale is not null) _scale.Value = 1;
         if (_anim is not null) _anim.Value = 1;
@@ -145,6 +158,30 @@ public partial class ActorTunePanel : Control
         if (_syncing) return;
         if (_pitch is not null)
             IsoCamera3D.PitchDegrees = (float)_pitch.Value;
+        var terrainDirty = false;
+        if (_heightScale is not null)
+        {
+            var scale = (float)_heightScale.Value;
+            if (MathF.Abs(scale - IsoCamera3D.HeightScale) > 1e-4f)
+            {
+                IsoCamera3D.HeightScale = scale;
+                terrainDirty = true;
+            }
+        }
+        if (_subdiv is not null)
+        {
+            var n = (int)Math.Round(_subdiv.Value);
+            if (n != MapMeshBuilder.SmoothSubdiv)
+            {
+                MapMeshBuilder.SmoothSubdiv = n;
+                terrainDirty = true;
+            }
+        }
+        if (terrainDirty)
+        {
+            _terrainRebuild?.Stop();
+            _terrainRebuild?.Start();
+        }
         if (_move is not null)
         {
             var mul = (float)_move.Value;

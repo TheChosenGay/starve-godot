@@ -13,6 +13,18 @@ public static class IsoCamera3D
     public const float WorldUnit = 1f;
 
     /// <summary>
+    /// 逻辑高度 → 视觉 Y 的比例。1 时相邻角差 1 约为 45°；
+    /// 0.28 时约 16°，更接近吉卜力缓坡。只影响 3D 外形，不改高度场。
+    /// </summary>
+    public static float HeightScale
+    {
+        get => _heightScale;
+        set => _heightScale = Math.Clamp(value, 0.12f, 1f);
+    }
+
+    public const float DefaultHeightScale = 0.28f;
+
+    /// <summary>
     /// 俯仰角（度）。45° 是经典等距俯视，顶面偏多、容易显得「站得太高」；
     /// 28–35° 更接近侧面 2.5D。运行时可改，正交构图会跟着变。
     /// </summary>
@@ -22,6 +34,7 @@ public static class IsoCamera3D
         set => _pitchDegrees = Math.Clamp(value, 15f, 70f);
     }
 
+    private static float _heightScale = DefaultHeightScale;
     private static float _pitchDegrees = 45f;
 
     /// <summary>偏航角（度）：绕世界 Y 转 45°，让 XZ 轴在屏幕上成菱形。</summary>
@@ -35,9 +48,12 @@ public static class IsoCamera3D
     /// </summary>
     public const float ViewScale = 0.5f;
 
-    /// <summary>世界格坐标 → 3D（X=wx，Y=高度，Z=wy）。</summary>
+    /// <summary>逻辑高度 → 3D Y（已乘 HeightScale）。</summary>
+    public static float VisualY(float height) => height * WorldUnit * HeightScale;
+
+    /// <summary>世界格坐标 → 3D（X=wx，Y=视觉高度，Z=wy）。</summary>
     public static Vector3 WorldTo3D(float wx, float wy, float height = 0) =>
-        new(wx * WorldUnit, height * WorldUnit, wy * WorldUnit);
+        new(wx * WorldUnit, VisualY(height), wy * WorldUnit);
 
     /// <summary>3D XZ → 世界格坐标（忽略高度）。</summary>
     public static Vector2 WorldFrom3D(float x, float z) =>

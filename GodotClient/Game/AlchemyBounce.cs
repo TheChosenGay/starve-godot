@@ -12,7 +12,14 @@ public static class AlchemyBounce
 
     private static Shader? _shader;
 
-    public static Shader Shader => _shader ??= ShaderLibrary.Load(ShaderLibrary.AlchemyBounce);
+    public static Shader Shader
+    {
+        get
+        {
+            _shader ??= ShaderLibrary.Load(ShaderLibrary.AlchemyBounce);
+            return _shader;
+        }
+    }
 
     public static void BindTree(Node root, List<ShaderMaterial> into)
     {
@@ -27,7 +34,7 @@ public static class AlchemyBounce
             var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
             if (surfaces <= 0)
             {
-                var mat = Wrap(mesh.GetActiveMaterial(0), footY);
+                var mat = Wrap(SourceMaterial(mesh, 0), footY);
                 mesh.MaterialOverride = mat;
                 into.Add(mat);
                 continue;
@@ -35,9 +42,37 @@ public static class AlchemyBounce
 
             for (var i = 0; i < surfaces; i++)
             {
-                var mat = Wrap(mesh.GetActiveMaterial(i), footY);
+                var mat = Wrap(SourceMaterial(mesh, i), footY);
                 mesh.SetSurfaceOverrideMaterial(i, mat);
                 into.Add(mat);
+            }
+        }
+    }
+
+    /// <summary>不换 shader，只把现有材质收进抖动时间轴（Toon 套上后仍能抖）。</summary>
+    public static void BindExisting(Node root, List<ShaderMaterial> into)
+    {
+        into.Clear();
+        foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh) continue;
+            if (child is MultiMeshInstance3D) continue;
+            if (IsFxMesh(child, root)) continue;
+            mesh.ExtraCullMargin = 0.75f;
+            var footY = mesh.GetAabb().Position.Y;
+            if (mesh.MaterialOverride is ShaderMaterial over)
+            {
+                BindTime(over, footY);
+                into.Add(over);
+                continue;
+            }
+
+            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            for (var i = 0; i < surfaces; i++)
+            {
+                if (mesh.GetSurfaceOverrideMaterial(i) is not ShaderMaterial surface) continue;
+                BindTime(surface, footY);
+                into.Add(surface);
             }
         }
     }
@@ -45,7 +80,20 @@ public static class AlchemyBounce
     public static void SetTime(IReadOnlyList<ShaderMaterial> mats, float bounceT)
     {
         for (var i = 0; i < mats.Count; i++)
+        {
             mats[i].SetShaderParameter("bounce_t", bounceT);
+            if (mats[i].NextPass is ShaderMaterial outline)
+                outline.SetShaderParameter("bounce_t", bounceT);
+        }
+    }
+
+    private static Material? SourceMaterial(MeshInstance3D mesh, int surface)
+    {
+        if (mesh.GetSurfaceOverrideMaterial(surface) is { } over)
+            return over;
+        if (mesh.Mesh is { } meshRes && surface < meshRes.GetSurfaceCount())
+            return meshRes.SurfaceGetMaterial(surface);
+        return mesh.GetActiveMaterial(surface);
     }
 
     private static ShaderMaterial Wrap(Material? src, float footY)
@@ -67,38 +115,75 @@ public static class AlchemyBounce
             return mat;
         }
 
-        if (src is not StandardMaterial3D std)
+        if (src is StandardMaterial3D std)
         {
-            mat.SetShaderParameter("albedo", new Color(0.62f, 0.48f, 0.34f));
+            CopyLit(mat, std);
             return mat;
         }
 
-        mat.SetShaderParameter("albedo", std.AlbedoColor);
-        if (std.AlbedoTexture is { } albedo)
+        if (src is BaseMaterial3D baseMat)
+        {
+            CopyLit(mat, baseMat);
+            return mat;
+        }
+
+        if (ToonMaterials.ExtractAlbedoTex(src) is { } tex)
+        {
+            mat.SetShaderParameter("albedo", ToonMaterials.ExtractAlbedoColor(src));
+            mat.SetShaderParameter("use_albedo_tex", true);
+            mat.SetShaderParameter("albedo_tex", tex);
+            return mat;
+        }
+
+        mat.SetShaderParameter("albedo", new Color(0.62f, 0.48f, 0.34f));
+        return mat;
+    }
+
+    private static void CopyLit(ShaderMaterial mat, BaseMaterial3D src)
+    {
+        mat.SetShaderParameter("albedo", src.AlbedoColor);
+        if (src.AlbedoTexture is { } albedo)
         {
             mat.SetShaderParameter("use_albedo_tex", true);
             mat.SetShaderParameter("albedo_tex", albedo);
         }
 
-        var mr = std.MetallicTexture ?? std.RoughnessTexture;
-        if (mr is not null)
+        if (src is StandardMaterial3D std)
         {
-            mat.SetShaderParameter("use_mr_tex", true);
-            mat.SetShaderParameter("mr_tex", mr);
-            mat.SetShaderParameter("metallic_channel", (int)std.MetallicTextureChannel);
-            mat.SetShaderParameter("roughness_channel", (int)std.RoughnessTextureChannel);
-        }
+            var mr = std.MetallicTexture ?? std.RoughnessTexture;
+            if (mr is not null)
+            {
+                mat.SetShaderParameter("use_mr_tex", true);
+                mat.SetShaderParameter("mr_tex", mr);
+                mat.SetShaderParameter("metallic_channel", (int)std.MetallicTextureChannel);
+                mat.SetShaderParameter("roughness_channel", (int)std.RoughnessTextureChannel);
+            }
 
-        mat.SetShaderParameter("metallic", std.Metallic);
-        mat.SetShaderParameter("roughness", std.Roughness);
-        if (std.NormalEnabled && std.NormalTexture is { } normal)
+            mat.SetShaderParameter("metallic", std.Metallic);
+            mat.SetShaderParameter("roughness", std.Roughness);
+            if (std.NormalEnabled && std.NormalTexture is { } normal)
+            {
+                mat.SetShaderParameter("use_normal_tex", true);
+                mat.SetShaderParameter("normal_tex", normal);
+                mat.SetShaderParameter("normal_scale", std.NormalScale);
+            }
+        }
+        else
         {
-            mat.SetShaderParameter("use_normal_tex", true);
-            mat.SetShaderParameter("normal_tex", normal);
-            mat.SetShaderParameter("normal_scale", std.NormalScale);
+            mat.SetShaderParameter("metallic", src.Metallic);
+            mat.SetShaderParameter("roughness", src.Roughness);
         }
+    }
 
-        return mat;
+    private static void BindTime(ShaderMaterial mat, float footY)
+    {
+        mat.SetShaderParameter("foot_y", footY);
+        mat.SetShaderParameter("bounce_t", 0f);
+        if (mat.NextPass is ShaderMaterial outline)
+        {
+            outline.SetShaderParameter("foot_y", footY);
+            outline.SetShaderParameter("bounce_t", 0f);
+        }
     }
 
     private static bool IsFxMesh(Node node, Node root)

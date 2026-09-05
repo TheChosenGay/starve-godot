@@ -45,6 +45,7 @@ public partial class World3DView : Node3D
     private readonly ProceduralSkyMaterial _skyMat;
     private readonly CloudLayer3D _clouds;
     private MeshInstance3D? _toonMark;
+    private TileMap? _map;
     private float _timeOfDay = 0.5f;
     private int _season;
     private float _rain;
@@ -142,12 +143,20 @@ public partial class World3DView : Node3D
 
     public void SetMap(TileMap tm)
     {
+        _map = tm;
         _flatGround.Visible = false;
         _probes.Visible = false;
         Terrain.SetMap(tm);
         var diag = MathF.Sqrt(tm.Width * tm.Width + tm.Height * tm.Height);
         _camera.Far = Math.Max(200f, IsoCamera3D.Distance + diag + 32f);
         ApplyCycle();
+    }
+
+    /// <summary>高度比例或细分改了之后重烘焙网格，角色仍走同一套 WorldTo3D。</summary>
+    public void RebuildTerrain()
+    {
+        if (_map is { } tm)
+            Terrain.SetMap(tm);
     }
 
     public void SyncView(float camX, float camY, float height, float zoom, float viewRotation, Vector2 viewport)
@@ -336,7 +345,7 @@ public partial class World3DView : Node3D
             var t = (h - localOrigin.Y) / localDir.Y;
             hit = localOrigin + localDir * t;
             if (heightAt is null) break;
-            h = heightAt(hit.X, hit.Z);
+            h = IsoCamera3D.VisualY(heightAt(hit.X, hit.Z));
         }
         return IsoCamera3D.WorldFrom3D(hit.X, hit.Z);
     }

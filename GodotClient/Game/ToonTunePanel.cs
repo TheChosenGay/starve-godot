@@ -218,10 +218,10 @@ public partial class ToonTunePanel : Control
         {
             CopyInto(ToonMaterials.TerrainDefaults, new ToonStyle
             {
-                Bands = 3f,
+                Bands = 5f,
                 Rim = 0f,
-                ShadeMin = 0.4f,
-                Fill = 0.16f,
+                ShadeMin = 0.5f,
+                Fill = 0.2f,
                 ShadowTint = new Color(0.42f, 0.48f, 0.62f),
                 OutlineWidth = 0f,
                 OutlineColor = new Color(0.07f, 0.05f, 0.09f),
