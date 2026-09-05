@@ -20,6 +20,8 @@ public static class AlchemyBounce
         foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
         {
             if (child is not MeshInstance3D mesh) continue;
+            if (child is MultiMeshInstance3D) continue;
+            if (IsFxMesh(child, root)) continue;
             mesh.ExtraCullMargin = 0.75f;
             var footY = mesh.GetAabb().Position.Y;
             var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
@@ -51,6 +53,20 @@ public static class AlchemyBounce
         var mat = new ShaderMaterial { Shader = Shader };
         mat.SetShaderParameter("bounce_t", 0f);
         mat.SetShaderParameter("foot_y", footY);
+        if (src is ShaderMaterial sm)
+        {
+            var srcAlbedo = sm.GetShaderParameter("albedo");
+            mat.SetShaderParameter("albedo", srcAlbedo.VariantType == Variant.Type.Color
+                ? srcAlbedo.AsColor()
+                : new Color(0.62f, 0.48f, 0.34f));
+            if (sm.GetShaderParameter("albedo_tex").AsGodotObject() is Texture2D srcTex)
+            {
+                mat.SetShaderParameter("use_albedo_tex", true);
+                mat.SetShaderParameter("albedo_tex", srcTex);
+            }
+            return mat;
+        }
+
         if (src is not StandardMaterial3D std)
         {
             mat.SetShaderParameter("albedo", new Color(0.62f, 0.48f, 0.34f));
@@ -83,5 +99,113 @@ public static class AlchemyBounce
         }
 
         return mat;
+    }
+
+    private static bool IsFxMesh(Node node, Node root)
+    {
+        for (var p = node; p is not null && p != root; p = p.GetParent())
+        {
+            if (p is WillowFluffFx or AlchemyBounceFx) return true;
+        }
+        return false;
+    }
+}
+
+/// <summary>沙盘用：把抖动套到任意网格，离开时还原材质。</summary>
+public partial class AlchemyBounceFx : Node
+{
+    public const string NodeName = "AlchemyBounceFx";
+
+    public bool Loop { get; set; }
+
+    private readonly List<ShaderMaterial> _mats = [];
+    private readonly List<(MeshInstance3D Mesh, int Surface, Material? Prev)> _prev = [];
+    private float _t;
+    private float _gap;
+    private bool _engineOnly;
+
+    public static void Attach(Node3D host, bool loop)
+    {
+        Detach(host);
+        var fx = new AlchemyBounceFx { Name = NodeName, Loop = loop };
+        host.AddChild(fx);
+        if (host is AlchemyEngine3D engine)
+        {
+            fx._engineOnly = true;
+            engine.PlayBounce();
+            fx.SetProcess(loop);
+            return;
+        }
+
+        fx.Capture(host);
+        AlchemyBounce.BindTree(host, fx._mats);
+        fx.SetProcess(true);
+    }
+
+    public static void Detach(Node3D host)
+    {
+        if (host.GetNodeOrNull<AlchemyBounceFx>(NodeName) is { } fx)
+            fx.RestoreAndFree();
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_engineOnly)
+        {
+            if (!Loop) return;
+            _gap -= (float)delta;
+            if (_gap > 0f) return;
+            if (GetParent() is AlchemyEngine3D engine && !engine.IsBouncing)
+            {
+                engine.PlayBounce();
+                _gap = 2.2f;
+            }
+            return;
+        }
+
+        _t += (float)delta;
+        if (_t >= AlchemyBounce.Duration)
+        {
+            _t = 0f;
+            AlchemyBounce.SetTime(_mats, 0f);
+            if (!Loop)
+            {
+                SetProcess(false);
+                return;
+            }
+        }
+
+        AlchemyBounce.SetTime(_mats, _t);
+    }
+
+    private void Capture(Node host)
+    {
+        foreach (var child in host.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh || child is MultiMeshInstance3D) continue;
+            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            if (surfaces <= 0)
+            {
+                _prev.Add((mesh, -1, mesh.MaterialOverride));
+                continue;
+            }
+
+            for (var i = 0; i < surfaces; i++)
+                _prev.Add((mesh, i, mesh.GetSurfaceOverrideMaterial(i)));
+        }
+    }
+
+    private void RestoreAndFree()
+    {
+        foreach (var (mesh, surface, prev) in _prev)
+        {
+            if (!GodotObject.IsInstanceValid(mesh)) continue;
+            if (surface < 0)
+                mesh.MaterialOverride = prev;
+            else
+                mesh.SetSurfaceOverrideMaterial(surface, prev);
+        }
+
+        QueueFree();
     }
 }

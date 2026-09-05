@@ -92,6 +92,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 node = MakeVisual(id, view, style);
                 _nodes[id] = node;
                 AddChild(node);
+                if (ShouldFluffOnSpawn(view, style))
+                    WillowFluffFx.PlayOn(node);
             }
             else
             {
@@ -288,6 +290,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         var mat = ActorMesh3D.MaterialOf(node);
         if (mat is not null) _mats[id] = mat;
         return node;
+    }
+
+    private static bool ShouldFluffOnSpawn(EntityView view, EntityStyle style)
+    {
+        if (style.IsWorkbench || style.IsFire) return true;
+        return view.Get("Building", Building.Parser) is { Placed: true };
     }
 
     private void ApplyStyle(ulong id, Node3D node, EntityStyle style)

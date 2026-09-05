@@ -8,6 +8,7 @@ public static class ShaderLibrary
 {
     public const string Fire = "res://shaders/anim/fire.gdshader";
     public const string AlchemyBounce = "res://shaders/anim/alchemy-bounce.gdshader";
+    public const string WillowFluff = "res://shaders/anim/willow-fluff.gdshader";
     public const string CloudSky = "res://shaders/anim/cloud-sky.gdshader";
     public const string CloudVolume = "res://shaders/anim/cloud-volume.gdshader";
     public const string CloudShadow = "res://shaders/anim/cloud-shadow.gdshader";

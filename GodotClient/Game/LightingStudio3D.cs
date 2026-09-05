@@ -21,7 +21,11 @@ public partial class LightingStudio3D : Node3D
     private CloudLayer3D _clouds = null!;
     private LightingStudioPanel _panel = null!;
     private FireTunePanel _firePanel = null!;
+    private ShaderFxPanel _fxPanel = null!;
     private GpuParticles3D _snowFall = null!;
+    private readonly List<(Node3D Node, string Label)> _pickables = [];
+    private MeshInstance3D _pickMark = null!;
+    private Node3D? _selected;
     private Shader _coverShader = null!;
     private readonly List<CoverSurf> _covers = [];
     private readonly List<MeshInstance3D> _snowCaps = [];
@@ -72,6 +76,8 @@ public partial class LightingStudio3D : Node3D
         _firePanel = new FireTunePanel();
         AddChild(_firePanel);
         _firePanel.Bind(_flames);
+        _fxPanel = new ShaderFxPanel();
+        AddChild(_fxPanel);
         _panel.ReapplyCombo();
         ApplyCamera();
     }
@@ -128,12 +134,13 @@ public partial class LightingStudio3D : Node3D
                 GetViewport().SetInputAsHandled();
                 return;
             }
-            if (mb.Pressed && mb.ButtonIndex == MouseButton.Left && !_firePanel.Hits(mb.Position))
+            if (mb.Pressed && mb.ButtonIndex == MouseButton.Left
+                && !_firePanel.Hits(mb.Position)
+                && !_fxPanel.Hits(mb.Position)
+                && !_panel.Hits(mb.Position))
             {
-                var pick = PickFlame(mb.Position);
-                if (pick >= 0)
+                if (TrySelectObject(mb.Position))
                 {
-                    _firePanel.Select(pick);
                     GetViewport().SetInputAsHandled();
                     return;
                 }
@@ -167,23 +174,70 @@ public partial class LightingStudio3D : Node3D
         }
     }
 
-    private int PickFlame(Vector2 screen)
+    private bool TrySelectObject(Vector2 screen)
     {
-        var best = -1;
-        var bestD = 56f;
-        for (var i = 0; i < _flames.Count; i++)
+        Node3D? best = null;
+        var bestLabel = "";
+        var bestD = 52f;
+        foreach (var (node, label) in _pickables)
         {
-            var flame = _flames[i];
-            var tip = flame.GlobalPosition + new Vector3(0, flame.Style.MeshHeight * 0.5f, 0);
-            var d = _camera.UnprojectPosition(tip).DistanceTo(screen);
-            if (d < bestD)
-            {
-                bestD = d;
-                best = i;
-            }
+            if (!GodotObject.IsInstanceValid(node) || !node.Visible) continue;
+            var d = _camera.UnprojectPosition(PickPoint(node)).DistanceTo(screen);
+            if (d >= bestD) continue;
+            bestD = d;
+            best = node;
+            bestLabel = label;
         }
-        return best;
+
+        if (best is null) return false;
+        _selected = best;
+        _fxPanel.Select(best, bestLabel);
+        UpdatePickMark();
+        if (FindFlame(best) is { } flame)
+        {
+            var idx = _flames.IndexOf(flame);
+            if (idx >= 0)
+                _firePanel.Select(idx);
+        }
+
+        return true;
     }
+
+    private static Vector3 PickPoint(Node3D node)
+    {
+        if (node is MeshInstance3D mi && mi.Mesh is not null)
+            return mi.ToGlobal(mi.GetAabb().GetCenter());
+        if (node is FireFlame3D flame)
+            return flame.GlobalPosition + new Vector3(0, flame.Style.MeshHeight * 0.5f, 0);
+        return node.GlobalPosition + Vector3.Up * 0.7f;
+    }
+
+    private void UpdatePickMark()
+    {
+        if (_selected is null || !GodotObject.IsInstanceValid(_selected))
+        {
+            _pickMark.Visible = false;
+            return;
+        }
+
+        _pickMark.Visible = true;
+        var p = _selected.GlobalPosition;
+        _pickMark.GlobalPosition = new Vector3(p.X, 0.04f, p.Z);
+    }
+
+    private static FireFlame3D? FindFlame(Node3D node)
+    {
+        if (node is FireFlame3D flame) return flame;
+        foreach (var child in node.FindChildren("*", "", true, false))
+        {
+            if (child is FireFlame3D found)
+                return found;
+        }
+
+        return null;
+    }
+
+    private void RegisterPick(Node3D node, string label) => _pickables.Add((node, label));
 
     private void ApplyPigmanToon(ToonShaderKind? kind)
     {
@@ -368,6 +422,26 @@ public partial class LightingStudio3D : Node3D
         _snowFall = MakeSnowFall();
         AddChild(_snowFall);
 
+        _pickMark = new MeshInstance3D
+        {
+            Name = "PickMark",
+            Mesh = new TorusMesh { InnerRadius = 0.28f, OuterRadius = 0.36f, Rings = 12, RingSegments = 8 },
+            MaterialOverride = new StandardMaterial3D
+            {
+                AlbedoColor = new Color(1f, 0.86f, 0.35f, 0.85f),
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            },
+            Visible = false,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
+        AddChild(_pickMark);
+
+        RegisterPick(lantern, "灯笼");
+        RegisterPick(_pigman, "猪人");
+        RegisterPick(_alchemy, "炼金引擎");
+        RegisterPick(fire, "火堆");
+
         AddLabel(new Vector3(2.3f, 2.15f, 1.1f), "灯笼");
         AddLabel(new Vector3(2.5f, 1.85f, 2.2f), "角色 Toon");
         AddLabel(new Vector3(-2.4f, 2.15f, 1.6f), "炼金引擎");
@@ -400,6 +474,7 @@ public partial class LightingStudio3D : Node3D
         };
         var tree = new Node3D
         {
+            Name = "Tree",
             Position = new Vector3(x, 0, z),
             Scale = Vector3.One * scale,
         };
@@ -427,6 +502,7 @@ public partial class LightingStudio3D : Node3D
         tree.AddChild(cap);
         _snowCaps.Add(cap);
         AddChild(tree);
+        RegisterPick(tree, "树");
     }
 
     private void PlaceBush(float x, float z, float scale)
@@ -434,12 +510,14 @@ public partial class LightingStudio3D : Node3D
         var mat = MakeCover(CoverKind.Bush, 0.22f, 0.75f);
         var bush = new MeshInstance3D
         {
+            Name = "Bush",
             Position = new Vector3(x, 0.22f * scale, z),
             Scale = Vector3.One * scale,
             Mesh = new SphereMesh { Radius = 0.32f, Height = 0.44f },
             MaterialOverride = mat,
         };
         AddChild(bush);
+        RegisterPick(bush, "灌木");
         var cap = new MeshInstance3D
         {
             Name = "SnowCap",
@@ -460,25 +538,31 @@ public partial class LightingStudio3D : Node3D
     private void PlaceLog(float x, float z)
     {
         var mat = MakeCover(CoverKind.Log, 0.35f, 0.82f);
-        AddChild(new MeshInstance3D
+        var log = new MeshInstance3D
         {
+            Name = "Log",
             Position = new Vector3(x, 0.1f, z),
             RotationDegrees = new Vector3(0, 38f, 90f),
             Mesh = new CylinderMesh { TopRadius = 0.09f, BottomRadius = 0.1f, Height = 1.15f },
             MaterialOverride = mat,
-        });
+        };
+        AddChild(log);
+        RegisterPick(log, "木头");
     }
 
     private void PlaceRock(float x, float z, float scale)
     {
         var mat = MakeCover(CoverKind.Rock, 0.32f, 0.8f);
-        AddChild(new MeshInstance3D
+        var rock = new MeshInstance3D
         {
+            Name = "Rock",
             Position = new Vector3(x, 0.12f * scale, z),
             Scale = Vector3.One * scale,
             Mesh = new SphereMesh { Radius = 0.38f, Height = 0.42f },
             MaterialOverride = mat,
-        });
+        };
+        AddChild(rock);
+        RegisterPick(rock, "石头");
     }
 
     private ShaderMaterial MakeCover(CoverKind kind, float snowStart, float snowEnd)
@@ -538,6 +622,7 @@ public partial class LightingStudio3D : Node3D
         flame.Position = pos;
         AddChild(flame);
         _flames.Add(flame);
+        RegisterPick(flame, style.Label);
     }
 
     private Node3D MakeFirePit()
@@ -701,6 +786,7 @@ public partial class LightingStudioPanel : CanvasLayer
     private bool _syncing;
     private Label? _soloLabel;
     private Label? _comboLabel;
+    private PanelContainer _frame = null!;
     private readonly List<(HSlider Slider, Label Num, Func<float> Get)> _sliders = [];
     private readonly List<(ColorPickerButton Picker, Func<Color> Get)> _colors = [];
 
@@ -715,17 +801,17 @@ public partial class LightingStudioPanel : CanvasLayer
         ui.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(ui);
 
-        var frame = new PanelContainer { MouseFilter = Control.MouseFilterEnum.Stop };
-        frame.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        frame.OffsetLeft = -330;
-        frame.OffsetTop = 12;
-        frame.OffsetRight = -12;
-        frame.OffsetBottom = 860;
-        frame.Theme = HudTheme.Create();
-        ui.AddChild(frame);
+        _frame = new PanelContainer { MouseFilter = Control.MouseFilterEnum.Stop };
+        _frame.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        _frame.OffsetLeft = -330;
+        _frame.OffsetTop = 12;
+        _frame.OffsetRight = -12;
+        _frame.OffsetBottom = 520;
+        _frame.Theme = HudTheme.Create();
+        ui.AddChild(_frame);
 
         var scroll = new ScrollContainer { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
-        frame.AddChild(scroll);
+        _frame.AddChild(scroll);
         var box = new VBoxContainer();
         scroll.AddChild(box);
         box.AddThemeConstantOverride("separation", 5);
@@ -733,7 +819,7 @@ public partial class LightingStudioPanel : CanvasLayer
         box.AddChild(new Label { Text = "光照沙盘" });
         box.AddChild(new Label
         {
-            Text = "右键拖旋转  Q/E 左右  R/F 俯仰  滚轮远近\n0 全开  1 太阳  2 火  3 灯  4 只环境\n左侧改火焰外形和颜色，左键点选火焰",
+            Text = "右键拖旋转  Q/E 左右  R/F 俯仰  滚轮远近\n0 全开  1 太阳  2 火  3 灯  4 只环境\n左键点物体套 shader，点火仍可改火焰",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
         _comboLabel = new Label { Text = "组合：春 · 盛阳" };
@@ -800,6 +886,9 @@ public partial class LightingStudioPanel : CanvasLayer
         AddSlider(box, "风速", 0f, 2f, 0.01f, () => CloudWind, v => CloudWind = v);
         AddSlider(box, "高度", 8f, 48f, 0.5f, () => CloudHeight, v => CloudHeight = v);
     }
+
+    public bool Hits(Vector2 screen) =>
+        _frame is not null && _frame.GetGlobalRect().HasPoint(screen);
 
     public void ReapplyCombo() => ApplyLook(DayCyclePalette.Evaluate(TimeOfDay, Season));
 
