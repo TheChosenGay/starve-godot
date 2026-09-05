@@ -163,6 +163,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                     preview.SetFlash(flashing);
                 else if (node is PigmanActor3D pig)
                     pig.SetFlash(flashing);
+                else if (node is TreeActor3D tree)
+                    tree.SetFlash(flashing);
                 else if (_mats.TryGetValue(id, out var mat))
                     ToonMaterials.SetFlash(mat, flashing);
             }
@@ -237,6 +239,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             preview.SetFlash(false);
         else if (_nodes.TryGetValue(targetEntity, out var pigNode) && pigNode is PigmanActor3D pig)
             pig.SetFlash(false);
+        else if (_nodes.TryGetValue(targetEntity, out var treeNode) && treeNode is TreeActor3D tree)
+            tree.SetFlash(false);
         else if (_mats.TryGetValue(targetEntity, out var mat))
             ToonMaterials.SetFlash(mat, false);
         _flashUntil.Remove(targetEntity);
@@ -292,7 +296,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     private void ApplyStyle(ulong id, Node3D node, EntityStyle style)
     {
-        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D) return;
+        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D or TreeActor3D) return;
         if (node.GetNodeOrNull<FireFlame3D>("Flame") is not null) return;
         ActorMesh3D.ApplyStyle(node, style);
         if (_mats.TryGetValue(id, out var mat) && !_flashUntil.ContainsKey(id))

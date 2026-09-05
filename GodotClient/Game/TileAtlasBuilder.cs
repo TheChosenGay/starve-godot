@@ -12,6 +12,7 @@ public sealed class TileAtlasBuilder
 {
     public const int TileSize = 128;
     public const int AtlasCols = 6;
+    public const int AtlasRows = 4;
 
     private static readonly Dictionary<int, int[]> VariantFiles = new()
     {
@@ -41,7 +42,7 @@ public sealed class TileAtlasBuilder
     public static TileAtlasBuilder Build()
     {
         var builder = new TileAtlasBuilder();
-        var rows = 4;
+        var rows = AtlasRows;
         var atlas = Image.CreateEmpty(AtlasCols * TileSize, rows * TileSize, false, Image.Format.Rgba8);
         var idx = 0;
         for (var k = 0; k < 6; k++)

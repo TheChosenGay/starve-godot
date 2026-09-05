@@ -12,6 +12,8 @@ public static class ShaderLibrary
     public const string CloudSky = "res://shaders/anim/cloud-sky.gdshader";
     public const string CloudVolume = "res://shaders/anim/cloud-volume.gdshader";
     public const string CloudShadow = "res://shaders/anim/cloud-shadow.gdshader";
+    public const string TerrainHeightBlend = "res://shaders/terrain/height-blend.gdshader";
+    public const string PanoramaTint = "res://shaders/env/panorama-tint.gdshader";
 
     public static Shader Load(string path)
     {

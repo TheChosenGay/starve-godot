@@ -1,27 +1,22 @@
 using System;
 using Godot;
-using Starve.Core;
 using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
 
-/// <summary>3D 地形：把 Core.TileMap 的高度场分块烘焙成 MeshInstance3D。</summary>
+/// <summary>3D 地形：高度场分块网格 + 高度混合 splat 材质。</summary>
 public partial class MapView3D : Node3D
 {
-    private static TileAtlasBuilder? _atlas;
     public ShaderMaterial? TerrainMat { get; private set; }
 
     public void SetMap(TileMap tm)
     {
-        _atlas ??= TileAtlasBuilder.Build();
         foreach (var child in GetChildren())
-        {
             child.QueueFree();
-        }
 
         var cols = Mathf.CeilToInt(tm.Width / (float)MapMeshBuilder.ChunkTiles);
         var rows = Mathf.CeilToInt(tm.Height / (float)MapMeshBuilder.ChunkTiles);
-        var mat = ToonMaterials.CreateTerrain(_atlas.Atlas);
+        var mat = ToonMaterials.CreateTerrain();
         TerrainMat = mat;
         for (var r = 0; r < rows; r++)
         {
@@ -34,7 +29,7 @@ public partial class MapView3D : Node3D
                 AddChild(new MeshInstance3D
                 {
                     Name = $"Chunk_{c}_{r}",
-                    Mesh = MapMeshBuilder.BuildChunk3D(tm, x0, y0, x1, y1, _atlas),
+                    Mesh = MapMeshBuilder.BuildChunk3D(tm, x0, y0, x1, y1),
                     MaterialOverride = mat,
                     CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
                 });

@@ -42,7 +42,7 @@ public partial class World3DView : Node3D
     private readonly OmniLight3D _playerLamp;
     private readonly List<OmniLight3D> _fireLamps = new();
     private readonly Godot.Environment _env;
-    private readonly ProceduralSkyMaterial _skyMat;
+    private readonly ShaderMaterial _skyMat;
     private readonly CloudLayer3D _clouds;
     private MeshInstance3D? _toonMark;
     private TileMap? _map;
@@ -81,18 +81,19 @@ public partial class World3DView : Node3D
         };
         AddChild(Sun);
 
-        _skyMat = new ProceduralSkyMaterial
-        {
-            SkyTopColor = new Color(0.38f, 0.58f, 0.86f),
-            SkyHorizonColor = new Color(0.82f, 0.78f, 0.72f),
-            GroundBottomColor = new Color(0.18f, 0.22f, 0.14f),
-            GroundHorizonColor = new Color(0.55f, 0.52f, 0.42f),
-            SunAngleMax = 30f,
-        };
+        _skyMat = new ShaderMaterial { Shader = ShaderLibrary.Load(ShaderLibrary.PanoramaTint) };
+        _skyMat.SetShaderParameter("panorama", TerrainHaven.Load(TerrainHaven.SkyPanorama, new Color(0.38f, 0.58f, 0.86f)));
+        _skyMat.SetShaderParameter("sky_tint", Colors.White);
+        _skyMat.SetShaderParameter("energy", 1f);
         _env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Sky,
-            Sky = new Sky { SkyMaterial = _skyMat },
+            Sky = new Sky
+            {
+                SkyMaterial = _skyMat,
+                ProcessMode = Sky.ProcessModeEnum.Realtime,
+                RadianceSize = Sky.RadianceSizeEnum.Size256,
+            },
             AmbientLightSource = Godot.Environment.AmbientSource.Color,
             AmbientLightColor = new Color(0.78f, 0.82f, 0.88f),
             AmbientLightEnergy = 0.38f,
@@ -157,6 +158,21 @@ public partial class World3DView : Node3D
     {
         if (_map is { } tm)
             Terrain.SetMap(tm);
+    }
+
+    /// <summary>世界 UV 密度：只改 shader，不用重烘焙。</summary>
+    public void SetTerrainTiling(float tiling)
+    {
+        MapMeshBuilder.WorldTiling = tiling;
+        Terrain.TerrainMat?.SetShaderParameter("uWorldTiling", MapMeshBuilder.WorldTiling);
+    }
+
+    /// <summary>高度混合锐度与陡坡出岩：只改 shader。</summary>
+    public void SetTerrainBlend(float sharpness, float slopeRock)
+    {
+        if (Terrain.TerrainMat is not { } mat) return;
+        mat.SetShaderParameter("uHeightSharpness", Mathf.Clamp(sharpness, 0.04f, 0.8f));
+        mat.SetShaderParameter("uSlopeRock", Mathf.Clamp(slopeRock, 0f, 1f));
     }
 
     public void SyncView(float camX, float camY, float height, float zoom, float viewRotation, Vector2 viewport)
@@ -251,10 +267,14 @@ public partial class World3DView : Node3D
         _env.AmbientLightColor = ToColor(look.AmbientColor);
         _env.FogEnabled = Tune.FogEnabled;
         _env.TonemapExposure = 0.88f + 0.22f * look.NoonWeight;
-        _skyMat.SkyTopColor = ToColor(look.SkyTop);
-        _skyMat.SkyHorizonColor = ToColor(look.SkyHorizon);
-        _skyMat.GroundHorizonColor = ToColor(look.GroundHorizon);
-        _skyMat.GroundBottomColor = ToColor(look.GroundHorizon * 0.45f);
+        _env.SkyRotation = new Vector3(0f, look.SunYawDegrees * (MathF.PI / 180f), 0f);
+        var skyTint = new Color(
+            Mathf.Lerp(look.SkyTop.X, 1f, look.NoonWeight * 0.35f),
+            Mathf.Lerp(look.SkyTop.Y, 1f, look.NoonWeight * 0.28f),
+            Mathf.Lerp(look.SkyTop.Z, 1f, look.NoonWeight * 0.15f));
+        skyTint = skyTint.Lerp(ToColor(look.SkyHorizon), look.DuskWeight * 0.45f + look.MorningWeight * 0.25f);
+        _skyMat.SetShaderParameter("sky_tint", skyTint.Lerp(Colors.White, 0.35f));
+        _skyMat.SetShaderParameter("energy", Mathf.Lerp(0.12f, 1.05f, look.SunElevation));
         GhibliSky.Apply(_clouds.VolumeMat, look, Tune, Sun.GlobalTransform.Basis.Z, _rain);
         GhibliSky.Apply(_clouds.ShadowMat, look, Tune, Sun.GlobalTransform.Basis.Z, _rain);
         _clouds.SetHeight(Tune.CloudHeight);

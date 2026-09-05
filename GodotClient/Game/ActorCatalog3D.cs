@@ -15,7 +15,11 @@ public static class ActorCatalog3D
         if (view.Get("Player", Player.Parser) is not null)
             return CreatePigman();
 
-        if (EntityVisual.StyleFor(view).IsWorkbench)
+        var style = EntityVisual.StyleFor(view);
+        if (style.IsTree)
+            return new TreeActor3D();
+
+        if (style.IsWorkbench)
             return new AlchemyEngine3D();
 
         var creature = view.Get("Creature", Creature.Parser);

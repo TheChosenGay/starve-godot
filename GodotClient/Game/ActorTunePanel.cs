@@ -38,6 +38,9 @@ public partial class ActorTunePanel : Control
     private HSlider? _cloudHeight;
     private HSlider? _heightScale;
     private HSlider? _subdiv;
+    private HSlider? _tiling;
+    private HSlider? _blendSharp;
+    private HSlider? _slopeRock;
     private Timer? _terrainRebuild;
 
     public override void _Ready()
@@ -78,6 +81,9 @@ public partial class ActorTunePanel : Control
         box.AddChild(new Label { Text = "地形缓坡（只改外形）" });
         _heightScale = AddSlider(box, "高度比例", 0.12f, 1f, 0.02f, IsoCamera3D.HeightScale);
         _subdiv = AddSlider(box, "细分", 1, 8, 1, MapMeshBuilder.SmoothSubdiv);
+        _tiling = AddSlider(box, "贴图密度", 0.12f, 1f, 0.02f, MapMeshBuilder.WorldTiling);
+        _blendSharp = AddSlider(box, "高度混合", 0.04f, 0.7f, 0.02f, TerrainHaven.DefaultHeightSharpness);
+        _slopeRock = AddSlider(box, "陡坡出岩", 0f, 1f, 0.02f, TerrainHaven.DefaultSlopeRock);
 
         box.AddChild(new Label { Text = "自己" });
         _move = AddSlider(box, "移动速度", 0.3f, 2f, 0.05f, 1f);
@@ -136,6 +142,9 @@ public partial class ActorTunePanel : Control
         if (_pitch is not null) _pitch.Value = 45;
         if (_heightScale is not null) _heightScale.Value = IsoCamera3D.DefaultHeightScale;
         if (_subdiv is not null) _subdiv.Value = MapMeshBuilder.DefaultSmoothSubdiv;
+        if (_tiling is not null) _tiling.Value = MapMeshBuilder.DefaultWorldTiling;
+        if (_blendSharp is not null) _blendSharp.Value = TerrainHaven.DefaultHeightSharpness;
+        if (_slopeRock is not null) _slopeRock.Value = TerrainHaven.DefaultSlopeRock;
         if (_move is not null) _move.Value = 1;
         if (_scale is not null) _scale.Value = 1;
         if (_anim is not null) _anim.Value = 1;
@@ -182,6 +191,11 @@ public partial class ActorTunePanel : Control
             _terrainRebuild?.Stop();
             _terrainRebuild?.Start();
         }
+        if (_tiling is not null)
+            World?.SetTerrainTiling((float)_tiling.Value);
+        World?.SetTerrainBlend(
+            (float)(_blendSharp?.Value ?? TerrainHaven.DefaultHeightSharpness),
+            (float)(_slopeRock?.Value ?? TerrainHaven.DefaultSlopeRock));
         if (_move is not null)
         {
             var mul = (float)_move.Value;

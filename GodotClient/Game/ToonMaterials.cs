@@ -116,11 +116,19 @@ public static class ToonMaterials
         return mat;
     }
 
-    public static ShaderMaterial CreateTerrain(Texture2D atlas)
+    public static ShaderMaterial CreateTerrain()
     {
-        var mat = new ShaderMaterial { Shader = MakeTerrainShader() };
+        var mat = new ShaderMaterial { Shader = ShaderLibrary.Load(ShaderLibrary.TerrainHeightBlend) };
         mat.SetMeta(KindMeta, KindTerrain);
-        mat.SetShaderParameter("uAtlas", atlas);
+        mat.SetShaderParameter("uGrassAlbedo", TerrainHaven.Load(TerrainHaven.GrassAlbedo, new Color(0.42f, 0.52f, 0.28f)));
+        mat.SetShaderParameter("uGrassHeight", TerrainHaven.Load(TerrainHaven.GrassHeight, new Color(0.55f, 0.55f, 0.55f)));
+        mat.SetShaderParameter("uDirtAlbedo", TerrainHaven.Load(TerrainHaven.DirtAlbedo, new Color(0.55f, 0.42f, 0.28f)));
+        mat.SetShaderParameter("uDirtHeight", TerrainHaven.Load(TerrainHaven.DirtHeight, new Color(0.45f, 0.45f, 0.45f)));
+        mat.SetShaderParameter("uRockAlbedo", TerrainHaven.Load(TerrainHaven.RockAlbedo, new Color(0.62f, 0.58f, 0.52f)));
+        mat.SetShaderParameter("uRockHeight", TerrainHaven.Load(TerrainHaven.RockHeight, new Color(0.5f, 0.5f, 0.5f)));
+        mat.SetShaderParameter("uWorldTiling", MapMeshBuilder.WorldTiling);
+        mat.SetShaderParameter("uHeightSharpness", TerrainHaven.DefaultHeightSharpness);
+        mat.SetShaderParameter("uSlopeRock", TerrainHaven.DefaultSlopeRock);
         ApplyTerrain(mat, TerrainDefaults);
         SetDayLight(mat, 1f);
         return mat;
@@ -632,108 +640,6 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = outline_color.rgb;
-}
-""",
-    };
-
-    private static Shader MakeTerrainShader() => new()
-    {
-        Code = """
-shader_type spatial;
-render_mode cull_back, specular_disabled, shadows_disabled, ambient_light_disabled;
-
-uniform sampler2D uAtlas : source_color, filter_linear_mipmap;
-uniform vec4 shadow_tint : source_color = vec4(0.42, 0.48, 0.62, 1.0);
-uniform float bands = 5.0;
-uniform float shade_min : hint_range(0.0, 1.0) = 0.5;
-uniform float fill : hint_range(0.0, 0.8) = 0.2;
-uniform float day_light : hint_range(0.0, 1.0) = 1.0;
-uniform float coverage : hint_range(0.0, 1.0) = 0.22;
-uniform float thickness : hint_range(10.0, 100.0) = 42.0;
-uniform float wind : hint_range(0.0, 2.0) = 0.06;
-uniform vec3 sun_direction = vec3(0.32, 0.72, -0.58);
-uniform vec3 box_center = vec3(0.0, 13.0, 0.0);
-uniform vec3 box_size = vec3(320.0, 10.0, 320.0);
-uniform float night : hint_range(0.0, 1.0) = 0.0;
-uniform float cloud_shadow_strength : hint_range(0.0, 1.0) = 0.78;
-varying vec3 world_pos;
-
-void vertex() {
-	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-}
-
-float hash(float n) {
-	return fract(sin(n) * 753.5453123);
-}
-
-float noise(vec3 x) {
-	vec3 p = floor(x);
-	vec3 f = fract(x);
-	f = f * f * (3.0 - 2.0 * f);
-	float n = p.x + p.y * 157.0 + 113.0 * p.z;
-	return mix(
-		mix(mix(hash(n + 0.0), hash(n + 1.0), f.x), mix(hash(n + 157.0), hash(n + 158.0), f.x), f.y),
-		mix(mix(hash(n + 113.0), hash(n + 114.0), f.x), mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y),
-		f.z
-	);
-}
-
-float fbm_clouds(vec3 pos, float lacunarity, float init_gain, float gain) {
-	vec3 p = pos;
-	float H = init_gain;
-	float t = 0.0;
-	for (int i = 0; i < 5; i++) {
-		t += abs(noise(p)) * H;
-		p *= lacunarity;
-		H *= gain;
-	}
-	return t;
-}
-
-float density_func(vec3 pos) {
-	vec3 q = pos * 0.09 + vec3(TIME * wind * 0.55, 0.0, -TIME * wind * 1.05);
-	float dens = fbm_clouds(q * 2.032, 2.6434, 0.5, 0.5);
-	float gap = 1.0 - coverage;
-	dens *= smoothstep(gap, gap + 0.035, dens);
-	vec3 bmin = box_center - box_size * 0.5;
-	float h = clamp((pos.y - bmin.y) / max(box_size.y, 0.001), 0.0, 1.0);
-	dens *= smoothstep(0.0, 0.28, h) * smoothstep(1.0, 0.72, h);
-	float r = length(pos.xz - box_center.xz) / max(box_size.x * 0.5, 0.001);
-	dens *= smoothstep(1.0, 0.62, r);
-	return dens;
-}
-
-float cloud_shade(vec3 pos) {
-	float slab = max(box_size.y, 0.001);
-	float thick = mix(0.45, 1.55, clamp((thickness - 18.0) / 72.0, 0.0, 1.0));
-	float optical = 0.0;
-	for (int i = 0; i < 4; i++) {
-		float h = (float(i) + 0.5) / 4.0;
-		vec3 sample_pos = vec3(pos.x, box_center.y + (h - 0.5) * slab, pos.z);
-		optical += density_func(sample_pos);
-	}
-	float day = 1.0 - smoothstep(0.18, 0.62, night);
-	return clamp(optical * 0.35 * thick * cloud_shadow_strength * day, 0.0, 0.85);
-}
-
-void fragment() {
-	float cs = cloud_shade(world_pos);
-	vec3 ground = texture(uAtlas, UV).rgb;
-	vec3 steep = texture(uAtlas, UV2).rgb;
-	ALBEDO = mix(ground, steep, COLOR.a) * COLOR.rgb * mix(1.0, 0.32, cs);
-	ROUGHNESS = 1.0;
-	EMISSION = ALBEDO * fill * mix(0.1, 1.0, day_light) * vec3(0.88, 1.0, 1.15) * mix(1.0, 0.18, cs);
-}
-
-void light() {
-	float cs = cloud_shade(world_pos);
-	float wrap = clamp(dot(NORMAL, LIGHT) * 0.5 + 0.5, 0.0, 1.0);
-	float stepped = floor(wrap * bands + 1e-4) / max(bands - 1.0, 1.0);
-	float shadeFloor = shade_min * mix(0.35, 1.0, day_light);
-	stepped = mix(shadeFloor, 1.0, clamp(stepped, 0.0, 1.0));
-	vec3 nightTint = mix(vec3(0.4, 0.5, 0.78), vec3(1.0), day_light);
-	DIFFUSE_LIGHT += mix(ALBEDO * shadow_tint.rgb * nightTint, ALBEDO, stepped) * LIGHT_COLOR * ATTENUATION;
-	DIFFUSE_LIGHT *= mix(1.0, 0.28, cs);
 }
 """,
     };

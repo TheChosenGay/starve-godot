@@ -12,6 +12,7 @@ public static class MapMeshBuilder
 {
     public const int ChunkTiles = 40;
     public const int DefaultSmoothSubdiv = 4;
+    public const float DefaultWorldTiling = 0.22f;
 
     /// <summary>每格边分成几段。1 = 旧的单四边形；4 能看见双线性曲面。</summary>
     public static int SmoothSubdiv
@@ -22,15 +23,24 @@ public static class MapMeshBuilder
 
     private static int _smoothSubdiv = DefaultSmoothSubdiv;
 
+    /// <summary>无缝贴图在世界上的重复密度。越小一张图铺得越远，格子感越弱。</summary>
+    public static float WorldTiling
+    {
+        get => _worldTiling;
+        set => _worldTiling = Math.Clamp(value, 0.12f, 1f);
+    }
+
+    private static float _worldTiling = DefaultWorldTiling;
+
     public static ArrayMesh BuildChunk(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas) =>
         BuildChunk(tm, cx0, cy0, cx1, cy1, atlas, world3D: false);
 
-    /// <summary>同一套 UV/顶点色，顶点放在 (wx, 视觉高度, wy)；缓坡、正面朝上。</summary>
-    public static ArrayMesh BuildChunk3D(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas) =>
+    /// <summary>顶点放在 (wx, 视觉高度, wy)。COLOR 为 splat 权重，不依赖图集。</summary>
+    public static ArrayMesh BuildChunk3D(TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder? atlas = null) =>
         BuildChunk(tm, cx0, cy0, cx1, cy1, atlas, world3D: true);
 
     private static ArrayMesh BuildChunk(
-        TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder atlas, bool world3D)
+        TileMap tm, int cx0, int cy0, int cx1, int cy1, TileAtlasBuilder? atlas, bool world3D)
     {
         var st = new SurfaceTool();
         st.Begin(Mesh.PrimitiveType.Triangles);
@@ -43,9 +53,12 @@ public static class MapMeshBuilder
                 var ao = 1f - TileAo(tm, cx, cy) * 0.5f;
                 if (world3D)
                 {
-                    AddSmoothTile(st, tm, cx, cy, atlas, ao, ref vertexCount);
+                    AddSmoothTile(st, tm, cx, cy, ao, ref vertexCount);
                     continue;
                 }
+
+                if (atlas is null)
+                    throw new InvalidOperationException("2D 地形需要图集");
 
                 foreach (var quad in SlopeMesh.BuildTile(tm, cx, cy))
                 {
@@ -77,20 +90,8 @@ public static class MapMeshBuilder
     }
 
     private static void AddSmoothTile(
-        SurfaceTool st, TileMap tm, int cx, int cy, TileAtlasBuilder atlas, float ao, ref int vertexCount)
+        SurfaceTool st, TileMap tm, int cx, int cy, float ao, ref int vertexCount)
     {
-        var water = SlopeMesh.WaterCorners(tm, cx, cy) >= 3;
-        var kind = water ? 1 : SlopeMesh.DominantType(tm, cx, cy);
-        var rect = PickVariant(atlas, kind, cx, cy);
-        var h00 = tm.CornerHeight(cx, cy);
-        var h10 = tm.CornerHeight(cx + 1, cy);
-        var h01 = tm.CornerHeight(cx, cy + 1);
-        var h11 = tm.CornerHeight(cx + 1, cy + 1);
-        var hMin = MathF.Min(MathF.Min(h00, h10), MathF.Min(h01, h11));
-        var hMax = MathF.Max(MathF.Max(h00, h10), MathF.Max(h01, h11));
-        var tint = TintColor((h00 + h10 + h01 + h11) * 0.25f, hMax - hMin) * ao;
-
-        var rockRect = FirstVariant(atlas, 4);
         var n = SmoothSubdiv;
         var stride = n + 1;
         var baseIdx = vertexCount;
@@ -104,11 +105,11 @@ public static class MapMeshBuilder
                 var wy = cy + fy;
                 var h = SlopeMesh.SampleHeightBilinear(tm, wx, wy);
                 var p = IsoCamera3D.WorldTo3D(wx, wy, h);
-                var (normal, slope) = HeightNormalAndSlope(tm, wx, wy);
-                var blend = water || kind == 4 ? 0f : Mathf.SmoothStep(0.16f, 0.62f, slope);
-                st.SetColor(new Color(tint.R, tint.G, tint.B, blend));
-                st.SetUV(UvInRect(rect, fx, fy));
-                st.SetUV2(UvInRect(rockRect, fx, fy));
+                var (normal, _) = HeightNormalAndSlope(tm, wx, wy);
+                var splat = SplatWeights(tm, wx, wy);
+                st.SetColor(splat);
+                st.SetUV(Vector2.Zero);
+                st.SetUV2(new Vector2(ao, WaterWeight(tm, wx, wy)));
                 st.SetNormal(normal);
                 st.AddVertex(new Vector3(p.X, p.Y, p.Z));
             }
@@ -132,6 +133,65 @@ public static class MapMeshBuilder
                 st.AddIndex(i01);
             }
         }
+    }
+
+    /// <summary>
+    /// 四角类型双线性权重。COLOR = (草, 沙/土, 岩, 雪)。
+    /// 类型：1 水 2 沙 3 草 4 岩 5 雪。
+    /// </summary>
+    private static Color SplatWeights(TileMap tm, float wx, float wy)
+    {
+        var x0 = (int)MathF.Floor(wx);
+        var y0 = (int)MathF.Floor(wy);
+        var fx = wx - x0;
+        var fy = wy - y0;
+        var grass = 0f;
+        var dirt = 0f;
+        var rock = 0f;
+        var snow = 0f;
+        AccumulateType(tm.CornerType(x0, y0), (1 - fx) * (1 - fy), ref grass, ref dirt, ref rock, ref snow);
+        AccumulateType(tm.CornerType(x0 + 1, y0), fx * (1 - fy), ref grass, ref dirt, ref rock, ref snow);
+        AccumulateType(tm.CornerType(x0, y0 + 1), (1 - fx) * fy, ref grass, ref dirt, ref rock, ref snow);
+        AccumulateType(tm.CornerType(x0 + 1, y0 + 1), fx * fy, ref grass, ref dirt, ref rock, ref snow);
+        var sum = grass + dirt + rock;
+        if (sum < 1e-4f)
+            return new Color(0f, 0f, 0f, snow);
+        return new Color(grass / sum, dirt / sum, rock / sum, snow);
+    }
+
+    private static void AccumulateType(
+        int type, float w, ref float grass, ref float dirt, ref float rock, ref float snow)
+    {
+        switch (type)
+        {
+            case 2:
+                dirt += w;
+                break;
+            case 4:
+                rock += w;
+                break;
+            case 5:
+                snow += w;
+                break;
+            case 1:
+                break;
+            default:
+                grass += w;
+                break;
+        }
+    }
+
+    private static float WaterWeight(TileMap tm, float wx, float wy)
+    {
+        var x0 = (int)MathF.Floor(wx);
+        var y0 = (int)MathF.Floor(wy);
+        var fx = wx - x0;
+        var fy = wy - y0;
+        float T(int x, int y) => tm.CornerType(x, y) == 1 ? 1f : 0f;
+        return T(x0, y0) * (1 - fx) * (1 - fy)
+            + T(x0 + 1, y0) * fx * (1 - fy)
+            + T(x0, y0 + 1) * (1 - fx) * fy
+            + T(x0 + 1, y0 + 1) * fx * fy;
     }
 
     /// <summary>高度场中心差分法线；slope 是逻辑高差/水平距，用来混岩石。</summary>
