@@ -97,7 +97,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             {
                 ApplyStyle(id, node, style);
             }
-            node.Visible = true;
+            node.Visible = !EntityVisual.IsDepletedFlower(view);
             SyncAction(id, view);
         }
     }
@@ -296,7 +296,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     private void ApplyStyle(ulong id, Node3D node, EntityStyle style)
     {
-        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D or TreeActor3D) return;
+        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D or TreeActor3D or GhibliPlantActor3D) return;
         if (node.GetNodeOrNull<FireFlame3D>("Flame") is not null) return;
         ActorMesh3D.ApplyStyle(node, style);
         if (_mats.TryGetValue(id, out var mat) && !_flashUntil.ContainsKey(id))

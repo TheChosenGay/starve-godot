@@ -10,7 +10,9 @@ public readonly record struct EntityStyle(
     bool IsFire,
     bool IsTree = false,
     bool IsWorkbench = false,
-    bool IsHauntable = false);
+    bool IsHauntable = false,
+    bool IsFlower = false,
+    bool IsShrub = false);
 
 /// <summary>实体类型 → 占位色/尺寸；2D 菱形与 3D 立方体共用。</summary>
 public static class EntityVisual
@@ -38,21 +40,32 @@ public static class EntityVisual
                 ? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, true)
                 : new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false, IsWorkbench: true);
 
+        var scenery = view.Get("Scenery", Scenery.Parser);
+        if (scenery?.Kind == ItemKind.Shrub)
+            return new EntityStyle(
+                new Color(0.37f, 0.57f, 0.31f),
+                8,
+                false,
+                IsShrub: true);
+
+        var pickable = view.Get("Pickable", WorkTarget.Parser);
         var reactive = view.Get("Choppable", WorkTarget.Parser)
             ?? view.Get("Minable", WorkTarget.Parser)
-            ?? view.Get("Pickable", WorkTarget.Parser);
+            ?? pickable;
         if (reactive is not null)
         {
-            var kind = (int)reactive.Kind;
+            var kind = reactive.Kind;
             var isTree = view.Get("Choppable", WorkTarget.Parser) is not null;
+            var isFlower = pickable?.Kind == ItemKind.Flower;
             return new EntityStyle(kind switch
             {
-                1 => new Color(0.89f, 0.34f, 0.30f),
-                2 => new Color(0.60f, 0.42f, 0.25f),
-                3 => new Color(0.60f, 0.63f, 0.66f),
-                4 => new Color(0.85f, 0.42f, 0.31f),
+                ItemKind.Berry => new Color(0.89f, 0.34f, 0.30f),
+                ItemKind.Wood => new Color(0.60f, 0.42f, 0.25f),
+                ItemKind.Flint => new Color(0.60f, 0.63f, 0.66f),
+                ItemKind.Meat => new Color(0.85f, 0.42f, 0.31f),
+                ItemKind.Flower => new Color(0.95f, 0.60f, 0.76f),
                 _ => new Color(0.71f, 0.54f, 0.85f),
-            }, isTree ? 16 : 7, false, isTree);
+            }, isTree ? 16 : isFlower ? 5 : 7, false, isTree, IsFlower: isFlower);
         }
 
         var workable = view.Get("Workable", Workable.Parser);
@@ -92,4 +105,8 @@ public static class EntityVisual
 
         return new EntityStyle(new Color(1f, 1f, 1f), 8, false);
     }
+
+    public static bool IsDepletedFlower(EntityView view) =>
+        view.Get("Pickable", WorkTarget.Parser) is
+            { Kind: ItemKind.Flower, WorkLeft: <= 0 };
 }

@@ -110,6 +110,24 @@ internal static class SmokeRunner
             if (entity.Get("Workstation", Workstation.Parser) is not null)
                 Require(entity.Get("Block", Block.Parser) is not null, "工作站快照缺少 Block 组件");
         }
+        var shrub = world.Entities.Values.FirstOrDefault(
+            entity => entity.Get("Scenery", Scenery.Parser)?.Kind == ItemKind.Shrub);
+        Require(shrub is not null, "全量快照缺少 Scenery{kind=SHRUB}");
+        Require(shrub!.Get("Position", Position.Parser) is not null, "灌木缺少 Position");
+        Require(shrub.Get("Block", Block.Parser) is null, "灌木不应包含 Block");
+        Require(
+            shrub.Get("Pickable", WorkTarget.Parser) is null &&
+            shrub.Get("Choppable", WorkTarget.Parser) is null &&
+            shrub.Get("Minable", WorkTarget.Parser) is null,
+            "灌木不应包含工作目标组件");
+
+        var flower = world.Entities.Values.FirstOrDefault(
+            entity => entity.Get("Pickable", WorkTarget.Parser)?.Kind == ItemKind.Flower);
+        Require(flower is not null, "全量快照缺少 Pickable{kind=FLOWER}");
+        Require(flower!.Get("Block", Block.Parser) is null, "花不应包含 Block");
+
+        var flowerTemplate = world.Config?.Templates.FirstOrDefault(x => x.Kind == ItemKind.Flower);
+        Require(flowerTemplate?.PickYield == ItemKind.Petal, "花模板 pick_yield 应为 PETAL");
         var parsedActions = world.Entities.Values.Count(
             entity => entity.Get("ActionState", ActionState.Parser) is not null);
         Console.WriteLine(

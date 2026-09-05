@@ -15,6 +15,14 @@ public static class ActorCatalog3D
         if (view.Get("Player", Player.Parser) is not null)
             return CreatePigman();
 
+        var pickable = view.Get("Pickable", WorkTarget.Parser);
+        if (pickable?.Kind == ItemKind.Flower)
+            return new FlowerActor3D { VariantSeed = view.EntityId };
+
+        var scenery = view.Get("Scenery", Scenery.Parser);
+        if (scenery?.Kind == ItemKind.Shrub)
+            return new ShrubActor3D { VariantSeed = view.EntityId };
+
         var style = EntityVisual.StyleFor(view);
         if (style.IsTree)
             return new TreeActor3D();

@@ -159,7 +159,7 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 				_nodes[id] = node;
 				AddChild(node);
 			}
-			node.Visible = true;
+			node.Visible = !EntityVisual.IsDepletedFlower(view);
 			var hp = view.Get("Health", Health.Parser);
 			node.Configure(EntityVisual.StyleFor(view), hp?.Cur ?? 0, hp?.Max ?? 0, hp?.Max > 0,
 				_nameProvider?.Invoke(view) ?? "");

@@ -2,21 +2,21 @@ using Godot;
 
 namespace GodotClient.Game;
 
-/// <summary>
-/// 游戏世界中的可砍伐树木外观。使用带骨骼风动的吉卜力树木 GLB。
-/// </summary>
-public partial class TreeActor3D : Node3D
+/// <summary>共享的吉卜力植被 GLB 加载与风动播放逻辑。</summary>
+public partial class GhibliPlantActor3D : Node3D
 {
-    public const string ModelPath = "res://assets/models/ghibli-tree/ghibli_tree_godot.glb";
-    public const float DefaultModelScale = 0.56f;
-
-    private float _modelScale = DefaultModelScale;
+    private float _modelScale;
     private AnimationPlayer? _windPlayer;
 
-    [Export(PropertyHint.Range, "0.1,2,0.01")]
+    protected virtual string[] ModelPaths => [];
+    protected virtual float DefaultModelScale => 1f;
+
+    public ulong VariantSeed { get; set; }
+
+    [Export(PropertyHint.Range, "0.1,3,0.01")]
     public float ModelScale
     {
-        get => _modelScale;
+        get => _modelScale > 0f ? _modelScale : DefaultModelScale;
         set
         {
             _modelScale = Mathf.Max(0.05f, value);
@@ -28,24 +28,6 @@ public partial class TreeActor3D : Node3D
 
     public override void _Ready() => Rebuild();
 
-    public void SetFlash(bool on)
-    {
-        var visual = GetNodeOrNull<Node3D>("Visual");
-        if (visual is null) return;
-        foreach (var child in visual.FindChildren("*", "MeshInstance3D", true, false))
-        {
-            if (child is not MeshInstance3D mesh) continue;
-            if (mesh.MaterialOverride is ShaderMaterial over)
-                ToonMaterials.SetFlash(over, on);
-            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
-            for (var i = 0; i < surfaces; i++)
-            {
-                if (mesh.GetSurfaceOverrideMaterial(i) is ShaderMaterial surface)
-                    ToonMaterials.SetFlash(surface, on);
-            }
-        }
-    }
-
     private void Rebuild()
     {
         _windPlayer = null;
@@ -56,30 +38,45 @@ public partial class TreeActor3D : Node3D
             old.Free();
         }
 
-        if (!ResourceLoader.Exists(ModelPath))
+        var models = ModelPaths;
+        if (models.Length == 0)
         {
-            AddChild(MakeErrorLabel("缺少 " + ModelPath));
+            AddChild(MakeErrorLabel("未配置植被模型"));
             return;
         }
 
-        var packed = GD.Load<PackedScene>(ModelPath);
+        var path = models[(int)(VariantSeed % (ulong)models.Length)];
+        if (!ResourceLoader.Exists(path))
+        {
+            AddChild(MakeErrorLabel("缺少 " + path));
+            return;
+        }
+
+        var packed = GD.Load<PackedScene>(path);
         if (packed is null)
         {
-            AddChild(MakeErrorLabel("树木 GLB 尚未导入，请等 Godot 导入完成"));
+            AddChild(MakeErrorLabel($"{path} 尚未导入，请等 Godot 导入完成"));
             return;
         }
 
         var visual = new Node3D
         {
             Name = "Visual",
-            Scale = Vector3.One * _modelScale,
+            Scale = Vector3.One * ModelScale,
         };
         AddChild(visual);
 
         var model = packed.Instantiate<Node3D>();
+        model.Rotation = new Vector3(0f, VariantYaw(), 0f);
         visual.AddChild(model);
         _windPlayer = FindAnimationPlayer(model);
         PlayWind();
+    }
+
+    private float VariantYaw()
+    {
+        var mixed = VariantSeed * 2654435761UL;
+        return (mixed % 3600UL) / 3600f * Mathf.Tau;
     }
 
     private void PlayWind()

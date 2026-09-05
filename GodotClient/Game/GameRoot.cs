@@ -1045,9 +1045,9 @@ public partial class GameRoot : Node
 		}
 		var dx = mePos.X - tPos.X;
 		var dy = mePos.Y - tPos.Y;
-		// 与服务端 withinRange 一致：曼哈顿距离 ≤2（客户端曾用欧氏 2.5，
-		// 对角 2 格会被服务端静默拒绝，造成“点了没反应”）
-		if (Math.Abs(dx) + Math.Abs(dy) > 2)
+		// 裸手采集能力范围为 1；其他交互当前范围为 2。
+		var actionRange = intent == Intent.Gather ? 1 : 2;
+		if (Math.Abs(dx) + Math.Abs(dy) > actionRange)
 		{
 			Deny("距离不够，请靠近后再操作");
 			return;
@@ -1058,9 +1058,9 @@ public partial class GameRoot : Node
 		switch (intent)
 		{
 			case Intent.Gather:
-				if (view.Get("Pickable", WorkTarget.Parser) is null)
+				if (view.Get("Pickable", WorkTarget.Parser) is not { WorkLeft: > 0 })
 				{
-					Deny("目标不可采集（不是浆果丛）");
+					Deny("目标不可采集");
 					return;
 				}
 				commandRef = _client.Commands.Gather(id);
@@ -1192,6 +1192,8 @@ public partial class GameRoot : Node
 				: "采集";
 			return $"{ItemName(cfg, (int)wt.Kind)} #{id} 工作量 {wt.WorkLeft}/{wt.MaxWork} [{action}]";
 		}
+		if (view.Get("Scenery", Scenery.Parser) is { } scenery)
+			return $"{ItemName(cfg, (int)scenery.Kind)} #{id}";
 		var ws = view.Get("Workstation", Workstation.Parser);
 		if (ws is not null)
 			return $"工作站#{ws.Type} #{id}";
@@ -1362,8 +1364,17 @@ public partial class GameRoot : Node
 			return HasOwnCapability("Chopper") ? "树·砍伐→木头" : "树·需斧头";
 		if (view.Get("Minable", WorkTarget.Parser) is not null)
 			return HasOwnCapability("Miner") ? "矿石·挖掘→燧石" : "矿石·需镐";
-		if (view.Get("Pickable", WorkTarget.Parser) is not null)
-			return "浆果丛·采集→浆果";
+		if (view.Get("Pickable", WorkTarget.Parser) is { } pickable)
+		{
+			var cfg = _client?.World.Config;
+			var template = cfg?.Templates.FirstOrDefault(x => x.Kind == pickable.Kind);
+			var yieldKind = template is not null && (int)template.PickYield != 0
+				? (int)template.PickYield
+				: (int)pickable.Kind;
+			return $"{ItemName(cfg, (int)pickable.Kind)}·采集→{ItemName(cfg, yieldKind)}";
+		}
+		if (view.Get("Scenery", Scenery.Parser) is { } scenery)
+			return ItemName(_client?.World.Config, (int)scenery.Kind);
 		if (view.Get("Creature", Creature.Parser) is { } cr)
 		{
 			var name = cr.Kind switch
@@ -1640,6 +1651,11 @@ public partial class GameRoot : Node
 		var bestDist = 0.6f;
 		foreach (var (id, view) in _client.World.Entities)
 		{
+			if (view.Get("Scenery", Scenery.Parser) is not null ||
+				EntityVisual.IsDepletedFlower(view))
+			{
+				continue;
+			}
 			var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
 			if (pos is null) continue;
 			var dx = pos.X - world.X;
