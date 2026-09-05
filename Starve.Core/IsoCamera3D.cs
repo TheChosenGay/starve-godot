@@ -1,4 +1,5 @@
 using System.Numerics;
+using System;
 
 namespace Starve.Core;
 
@@ -11,8 +12,17 @@ public static class IsoCamera3D
     /// <summary>世界 1 格 = 1 个 3D 单位。</summary>
     public const float WorldUnit = 1f;
 
-    /// <summary>俯仰角（度）：45° 固定俯视，角色 3D 模型能同时看到顶面和正面。</summary>
-    public const float PitchDegrees = 45f;
+    /// <summary>
+    /// 俯仰角（度）。45° 是经典等距俯视，顶面偏多、容易显得「站得太高」；
+    /// 28–35° 更接近侧面 2.5D。运行时可改，正交构图会跟着变。
+    /// </summary>
+    public static float PitchDegrees
+    {
+        get => _pitchDegrees;
+        set => _pitchDegrees = Math.Clamp(value, 15f, 70f);
+    }
+
+    private static float _pitchDegrees = 45f;
 
     /// <summary>偏航角（度）：绕世界 Y 转 45°，让 XZ 轴在屏幕上成菱形。</summary>
     public const float YawDegrees = 45f;

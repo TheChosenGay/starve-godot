@@ -59,12 +59,13 @@ near = 0.1
 far = 80.0
 
 [node name="Ground" type="MeshInstance3D" parent="." unique_id=1156160692]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0470469, -0.12065983, -0.041773796)
+transform = Transform3D(0.9999973, 0.0022009457, 0.0007505156, -0.0022011315, 0.99999756, 0.0002557449, -0.00074996427, -0.00025739428, 0.99999964, -0.0470469, -0.12065983, -0.041773796)
 mesh = SubResource("PlaneMesh_ground")
 
 [node name="PigmanWalk" type="Node3D" parent="." unique_id=1822470943]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.4, 0, 0)
 script = ExtResource("3_pigman")
+YawDegrees = 180.0
 
 [node name="PigmanWalkLabel" type="Label3D" parent="PigmanWalk" unique_id=32285600]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9, 0)
@@ -76,6 +77,7 @@ outline_size = 8
 [node name="PigmanRun" type="Node3D" parent="." unique_id=1200741050]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.8, 0, 0)
 script = ExtResource("3_pigman")
+YawDegrees = 180.0
 
 [node name="PigmanRunLabel" type="Label3D" parent="PigmanRun" unique_id=1215390058]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9, 0)

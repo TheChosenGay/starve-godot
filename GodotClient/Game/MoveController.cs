@@ -15,6 +15,7 @@ public partial class MoveController : Node
 {
     public Action<(int Dx, int Dy)>? OnMove;
     public Action<(int Dx, int Dy)>? OnIntent;
+    public Action<(float X, float Y)>? OnFacing;
 
     /// <summary>当前视角偏航（弧度）。Q/E 环绕后把屏幕方向转成世界 dx/dy。</summary>
     public float ViewYaw { get; private set; }
@@ -23,7 +24,6 @@ public partial class MoveController : Node
     private double _accum;
     private (int Dx, int Dy)? _lastDir;
     private bool _blocked;
-    private bool _orbiting;
 
     public void SetBlocked(bool blocked)
     {
@@ -33,6 +33,7 @@ public partial class MoveController : Node
         _held.Clear();
         _accum = 0;
         _lastDir = (0, 0);
+        OnFacing?.Invoke((0f, 0f));
         OnIntent?.Invoke((0, 0));
     }
 
@@ -40,17 +41,8 @@ public partial class MoveController : Node
     {
         if (MathF.Abs(ViewYaw - radians) < 1e-5f) return;
         ViewYaw = radians;
-        // 转相机时不重映射走路方向，避免 8 向吸附每帧改意图导致抖动。
-        if (_orbiting || _held.Count == 0 || _blocked) return;
-        SendHeld();
-    }
-
-    public void SetOrbiting(bool orbiting)
-    {
-        if (_orbiting == orbiting) return;
-        _orbiting = orbiting;
-        if (!orbiting && _held.Count > 0 && !_blocked)
-            SendHeld();
+        if (_held.Count == 0 || _blocked) return;
+        SendHeld(forceMove: false);
     }
 
     public override void _Input(InputEvent @event)
@@ -75,6 +67,7 @@ public partial class MoveController : Node
             if (_held.Count == 0)
             {
                 _lastDir = (0, 0);
+                OnFacing?.Invoke((0f, 0f));
                 OnIntent?.Invoke((0, 0));
                 OnMove?.Invoke((0, 0));
             }
@@ -94,17 +87,16 @@ public partial class MoveController : Node
         SendHeld();
     }
 
-    private void SendHeld()
+    private void SendHeld(bool forceMove = true)
     {
         if (_held.Count == 0) return;
-        if (_orbiting && _lastDir is { } last && (last.Dx != 0 || last.Dy != 0))
-        {
-            SendDir(last);
-            return;
-        }
         var dirs = _held.Select(k => MoveInput.TryMap(k)!.Value);
         var combined = MoveInput.Combine(dirs);
-        SendDir(MoveInput.WithViewYaw(combined.Dx, combined.Dy, ViewYaw));
+        OnFacing?.Invoke(MoveInput.RotateViewYaw(combined.Dx, combined.Dy, ViewYaw));
+        var previous = _lastDir is { } last && (last.Dx != 0 || last.Dy != 0) ? last : (0, 0);
+        var dir = MoveInput.WithViewYawSticky(combined.Dx, combined.Dy, ViewYaw, previous);
+        if (!forceMove && _lastDir == dir) return;
+        SendDir(dir);
     }
 
     private void SendDir((int Dx, int Dy) dir)

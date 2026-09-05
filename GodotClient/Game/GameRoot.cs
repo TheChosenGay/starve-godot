@@ -55,6 +55,8 @@ public partial class GameRoot : Node
     private Control? _uiRoot;
     private Hud? _hud;
     private ToonTunePanel? _toonPanel;
+    private ActorTunePanel? _actorPanel;
+    private float _lastEffectiveSpeed = OwnMovementSim.DefaultTilesPerSec;
     private SfxService? _sfx;
     private DamageFlashOverlay? _damageFlash;
     private MoveController? _moveController;
@@ -130,22 +132,17 @@ public partial class GameRoot : Node
 
     public override void _Ready()
     {
-        // Godot 内建 Bloom（辉光）：2D 也生效，配合光照 pass 的亮部
-        var env = new Godot.Environment();
-        env.GlowEnabled = true;
-        env.GlowIntensity = 0.9f;
-        env.GlowStrength = 1.1f;
-        env.GlowBloom = 0.12f;
-        env.GlowHdrThreshold = 0.55f; // 2D HDR 下让火堆加法亮部真正泛光
-        if (_render3D)
+        // Godot 内建 Bloom：2D 用全屏 Environment；3D 的 glow 挂在 World3DView 的日夜环境上，避免两套环境抢天空。
+        if (!_render3D)
         {
-            env.BackgroundMode = Godot.Environment.BGMode.Color;
-            env.BackgroundColor = new Color(0.52f, 0.68f, 0.82f);
-            env.AmbientLightSource = Godot.Environment.AmbientSource.Color;
-            env.AmbientLightColor = new Color(0.42f, 0.48f, 0.58f);
-            env.AmbientLightEnergy = 0.22f;
+            var env = new Godot.Environment();
+            env.GlowEnabled = true;
+            env.GlowIntensity = 0.9f;
+            env.GlowStrength = 1.1f;
+            env.GlowBloom = 0.12f;
+            env.GlowHdrThreshold = 0.55f;
+            AddChild(new WorldEnvironment { Environment = env });
         }
-        AddChild(new WorldEnvironment { Environment = env });
 
         _parallax = new ParallaxView { Name = "Parallax" };
         AddChild(_parallax);
@@ -228,7 +225,10 @@ public partial class GameRoot : Node
                 TerrainRoot = _world3D!.Terrain,
             };
             _uiRoot.AddChild(_toonPanel);
-            _hud.Log("Toon 调参：F1 显隐，勾选「点选物体」后点击角色只改材质");
+            _actorPanel = new ActorTunePanel { World = _world3D };
+            _actorPanel.MoveSpeedChanged = ApplyDebugMoveSpeed;
+            _uiRoot.AddChild(_actorPanel);
+            _hud.Log("调试面板：F1 Toon，F2 缩放/速度/光雾；点选模型后拖滑条");
         }
 
         AddChild(new CameraController { Camera = _camera });
@@ -250,6 +250,7 @@ public partial class GameRoot : Node
             {
                 _ownSim?.SetIntent(0, 0);
                 _worldRenderer?.SetOwnMoveDir(0, 0);
+                _worldRenderer?.SetOwnFacing(0f, 0f);
                 _ownIntentMoving = false;
                 return;
             }
@@ -261,6 +262,11 @@ public partial class GameRoot : Node
             }
             // 自己的动画严格跟随本地输入，松键立即 idle；服务端位置只负责校正。
             _ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
+        };
+        move.OnFacing += face =>
+        {
+            if (!GameplayLocked())
+                _worldRenderer?.SetOwnFacing(face.X, face.Y);
         };
         AddChild(move);
         if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
@@ -510,7 +516,6 @@ public partial class GameRoot : Node
             var orbit = 0f;
             if (Input.IsPhysicalKeyPressed(Key.Q)) orbit -= 1f;
             if (Input.IsPhysicalKeyPressed(Key.E)) orbit += 1f;
-            _moveController?.SetOrbiting(orbit != 0f);
             if (orbit != 0f)
                 RotateView(orbit * MathF.PI / 2f * (float)delta);
         }
@@ -592,6 +597,26 @@ public partial class GameRoot : Node
             now,
             own);
         _worldRenderer.SetDayLight(client.World.DayLight);
+        if (_render3D && _world3D is not null)
+        {
+            var rain = client.World.Weather?.Rain ?? 0f;
+            _world3D.SetDayCycle(
+                client.World.DayLight,
+                client.World.Season,
+                rain,
+                NowMs() < _lightningAmbientUntil);
+            var fires = new List<(float X, float Y, float H)>();
+            foreach (var view in client.World.Entities.Values)
+            {
+                if (!EntityVisual.StyleFor(view).IsFire) continue;
+                var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+                if (p is null) continue;
+                fires.Add((p.X, p.Y, _tilemap?.HeightAt(p.X, p.Y) ?? 0f));
+            }
+            var ox = own?.X ?? _camera.CenterX();
+            var oy = own?.Y ?? _camera.CenterY();
+            _world3D.SyncPointLights(fires, ox, oy, _tilemap?.HeightAt(ox, oy) ?? 0f);
+        }
         _minimap!.SetView(
             client.World.Entities,
             new Vector2(_camera.CenterX(), _camera.CenterY()),
@@ -724,7 +749,11 @@ public partial class GameRoot : Node
             if (id == _ownId)
             {
                 // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
-                if (mv is not null) _ownSim?.SetSpeed((float)mv.EffectiveSpeed);
+                if (mv is not null)
+                {
+                    _lastEffectiveSpeed = (float)mv.EffectiveSpeed;
+                    ApplyDebugMoveSpeed();
+                }
                 _ownPathMoving = mv is { Path.Count: > 0 };
                 if (!_ownIntentMoving && !GameplayLocked())
                 {
@@ -1437,6 +1466,8 @@ public partial class GameRoot : Node
         {
             if (_render3D && name == "F1" && _toonPanel is not null)
                 _toonPanel.Visible = !_toonPanel.Visible;
+            if (_render3D && name == "F2" && _actorPanel is not null)
+                _actorPanel.Visible = !_actorPanel.Visible;
             if (!_render3D)
             {
                 if (name == "Q") RotateView(-Mathf.Pi / 4);
@@ -1481,13 +1512,16 @@ public partial class GameRoot : Node
         else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
             if (PointerOnHud(mb.Position)) return;
-            if (_toonPanel is { Visible: true, PickMode: true } && _world3D is not null)
+            if ((_toonPanel is { Visible: true, PickMode: true } ||
+                 _actorPanel is { Visible: true, PickMode: true }) &&
+                _world3D is not null)
             {
                 if (_world3D.TryPickVisual(mb.Position, out var pickId, out var visual))
                 {
-                    _toonPanel.BindSelected(pickId, visual);
+                    _toonPanel?.BindSelected(pickId, visual);
+                    _actorPanel?.BindSelected(pickId, visual);
                     _world3D.ShowToonMark(visual);
-                    _hud?.Log($"Toon 已选 {visual.Name}，拖滑条只改这个");
+                    _hud?.Log($"已选 {visual.Name}");
                 }
                 else
                 {
@@ -1666,10 +1700,12 @@ public partial class GameRoot : Node
         if (_hud is null) return false;
         if (_hud.HitsInteractive(screen)) return true;
         if (_toonPanel is { Visible: true } && _toonPanel.Hits(screen)) return true;
+        if (_actorPanel is { Visible: true } && _actorPanel.Hits(screen)) return true;
         var hovered = GetViewport()?.GuiGetHoveredControl();
         if (hovered is null) return false;
         if (hovered == _hud || _hud.IsAncestorOf(hovered)) return true;
-        return _toonPanel is not null && (hovered == _toonPanel || _toonPanel.IsAncestorOf(hovered));
+        if (_toonPanel is not null && (hovered == _toonPanel || _toonPanel.IsAncestorOf(hovered))) return true;
+        return _actorPanel is not null && (hovered == _actorPanel || _actorPanel.IsAncestorOf(hovered));
     }
 
     private bool GameplayLocked() =>
@@ -1692,6 +1728,7 @@ public partial class GameRoot : Node
         {
             _ownSim?.SetIntent(0, 0);
             _worldRenderer?.SetOwnMoveDir(0, 0);
+            _worldRenderer?.SetOwnFacing(0f, 0f);
             _ownIntentMoving = false;
             _ownPathMoving = false;
             _autoActions.Release(AutoActionIntent.Any);
@@ -1730,6 +1767,13 @@ public partial class GameRoot : Node
         4 => "冬",
         _ => "?",
     };
+
+    private void ApplyDebugMoveSpeed()
+    {
+        var speed = _lastEffectiveSpeed * (_actorPanel?.MoveSpeedMul ?? 1f);
+        _ownSim?.SetSpeed(speed);
+        _world3D?.Entities.SetOwnMoveSpeed(speed);
+    }
 
     /// <summary>Q/E：2D 为 45° 步进转菱形；3D 为按住绕玩家水平环绕。</summary>
     private void RotateView(float delta)

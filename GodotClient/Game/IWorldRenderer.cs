@@ -20,6 +20,7 @@ public interface IWorldRenderer
     void SetViewRotation(float radians);
     void SetDayLight(float dayLight);
     void SetOwnMoveDir(int dx, int dy);
+    void SetOwnFacing(float worldX, float worldY);
 
     void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities);
     void UpdatePositions(

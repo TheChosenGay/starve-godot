@@ -1,9 +1,27 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 using Starve.Core;
 using TileMap = Starve.Core.TileMap;
 
 namespace GodotClient.Game;
+
+public readonly record struct LightTune(
+    float SunEnergyMul,
+    float SunPitchOffset,
+    float AmbientMul,
+    bool FogEnabled,
+    float FogNearMul,
+    float FogFarMul,
+    CloudTune Cloud)
+{
+    public static LightTune Default { get; } = new(1f, 0f, 1f, false, 1f, 1f, CloudTune.Default);
+
+    public float CloudCoverage => Cloud.Coverage;
+    public float CloudThickness => Cloud.Thickness;
+    public float CloudWind => Cloud.Wind;
+    public float CloudHeight => Cloud.Height;
+}
 
 /// <summary>
 /// 3D 世界容器：世界钉在原点不转；相机枢轴跟玩家，只绕 Y 水平环绕。
@@ -12,13 +30,25 @@ public partial class World3DView : Node3D
 {
     public EntityLayer3D Entities { get; }
     public MapView3D Terrain { get; }
+    public DirectionalLight3D Sun { get; }
+    public LightTune Tune { get; private set; } = LightTune.Default;
 
     private readonly Camera3D _camera;
     private readonly Node3D _pivot;
     private readonly Node3D _world;
     private readonly MeshInstance3D _flatGround;
     private readonly Node3D _probes;
+    private readonly Node3D _lamps;
+    private readonly OmniLight3D _playerLamp;
+    private readonly List<OmniLight3D> _fireLamps = new();
+    private readonly Godot.Environment _env;
+    private readonly ProceduralSkyMaterial _skyMat;
+    private readonly CloudLayer3D _clouds;
     private MeshInstance3D? _toonMark;
+    private float _timeOfDay = 0.5f;
+    private int _season;
+    private float _rain;
+    private bool _lightning;
 
     public World3DView()
     {
@@ -40,14 +70,47 @@ public partial class World3DView : Node3D
         };
         _pivot.AddChild(_camera);
 
-        AddChild(new DirectionalLight3D
+        Sun = new DirectionalLight3D
         {
             Name = "Sun",
             RotationDegrees = new Vector3(-50, 35, 0),
             LightEnergy = 1.55f,
             LightColor = new Color(1f, 0.95f, 0.82f),
             ShadowEnabled = false,
-        });
+        };
+        AddChild(Sun);
+
+        _skyMat = new ProceduralSkyMaterial
+        {
+            SkyTopColor = new Color(0.38f, 0.58f, 0.86f),
+            SkyHorizonColor = new Color(0.82f, 0.78f, 0.72f),
+            GroundBottomColor = new Color(0.18f, 0.22f, 0.14f),
+            GroundHorizonColor = new Color(0.55f, 0.52f, 0.42f),
+            SunAngleMax = 30f,
+        };
+        _env = new Godot.Environment
+        {
+            BackgroundMode = Godot.Environment.BGMode.Sky,
+            Sky = new Sky { SkyMaterial = _skyMat },
+            AmbientLightSource = Godot.Environment.AmbientSource.Color,
+            AmbientLightColor = new Color(0.78f, 0.82f, 0.88f),
+            AmbientLightEnergy = 0.38f,
+            FogEnabled = false,
+            FogMode = Godot.Environment.FogModeEnum.Depth,
+            FogLightColor = new Color(0.78f, 0.8f, 0.86f),
+            FogDepthBegin = 14f,
+            FogDepthEnd = 62f,
+            FogAerialPerspective = 0.45f,
+            TonemapMode = Godot.Environment.ToneMapper.Filmic,
+            TonemapExposure = 1.05f,
+            GlowEnabled = true,
+            GlowIntensity = 0.5f,
+            GlowBloom = 0.07f,
+            GlowHdrThreshold = 0.72f,
+        };
+        AddChild(new WorldEnvironment { Name = "Atmosphere", Environment = _env });
+        _clouds = new CloudLayer3D();
+        AddChild(_clouds);
 
         _world = new Node3D { Name = "World" };
         AddChild(_world);
@@ -63,6 +126,18 @@ public partial class World3DView : Node3D
         _world.AddChild(Terrain);
         Entities = new EntityLayer3D { Name = "EntityLayer3D" };
         _world.AddChild(Entities);
+        _lamps = new Node3D { Name = "Lamps" };
+        _world.AddChild(_lamps);
+        _playerLamp = new OmniLight3D
+        {
+            Name = "PlayerLamp",
+            LightColor = new Color(1f, 0.78f, 0.42f),
+            OmniRange = 5.5f,
+            OmniAttenuation = 1.1f,
+            LightEnergy = 0.2f,
+            ShadowEnabled = false,
+        };
+        _lamps.AddChild(_playerLamp);
     }
 
     public void SetMap(TileMap tm)
@@ -72,6 +147,7 @@ public partial class World3DView : Node3D
         Terrain.SetMap(tm);
         var diag = MathF.Sqrt(tm.Width * tm.Width + tm.Height * tm.Height);
         _camera.Far = Math.Max(200f, IsoCamera3D.Distance + diag + 32f);
+        ApplyCycle();
     }
 
     public void SyncView(float camX, float camY, float height, float zoom, float viewRotation, Vector2 viewport)
@@ -87,7 +163,106 @@ public partial class World3DView : Node3D
         _camera.Size = IsoCamera3D.OrthoSize(viewport.Y, zoom);
         _world.Position = Vector3.Zero;
         _world.Rotation = Vector3.Zero;
+        _clouds.Follow(_pivot.Position);
+        PushCloudShadow();
     }
+
+    public void SetDayCycle(float timeOfDay, int season, float rain, bool lightning)
+    {
+        _timeOfDay = timeOfDay;
+        _season = season;
+        _rain = rain;
+        _lightning = lightning;
+        ApplyCycle();
+    }
+
+    public void SetTune(LightTune tune)
+    {
+        Tune = tune;
+        ApplyCycle();
+    }
+
+    public void SyncPointLights(
+        IReadOnlyList<(float X, float Y, float H)> fires,
+        float ownX,
+        float ownY,
+        float ownH)
+    {
+        var look = DayCyclePalette.Evaluate(_timeOfDay, _season, _lightning, _rain);
+        while (_fireLamps.Count < fires.Count)
+        {
+            var lamp = new OmniLight3D
+            {
+                LightColor = new Color(1.7f, 0.78f, 0.28f),
+                OmniRange = 10f,
+                OmniAttenuation = 0.85f,
+                ShadowEnabled = false,
+            };
+            _lamps.AddChild(lamp);
+            _fireLamps.Add(lamp);
+        }
+        var now = Time.GetTicksMsec() * 0.001f;
+        for (var i = 0; i < _fireLamps.Count; i++)
+        {
+            var lamp = _fireLamps[i];
+            if (i >= fires.Count)
+            {
+                lamp.Visible = false;
+                continue;
+            }
+            var f = fires[i];
+            var p = IsoCamera3D.WorldTo3D(f.X, f.Y, f.H);
+            lamp.Position = new Vector3(p.X, p.Y + 0.7f, p.Z);
+            lamp.Visible = true;
+            var flick = 1f
+                + 0.14f * MathF.Sin(now * 8.7f + i * 2.1f)
+                + 0.08f * MathF.Sin(now * 17.3f + i * 5.9f);
+            lamp.LightEnergy = look.FireEnergy * flick;
+            lamp.OmniRange = 7.5f + 3.5f * look.NightWeight;
+        }
+
+        var op = IsoCamera3D.WorldTo3D(ownX, ownY, ownH);
+        _playerLamp.Position = new Vector3(op.X, op.Y + 1.05f, op.Z);
+        _playerLamp.LightEnergy = look.LanternEnergy;
+        _playerLamp.OmniRange = 4.5f + 2.2f * look.NightWeight;
+        _playerLamp.Visible = look.LanternEnergy > 0.06f;
+    }
+
+    private void ApplyCycle()
+    {
+        var look = DayCyclePalette.Evaluate(_timeOfDay, _season, _lightning, _rain);
+        Sun.LightEnergy = look.SunEnergy * Tune.SunEnergyMul;
+        Sun.LightColor = ToColor(look.SunColor);
+        Sun.RotationDegrees = new Vector3(
+            -(look.SunPitchDegrees + Tune.SunPitchOffset),
+            look.SunYawDegrees,
+            0);
+        _env.AmbientLightSource = Godot.Environment.AmbientSource.Color;
+        _env.AmbientLightEnergy = look.AmbientEnergy * Tune.AmbientMul;
+        _env.AmbientLightColor = ToColor(look.AmbientColor);
+        _env.FogEnabled = Tune.FogEnabled;
+        _env.TonemapExposure = 0.88f + 0.22f * look.NoonWeight;
+        _skyMat.SkyTopColor = ToColor(look.SkyTop);
+        _skyMat.SkyHorizonColor = ToColor(look.SkyHorizon);
+        _skyMat.GroundHorizonColor = ToColor(look.GroundHorizon);
+        _skyMat.GroundBottomColor = ToColor(look.GroundHorizon * 0.45f);
+        GhibliSky.Apply(_clouds.VolumeMat, look, Tune, Sun.GlobalTransform.Basis.Z, _rain);
+        GhibliSky.Apply(_clouds.ShadowMat, look, Tune, Sun.GlobalTransform.Basis.Z, _rain);
+        _clouds.SetHeight(Tune.CloudHeight);
+        PushCloudShadow(look);
+        ToonMaterials.ApplyDayLightToTree(Terrain, look.SunElevation);
+        ToonMaterials.ApplyDayLightToTree(Entities, look.SunElevation);
+    }
+
+    private void PushCloudShadow(DayCycleLook? look = null)
+    {
+        if (Terrain.TerrainMat is not { } terrainMat) return;
+        var cycle = look ?? DayCyclePalette.Evaluate(_timeOfDay, _season, _lightning, _rain);
+        ToonMaterials.ApplyCloudShadow(
+            terrainMat, cycle, Tune, Sun.GlobalTransform.Basis.Z, _pivot.Position, Tune.CloudHeight, _rain);
+    }
+
+    private static Color ToColor(System.Numerics.Vector3 v) => new(v.X, v.Y, v.Z);
 
     /// <summary>按相机射线点选最近实体（点模型身体，不依赖脚底落点）。</summary>
     public bool TryPickVisual(Vector2 screen, out ulong id, out Node3D node)

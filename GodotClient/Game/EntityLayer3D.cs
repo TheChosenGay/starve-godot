@@ -28,6 +28,9 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     private ulong _ownId;
     private int _ownDx;
     private int _ownDy;
+    private float _ownFaceX;
+    private float _ownFaceY;
+    private float _ownMoveSpeed = OwnMovementSim.DefaultTilesPerSec;
     private long _lastNow;
 
     public EntityLayer3D()
@@ -41,12 +44,25 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     public void SetNameProvider(Func<EntityView, string?> provider) { }
     public void SetTilemap(TileMap? tm) => _tilemap = tm;
     public void SetViewRotation(float radians) { }
-    public void SetDayLight(float dayLight) { }
+    public void SetDayLight(float dayLight)
+    {
+        var look = DayCyclePalette.Evaluate(dayLight);
+        ToonMaterials.ApplyDayLightToTree(this, look.SunElevation);
+    }
     public void SetOwnMoveDir(int dx, int dy)
     {
         _ownDx = dx;
         _ownDy = dy;
     }
+
+    public void SetOwnFacing(float worldX, float worldY)
+    {
+        _ownFaceX = worldX;
+        _ownFaceY = worldY;
+    }
+
+    public void SetOwnMoveSpeed(float tilesPerSec) =>
+        _ownMoveSpeed = MathF.Max(0f, tilesPerSec);
 
     public IEnumerable<Node3D> Visuals => _nodes.Values;
     public IReadOnlyDictionary<ulong, Node3D> VisualsById => _nodes;
@@ -125,11 +141,11 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 dx = p.X - last.X;
                 dy = p.Y - last.Y;
             }
-            FaceFromIntentOrMotion(id, node, dx, dy, moving);
+            FaceFromIntentOrMotion(id, node, dx, dy, moving, deltaMs);
             _lastPos[id] = (p.X, p.Y);
 
             if (node is PigmanActor3D pigman)
-                pigman.SetLocomotion(moving);
+                pigman.SetLocomotion(moving, id == _ownId ? _ownMoveSpeed : OwnMovementSim.DefaultTilesPerSec);
 
             if (_flashUntil.TryGetValue(id, out var until))
             {
@@ -238,6 +254,13 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             return actor;
         }
 
+        if (style.IsFire)
+        {
+            var pit = FireFlame3D.CreatePit();
+            pit.Name = $"Entity_{id}";
+            return pit;
+        }
+
         var node = ActorMesh3D.Create(style);
         node.Name = $"Entity_{id}";
         var mat = ActorMesh3D.MaterialOf(node);
@@ -247,7 +270,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     private void ApplyStyle(ulong id, Node3D node, EntityStyle style)
     {
-        if (node is ActorPreview3D or PigmanActor3D) return;
+        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D) return;
+        if (node.GetNodeOrNull<FireFlame3D>("Flame") is not null) return;
         ActorMesh3D.ApplyStyle(node, style);
         if (_mats.TryGetValue(id, out var mat) && !_flashUntil.ContainsKey(id))
             ToonMaterials.SetAlbedo(mat, style.Color);
@@ -278,20 +302,30 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _footstepAt.Remove(id);
     }
 
-    private void FaceFromIntentOrMotion(ulong id, Node3D node, float dx, float dy, bool moving)
+    private const float TurnRadiansPerSec = 10f;
+
+    private void FaceFromIntentOrMotion(ulong id, Node3D node, float dx, float dy, bool moving, float deltaMs)
     {
+        if (node is AlchemyEngine3D) return;
+        if (node.GetNodeOrNull<FireFlame3D>("Flame") is not null) return;
         float yaw;
         if (id == _ownId)
         {
-            if (_ownDx == 0 && _ownDy == 0) return;
-            yaw = IsoCamera3D.FacingYaw(_ownDx, _ownDy);
+            if (MathF.Abs(_ownFaceX) + MathF.Abs(_ownFaceY) >= 0.01f)
+                yaw = IsoCamera3D.FacingYaw(_ownFaceX, _ownFaceY);
+            else if (_ownDx != 0 || _ownDy != 0)
+                yaw = IsoCamera3D.FacingYaw(_ownDx, _ownDy);
+            else
+                return;
         }
         else
         {
             if (!moving || MathF.Abs(dx) + MathF.Abs(dy) <= 0.08f) return;
             yaw = IsoCamera3D.FacingYaw(dx, dy);
         }
-        node.Rotation = new Vector3(0, Mathf.LerpAngle(node.Rotation.Y, yaw, 0.45f), 0);
+        var step = TurnRadiansPerSec * MathF.Max(deltaMs, 1f) / 1000f;
+        var next = Mathf.RotateToward(node.Rotation.Y, yaw, step);
+        node.Rotation = new Vector3(0, next, 0);
     }
 
     private float SmoothHeight(ulong id, float target, float deltaMs)

@@ -5,8 +5,8 @@ using Starve.Protocol.World;
 namespace GodotClient.Game;
 
 /// <summary>
-/// 3D 主场景角色外观目录。要换模型只改这里。
-/// 当前：玩家（原鱼人）和野猪都用 Meshy 猪人。
+/// 3D 主场景外观目录。要换模型只改这里。
+/// 当前：玩家/野猪用 Meshy 猪人；工作台用 Meshy 炼金引擎。
 /// </summary>
 public static class ActorCatalog3D
 {
@@ -14,6 +14,9 @@ public static class ActorCatalog3D
     {
         if (view.Get("Player", Player.Parser) is not null)
             return CreatePigman();
+
+        if (EntityVisual.StyleFor(view).IsWorkbench)
+            return new AlchemyEngine3D();
 
         var creature = view.Get("Creature", Creature.Parser);
         if (creature is null) return null;

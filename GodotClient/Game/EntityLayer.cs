@@ -48,6 +48,8 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 		_ownDy = dy;
 	}
 
+	public void SetOwnFacing(float worldX, float worldY) { }
+
 	/// <summary>视图旋转角（弧度）：Z 排序按旋转后的屏幕 Y，实体随世界节点一起转。</summary>
 	public void SetViewRotation(float radians)
 	{

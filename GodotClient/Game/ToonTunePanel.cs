@@ -28,9 +28,12 @@ public partial class ToonTunePanel : Control
     private readonly OptionButton _scope = new();
     private readonly Label _target = new() { Text = "目标：已选物体（先点选）" };
     private readonly CheckButton _hideOutline = new() { Text = "关掉轮廓（地形无效）" };
+    private readonly OptionButton _kind = new();
     private Node3D? _selectedNode;
     private ulong _selectedId;
     private bool _syncing;
+    private VBoxContainer _bandsBox = null!;
+    private VBoxContainer _celBox = null!;
     private HSlider? _bands;
     private HSlider? _shadeMin;
     private HSlider? _fill;
@@ -38,6 +41,16 @@ public partial class ToonTunePanel : Control
     private HSlider? _outline;
     private ColorPickerButton? _shadow;
     private ColorPickerButton? _outlineColor;
+    private HSlider? _threshold;
+    private HSlider? _shadowStrength;
+    private HSlider? _specThreshold;
+    private HSlider? _specStrength;
+    private ColorPickerButton? _specColor;
+    private HSlider? _rimWidth;
+    private HSlider? _rimPower;
+    private HSlider? _rimStrength;
+    private ColorPickerButton? _rimColor;
+    private CheckButton _rimLitOnly = new() { Text = "边缘光只在受光面" };
 
     public override void _Ready()
     {
@@ -46,7 +59,7 @@ public partial class ToonTunePanel : Control
         OffsetLeft = -312;
         OffsetTop = 12;
         OffsetRight = -12;
-        OffsetBottom = 520;
+        OffsetBottom = 640;
         MouseFilter = MouseFilterEnum.Ignore;
         Theme = HudTheme.Create();
 
@@ -63,15 +76,21 @@ public partial class ToonTunePanel : Control
         box.AddChild(new Label { Text = "Toon 调参  F1 显隐" });
         box.AddChild(new Label
         {
-            Text = "范围：已选物体 / 全部已套用 Toon 的角色 / 地形。点模型后点「套用 Toon」。",
+            Text = "范围：已选物体 / 全部已套用 Toon 的角色 / 地形。点模型后点「套用 Toon」。两套 shader 可切换，不会删掉原来的色阶 Toon。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
+        _kind.AddItem("色阶 Toon（现有）", (int)ToonShaderKind.Bands);
+        _kind.AddItem("Cel Toon（gameidea）", (int)ToonShaderKind.Cel);
+        _kind.Selected = (int)ToonShaderKind.Bands;
+        _kind.ItemSelected += OnKindSelected;
+        box.AddChild(_kind);
         _scope.AddItem("全部角色", (int)Scope.Actors);
         _scope.AddItem("地形", (int)Scope.Terrain);
         _scope.AddItem("已选物体", (int)Scope.Selected);
         _scope.Selected = (int)Scope.Selected;
         _scope.ItemSelected += _ =>
         {
+            _kind.Disabled = CurrentScope == Scope.Terrain;
             LoadSliders();
             UpdateTargetLabel();
         };
@@ -94,15 +113,39 @@ public partial class ToonTunePanel : Control
         toonRow.AddChild(disableToon);
         box.AddChild(toonRow);
 
-        _bands = AddSlider(box, "色阶级数", 2, 6, 1, ToonMaterials.ActorDefaults.Bands);
-        _shadeMin = AddSlider(box, "暗部亮度", 0, 1, 0.01f, ToonMaterials.ActorDefaults.ShadeMin);
-        _fill = AddSlider(box, "填充光", 0, 0.6f, 0.01f, ToonMaterials.ActorDefaults.Fill);
-        _rim = AddSlider(box, "边缘光", 0, 1, 0.01f, ToonMaterials.ActorDefaults.Rim);
+        _bandsBox = new VBoxContainer();
+        box.AddChild(_bandsBox);
+        _bands = AddSlider(_bandsBox, "色阶级数", 2, 6, 1, ToonMaterials.ActorDefaults.Bands);
+        _shadeMin = AddSlider(_bandsBox, "暗部亮度", 0, 1, 0.01f, ToonMaterials.ActorDefaults.ShadeMin);
+        _fill = AddSlider(_bandsBox, "填充光", 0, 0.6f, 0.01f, ToonMaterials.ActorDefaults.Fill);
+        _rim = AddSlider(_bandsBox, "边缘光", 0, 1, 0.01f, ToonMaterials.ActorDefaults.Rim);
+        _shadow = AddColor(_bandsBox, "阴影色", ToonMaterials.ActorDefaults.ShadowTint);
+
+        _celBox = new VBoxContainer();
+        box.AddChild(_celBox);
+        var celHint = new Label
+        {
+            Text = "硬边阈值 + 高光 + 边缘光。阈值把 Lambert 切成亮/暗两档。",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _celBox.AddChild(celHint);
+        _threshold = AddSlider(_celBox, "明暗阈值", 0, 1, 0.01f, 0.5f);
+        _shadowStrength = AddSlider(_celBox, "阴影强度", 0, 1, 0.01f, 0.5f);
+        _specThreshold = AddSlider(_celBox, "高光阈值", 0.85f, 1, 0.005f, 0.99f);
+        _specStrength = AddSlider(_celBox, "高光强度", 0, 4, 0.05f, 2f);
+        _specColor = AddColor(_celBox, "高光色", Colors.White);
+        _rimWidth = AddSlider(_celBox, "边缘宽度", 0.2f, 4, 0.05f, 2f);
+        _rimPower = AddSlider(_celBox, "边缘锐度", 1, 8, 0.1f, 4f);
+        _rimStrength = AddSlider(_celBox, "边缘强度", 0, 2, 0.02f, 1f);
+        _rimColor = AddColor(_celBox, "边缘色", Colors.White);
+        _rimLitOnly.Toggled += _ => Push();
+        _celBox.AddChild(_rimLitOnly);
+
         _outline = AddSlider(box, "轮廓宽度", 0, 0.08f, 0.001f, ToonMaterials.ActorDefaults.OutlineWidth);
-        _shadow = AddColor(box, "阴影色", ToonMaterials.ActorDefaults.ShadowTint);
         _outlineColor = AddColor(box, "轮廓色", ToonMaterials.ActorDefaults.OutlineColor);
         box.AddChild(_hideOutline);
         _hideOutline.Toggled += _ => Push();
+        UpdateSliderVisibility();
 
         var reset = new Button { Text = "恢复当前目标默认" };
         reset.Pressed += ResetCurrent;
@@ -124,16 +167,39 @@ public partial class ToonTunePanel : Control
         _scope.Selected = (int)Scope.Selected;
         if (!_overrides.ContainsKey(id))
             _overrides[id] = ToonMaterials.ActorDefaults.Clone();
+        foreach (var mat in ToonMaterials.CollectActorMaterials(node))
+        {
+            _overrides[id].Kind = ToonMaterials.ReadKind(mat);
+            break;
+        }
         LoadSliders();
         UpdateTargetLabel();
         if (ToonMaterials.HasActorToon(node))
             Push();
     }
 
+    private void OnKindSelected(long index)
+    {
+        if (CurrentScope == Scope.Terrain) return;
+        var kind = (ToonShaderKind)(int)index;
+        CurrentStyle().Kind = kind;
+        ToonMaterials.CreateKind = kind;
+        UpdateSliderVisibility();
+        Push();
+    }
+
+    private void UpdateSliderVisibility()
+    {
+        var cel = CurrentScope != Scope.Terrain && (ToonShaderKind)_kind.Selected == ToonShaderKind.Cel;
+        _bandsBox.Visible = !cel;
+        _celBox.Visible = cel;
+    }
+
     private void EnableSelectedToon()
     {
         if (_selectedNode is null) return;
         _scope.Selected = (int)Scope.Selected;
+        ToonMaterials.CreateKind = CurrentStyle().Kind;
         ToonMaterials.EnableOn(_selectedNode);
         Push();
         UpdateTargetLabel();
@@ -163,11 +229,17 @@ public partial class ToonTunePanel : Control
         }
         else if (CurrentScope == Scope.Selected && _selectedId != 0)
         {
-            _overrides[_selectedId] = ToonMaterials.ActorDefaults.Clone();
+            var kind = CurrentStyle().Kind;
+            _overrides[_selectedId] = kind == ToonShaderKind.Cel
+                ? ToonStyle.CelDefaults()
+                : ToonMaterials.ActorDefaults.Clone();
+            _overrides[_selectedId].Kind = kind;
         }
         else
         {
-            CopyInto(ToonMaterials.ActorDefaults, new ToonStyle());
+            var kind = ToonMaterials.ActorDefaults.Kind;
+            CopyInto(ToonMaterials.ActorDefaults, kind == ToonShaderKind.Cel ? ToonStyle.CelDefaults() : new ToonStyle());
+            ToonMaterials.ActorDefaults.Kind = kind;
         }
         LoadSliders();
         Push();
@@ -185,6 +257,7 @@ public partial class ToonTunePanel : Control
     {
         _syncing = true;
         var s = CurrentStyle();
+        _kind.Selected = (int)s.Kind;
         if (_bands is not null) _bands.Value = s.Bands;
         if (_shadeMin is not null) _shadeMin.Value = s.ShadeMin;
         if (_fill is not null) _fill.Value = s.Fill;
@@ -192,13 +265,26 @@ public partial class ToonTunePanel : Control
         if (_outline is not null) _outline.Value = s.OutlineWidth;
         if (_shadow is not null) _shadow.Color = s.ShadowTint;
         if (_outlineColor is not null) _outlineColor.Color = s.OutlineColor;
+        if (_threshold is not null) _threshold.Value = s.DiffuseThreshold;
+        if (_shadowStrength is not null) _shadowStrength.Value = s.ShadowStrength;
+        if (_specThreshold is not null) _specThreshold.Value = s.SpecularThreshold;
+        if (_specStrength is not null) _specStrength.Value = s.SpecularStrength;
+        if (_specColor is not null) _specColor.Color = s.SpecularColor;
+        if (_rimWidth is not null) _rimWidth.Value = s.RimWidth;
+        if (_rimPower is not null) _rimPower.Value = s.RimPower;
+        if (_rimStrength is not null) _rimStrength.Value = s.RimStrength;
+        if (_rimColor is not null) _rimColor.Color = s.RimColor;
+        _rimLitOnly.ButtonPressed = s.RimLitOnly;
         _hideOutline.ButtonPressed = s.OutlineWidth <= 1e-4f;
         _syncing = false;
+        UpdateSliderVisibility();
         UpdateTargetLabel();
     }
 
     private void ReadSliders(ToonStyle s)
     {
+        if (CurrentScope != Scope.Terrain)
+            s.Kind = (ToonShaderKind)_kind.Selected;
         if (_bands is not null) s.Bands = (float)Math.Round(_bands.Value);
         if (_shadeMin is not null) s.ShadeMin = (float)_shadeMin.Value;
         if (_fill is not null) s.Fill = (float)_fill.Value;
@@ -206,6 +292,16 @@ public partial class ToonTunePanel : Control
         if (_outline is not null) s.OutlineWidth = _hideOutline.ButtonPressed ? 0f : (float)_outline.Value;
         if (_shadow is not null) s.ShadowTint = _shadow.Color;
         if (_outlineColor is not null) s.OutlineColor = _outlineColor.Color;
+        if (_threshold is not null) s.DiffuseThreshold = (float)_threshold.Value;
+        if (_shadowStrength is not null) s.ShadowStrength = (float)_shadowStrength.Value;
+        if (_specThreshold is not null) s.SpecularThreshold = (float)_specThreshold.Value;
+        if (_specStrength is not null) s.SpecularStrength = (float)_specStrength.Value;
+        if (_specColor is not null) s.SpecularColor = _specColor.Color;
+        if (_rimWidth is not null) s.RimWidth = (float)_rimWidth.Value;
+        if (_rimPower is not null) s.RimPower = (float)_rimPower.Value;
+        if (_rimStrength is not null) s.RimStrength = (float)_rimStrength.Value;
+        if (_rimColor is not null) s.RimColor = _rimColor.Color;
+        s.RimLitOnly = _rimLitOnly.ButtonPressed;
     }
 
     private void Push()
@@ -219,6 +315,7 @@ public partial class ToonTunePanel : Control
                 ToonMaterials.ApplyStyleToTerrain(TerrainRoot, style);
             return;
         }
+        ToonMaterials.CreateKind = style.Kind;
         if (CurrentScope == Scope.Selected)
         {
             if (_selectedNode is not null)
@@ -244,7 +341,9 @@ public partial class ToonTunePanel : Control
         {
             Scope.Terrain => "目标：地形",
             Scope.Selected when _selectedNode is not null =>
-                $"目标：{_selectedNode.Name}" + (ToonMaterials.HasActorToon(_selectedNode) ? "（已 Toon）" : "（未 Toon）"),
+                $"目标：{_selectedNode.Name}" + (ToonMaterials.HasActorToon(_selectedNode)
+                    ? (CurrentStyle().Kind == ToonShaderKind.Cel ? "（Cel Toon）" : "（色阶 Toon）")
+                    : "（未 Toon）"),
             Scope.Selected => "目标：已选物体（先点选）",
             _ => "目标：已套用 Toon 的角色",
         };
@@ -294,6 +393,7 @@ public partial class ToonTunePanel : Control
 
     private static void CopyInto(ToonStyle dst, ToonStyle src)
     {
+        dst.Kind = src.Kind;
         dst.Bands = src.Bands;
         dst.Rim = src.Rim;
         dst.ShadeMin = src.ShadeMin;
@@ -301,6 +401,16 @@ public partial class ToonTunePanel : Control
         dst.ShadowTint = src.ShadowTint;
         dst.OutlineWidth = src.OutlineWidth;
         dst.OutlineColor = src.OutlineColor;
+        dst.DiffuseThreshold = src.DiffuseThreshold;
+        dst.ShadowStrength = src.ShadowStrength;
+        dst.SpecularThreshold = src.SpecularThreshold;
+        dst.SpecularStrength = src.SpecularStrength;
+        dst.SpecularColor = src.SpecularColor;
+        dst.RimWidth = src.RimWidth;
+        dst.RimPower = src.RimPower;
+        dst.RimStrength = src.RimStrength;
+        dst.RimColor = src.RimColor;
+        dst.RimLitOnly = src.RimLitOnly;
     }
 
     private static string Format(float v) => v >= 2 ? v.ToString("0") : v.ToString("0.00");

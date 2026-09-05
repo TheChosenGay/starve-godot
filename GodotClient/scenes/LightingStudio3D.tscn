@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://23a72ooh47vy"]
+
+[ext_resource type="Script" path="res://Game/LightingStudio3D.cs" id="1_studio"]
+
+[node name="LightingStudio3D" type="Node3D"]
+script = ExtResource("1_studio")

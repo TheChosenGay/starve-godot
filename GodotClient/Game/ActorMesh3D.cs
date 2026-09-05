@@ -47,7 +47,21 @@ public static class ActorMesh3D
             else if (mesh.MaterialOverride is StandardMaterial3D std)
                 std.AlbedoColor = style.Color;
         }
-        root.Scale = Vector3.One * ScaleOf(style);
+        root.Scale = Vector3.One * ScaleOf(style) * TuneScaleOf(root);
+    }
+
+    public const string TuneScaleMeta = "tune_scale";
+
+    public static float TuneScaleOf(Node3D root) =>
+        root.HasMeta(TuneScaleMeta) ? root.GetMeta(TuneScaleMeta).AsSingle() : 1f;
+
+    public static void SetTuneScale(Node3D root, float scale)
+    {
+        var s = MathF.Max(0.05f, scale);
+        var prev = TuneScaleOf(root);
+        root.SetMeta(TuneScaleMeta, s);
+        if (prev > 1e-4f)
+            root.Scale *= s / prev;
     }
 
     private static float ScaleOf(EntityStyle style)

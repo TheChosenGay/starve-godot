@@ -9,6 +9,7 @@ namespace GodotClient.Game;
 public partial class MapView3D : Node3D
 {
     private static TileAtlasBuilder? _atlas;
+    public ShaderMaterial? TerrainMat { get; private set; }
 
     public void SetMap(TileMap tm)
     {
@@ -21,6 +22,7 @@ public partial class MapView3D : Node3D
         var cols = Mathf.CeilToInt(tm.Width / (float)MapMeshBuilder.ChunkTiles);
         var rows = Mathf.CeilToInt(tm.Height / (float)MapMeshBuilder.ChunkTiles);
         var mat = ToonMaterials.CreateTerrain(_atlas.Atlas);
+        TerrainMat = mat;
         for (var r = 0; r < rows; r++)
         {
             for (var c = 0; c < cols; c++)

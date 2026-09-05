@@ -22,6 +22,8 @@ public partial class PigmanActor3D : Node3D
     private float _yawDegrees;
     private bool _applyToon;
     private bool _playing = true;
+    private float _moveSpeedScale = 1.8f;
+    private float _animSpeedMul = 1f;
     private bool _rebuildQueued;
     private AnimationPlayer? _player;
 
@@ -80,6 +82,17 @@ public partial class PigmanActor3D : Node3D
         }
     }
 
+    /// <summary>动画播放倍率，叠在按移动速度算出的 Scale 上。</summary>
+    public float AnimSpeedMul
+    {
+        get => _animSpeedMul;
+        set
+        {
+            _animSpeedMul = Mathf.Max(0.05f, value);
+            if (IsInsideTree()) SyncPlayback();
+        }
+    }
+
     public override void _Ready() => Rebuild();
 
     public override void _EnterTree()
@@ -87,9 +100,13 @@ public partial class PigmanActor3D : Node3D
         if (Engine.IsEditorHint()) RequestRebuild();
     }
 
-    public void SetLocomotion(bool moving)
+    public void SetLocomotion(bool moving, float tilesPerSec = 10f)
     {
         _playing = moving;
+        // 走/跑 clip 约 1.07s / 0.67s 一圈，游戏默认 10 格/秒，按 1x 播会明显滑步。
+        _moveSpeedScale = moving
+            ? Mathf.Clamp(tilesPerSec / 4.5f, 1.4f, 2.6f) * _animSpeedMul
+            : 0f;
         if (moving && _clip != PigmanClip.Walk)
         {
             _clip = PigmanClip.Walk;
@@ -181,10 +198,13 @@ public partial class PigmanActor3D : Node3D
     {
         if (_player is null || _player.GetAnimationList().Length == 0) return;
         var name = PickClip(_player.GetAnimationList());
+        var anim = _player.GetAnimation(name);
+        if (anim is not null && anim.LoopMode == Animation.LoopModeEnum.None)
+            anim.LoopMode = Animation.LoopModeEnum.Linear;
         if (_playing)
         {
             if (_player.CurrentAnimation != name) _player.Play(name);
-            _player.SpeedScale = 1f;
+            _player.SpeedScale = _moveSpeedScale <= 0.01f ? 1.8f : _moveSpeedScale;
         }
         else
         {
