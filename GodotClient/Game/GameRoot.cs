@@ -25,1774 +25,1806 @@ public enum Intent { Gather, Chop, Mine, Pickup, Attack }
 /// </summary>
 public partial class GameRoot : Node
 {
-    private readonly Camera _camera = new();
-    private readonly Dictionary<ulong, PositionSmoother> _smoothers = new();
-    private readonly ConcurrentQueue<ActionOutcome> _actionOutcomes = new();
-    private readonly ConcurrentQueue<WorldEvent> _worldEvents = new();
-    private OwnMovementSim? _ownSim;
-    private readonly HashSet<(int X, int Y)> _blocked = new();
-    private readonly Dictionary<ulong, long> _movingUntil = new();
-    private readonly Dictionary<ulong, (float X, float Y)> _lastServerPos = new();
-    private bool _ownIntentMoving;
-    private bool _ownPathMoving;
-
-    private StarveClient? _client;
-    private TileMap? _tilemap;
-    private Node2D? _worldPivot;
-    private Node2D? _world;
-    private MapView? _mapView;
-    private IWorldRenderer? _worldRenderer;
-    private World3DView? _world3D;
-    private CloudShadowView? _clouds;
-    private ParallaxView? _parallax;
-    private WeatherView? _weather;
-    private FogGrid? _fogGrid;
-    private MinimapView? _minimap;
-    private LightingPass? _lighting;
-    private LutPass? _lut;
-    private VolumetricView? _volumetric;
-    private GhostNode? _ghost;
-    private Control? _uiRoot;
-    private Hud? _hud;
-    private ToonTunePanel? _toonPanel;
-    private ActorTunePanel? _actorPanel;
-    private float _lastEffectiveSpeed = OwnMovementSim.DefaultTilesPerSec;
-    private SfxService? _sfx;
-    private DamageFlashOverlay? _damageFlash;
-    private MoveController? _moveController;
-    private int _lastRevision = -1;
-    private int _lastWeatherRevision = -1;
-    private long? _captureAt;
-    private ulong _ownId;
-    private string _ownUid = "";
-    private ulong? _selected;
-    private (ulong EntityId, int Kind, int W, int H, bool Ok)? _buildPreview;
-    private System.Numerics.Vector2? _mouseWorld;
-    private long _lastBuildCheckAt;
-    private long _lightningAmbientUntil;
-    private readonly bool _freeCamera = CameraArg is not null;
-    private readonly bool _render3D = Render3DMode;
-    private readonly AutoActionInputState _autoActions = new();
-    private long _demoNextAt;
-    private float _viewRotation;
-    private int _blockedSignature = int.MinValue;
-    private int _hudSignature = int.MinValue;
-    private readonly bool _showMovementDiagnostics =
-        System.Environment.GetEnvironmentVariable("STARVE_DEBUG_MOVEMENT") == "1";
-    private MovementDiagnosticsSampler? _movementDiagnosticsSampler;
-    private string _movementDiagnosticsStatus = "";
-    private bool _ownDead;
-    private bool _gameplayLocked;
-    private Vector2 _uiRootSize;
-    private readonly Dictionary<ulong, (float X, float Y)> _lootAt = new();
-
-    /// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
-    private static readonly Dictionary<int, string> ItemIconFiles = new()
-    {
-        [(int)ItemKind.Axe] = "res://assets/equipment/wood/axe.png",
-        [(int)ItemKind.Pickaxe] = "res://assets/equipment/wood/chisel.png", // 凿子充当镐图标
-        [(int)ItemKind.WoodArmor] = "res://assets/equipment/wood/armor.png",
-        [(int)ItemKind.Helmet] = "res://assets/equipment/wood/helmet.png",
-    };
-    private static readonly Dictionary<int, Texture2D> ItemIconCache = new();
-
-    private static Texture2D? ItemIcon(int kind)
-    {
-        if (!ItemIconFiles.TryGetValue(kind, out var path)) return null;
-        if (!ItemIconCache.TryGetValue(kind, out var tex))
-        {
-            tex = GD.Load<Texture2D>(path);
-            ItemIconCache[kind] = tex;
-        }
-        return tex;
-    }
-
-    private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
-    private static string? CapturePath => OS.GetCmdlineUserArgs()
-        .SkipWhile(a => a != "--capture")
-        .Skip(1)
-        .FirstOrDefault();
-    private static string? CameraArg => OS.GetCmdlineUserArgs()
-        .SkipWhile(a => a != "--cam")
-        .Skip(1)
-        .FirstOrDefault();
-    /// <summary>
-    /// 默认走 3D 主场景（玩家为猪人）。加 --render-2d 或 STARVE_RENDER_2D=1 回到 2D 鱼人。
-    /// </summary>
-    private static bool Render3DMode =>
-        !OS.GetCmdlineUserArgs().Contains("--render-2d") &&
-        System.Environment.GetEnvironmentVariable("STARVE_RENDER_2D") != "1";
-    /// <summary>演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。</summary>
-    private static (int Dx, int Dy)? DemoMove =>
-        System.Environment.GetEnvironmentVariable("STARVE_DEMO_MOVE") is { } s &&
-        s.Split(',') is { Length: 2 } parts &&
-        int.TryParse(parts[0], out var dx) && int.TryParse(parts[1], out var dy)
-            ? (dx, dy)
-            : null;
-
-    public override void _Ready()
-    {
-        // Godot 内建 Bloom：2D 用全屏 Environment；3D 的 glow 挂在 World3DView 的日夜环境上，避免两套环境抢天空。
-        if (!_render3D)
-        {
-            var env = new Godot.Environment();
-            env.GlowEnabled = true;
-            env.GlowIntensity = 0.9f;
-            env.GlowStrength = 1.1f;
-            env.GlowBloom = 0.12f;
-            env.GlowHdrThreshold = 0.55f;
-            AddChild(new WorldEnvironment { Environment = env });
-        }
-
-        _parallax = new ParallaxView { Name = "Parallax" };
-        AddChild(_parallax);
-        _worldPivot = new Node2D { Name = "WorldPivot" };
-        AddChild(_worldPivot);
-        _world = new Node2D { Name = "World" };
-        _worldPivot.AddChild(_world);
-        _mapView = new MapView { Name = "MapView" };
-        _world.AddChild(_mapView);
-        _clouds = new CloudShadowView { Name = "CloudShadows" };
-        _world.AddChild(_clouds);
-        _sfx = new SfxService();
-        AddChild(_sfx);
-        _sfx.SetSpatialRoot(_world);
-        if (_render3D)
-        {
-            _world3D = new World3DView();
-            AddChild(_world3D);
-            _worldRenderer = _world3D.Entities;
-            _worldPivot.Visible = false;
-        }
-        else
-        {
-            var entityLayer = new EntityLayer { Name = "EntityLayer" };
-            _world.AddChild(entityLayer);
-            _worldRenderer = entityLayer;
-        }
-        _worldRenderer.SetSfx(_sfx);
-        _fogGrid = new FogGrid { Name = "FogGrid" };
-        _world.AddChild(_fogGrid);
-        _ghost = new GhostNode { Name = "Ghost", ZIndex = 4096, Visible = false };
-        _world.AddChild(_ghost);
-
-        _weather = new WeatherView { Name = "Weather" };
-        _weather.OnLightning += () => _lightningAmbientUntil = NowMs() + 350;
-        AddChild(_weather);
-        _lighting = new LightingPass { Name = "Lighting" };
-        AddChild(_lighting);
-        _lut = new LutPass { Name = "Lut" };
-        _lut.SetAtlas(LutBuilder.Build().Atlas);
-        AddChild(_lut);
-        _volumetric = new VolumetricView { Name = "Volumetric" };
-        AddChild(_volumetric);
-        if (_render3D)
-        {
-            if (_parallax is not null) _parallax.Visible = false;
-            _lighting.Visible = false;
-            _volumetric.Visible = false;
-            GD.Print("RENDER 3D main scene, player=pigman");
-        }
-
-        var ui = new CanvasLayer { Layer = 10 };
-        AddChild(ui);
-        // CanvasLayer 不是 Control：子控件的锚点不会跟窗口走，底栏会算到屏幕外。
-        _uiRoot = new Control
-        {
-            Name = "UiRoot",
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-        };
-        ui.AddChild(_uiRoot);
-        // CanvasLayer 不是 Control，子节点 FullRect 不会自动吃到窗口。必须把 UiRoot.Size 写成视口大小。
-        GetViewport().SizeChanged += FitUiRoot;
-        var window = GetWindow();
-        if (window is not null) window.SizeChanged += FitUiRoot;
-        _minimap = new MinimapView { Name = "Minimap" };
-        _uiRoot.AddChild(_minimap);
-        _damageFlash = new DamageFlashOverlay { Name = "DamageFlash" };
-        _uiRoot.AddChild(_damageFlash);
-        _hud = new Hud { Name = "Hud" };
-        _uiRoot.AddChild(_hud);
-        WireHud(_hud);
-        FitUiRoot();
-        CallDeferred(MethodName.FitUiRoot);
-        if (_render3D) _hud.Log("渲染：3D 主场景 · 玩家=猪人（--render-2d 回 2D）");
-        if (_render3D && OS.IsDebugBuild())
-        {
-            _toonPanel = new ToonTunePanel
-            {
-                CollectActors = () => _world3D!.Entities.Visuals,
-                TerrainRoot = _world3D!.Terrain,
-            };
-            _uiRoot.AddChild(_toonPanel);
-            _actorPanel = new ActorTunePanel { World = _world3D };
-            _actorPanel.MoveSpeedChanged = ApplyDebugMoveSpeed;
-            _uiRoot.AddChild(_actorPanel);
-            _hud.Log("调试面板：F1 Toon，F2 缩放/速度/光雾；点选模型后拖滑条");
-        }
-
-        AddChild(new CameraController { Camera = _camera });
-        var move = new MoveController();
-        _moveController = move;
-        _ownSim = new OwnMovementSim(IsWalkable);
-        if (_showMovementDiagnostics)
-        {
-            _movementDiagnosticsSampler = new MovementDiagnosticsSampler(
-                () => _ownSim?.Diagnostics ?? default);
-        }
-        move.OnMove += dir =>
-        {
-            if (!GameplayLocked()) _client?.Commands.Move(dir.Dx, dir.Dy);
-        };
-        move.OnIntent += dir =>
-        {
-            if (GameplayLocked())
-            {
-                _ownSim?.SetIntent(0, 0);
-                _worldRenderer?.SetOwnMoveDir(0, 0);
-                _worldRenderer?.SetOwnFacing(0f, 0f);
-                _ownIntentMoving = false;
-                return;
-            }
-            _ownSim?.SetIntent(dir.Dx, dir.Dy);
-            _worldRenderer?.SetOwnMoveDir(dir.Dx, dir.Dy);
-            if (dir.Dx != 0 || dir.Dy != 0)
-            {
-                _worldRenderer?.CancelActionForMovement(_ownId);
-            }
-            // 自己的动画严格跟随本地输入，松键立即 idle；服务端位置只负责校正。
-            _ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
-        };
-        move.OnFacing += face =>
-        {
-            if (!GameplayLocked())
-                _worldRenderer?.SetOwnFacing(face.X, face.Y);
-        };
-        AddChild(move);
-        if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
-            float.TryParse(rr, out var deg))
-        {
-            RotateView(deg * Mathf.Pi / 180f);
-        }
-
-        _hud.Log("连接中…");
-        _ = StartAsync();
-    }
-
-    public override void _ExitTree()
-    {
-        var vp = GetViewport();
-        if (vp is not null) vp.SizeChanged -= FitUiRoot;
-        var window = GetWindow();
-        if (window is not null) window.SizeChanged -= FitUiRoot;
-    }
-
-    private void FitUiRoot()
-    {
-        if (_uiRoot is null) return;
-        var size = GetViewport().GetVisibleRect().Size;
-        if (size.X < 2 || size.Y < 2)
-        {
-            var win = GetWindow();
-            if (win is not null) size = win.Size;
-        }
-        if (size.X < 2 || size.Y < 2)
-        {
-            CallDeferred(MethodName.FitUiRoot);
-            return;
-        }
-        if (_uiRoot.Size.DistanceSquaredTo(size) < 1f && _uiRoot.Position == Vector2.Zero)
-            return;
-        _uiRootSize = size;
-        _uiRoot.Position = Vector2.Zero;
-        _uiRoot.Size = size;
-        _hud?.Relayout();
-    }
-
-    private void WireHud(Hud hud)
-    {
-        hud.GatherPressed += () => WithSelected(id => TryAct(id, Intent.Gather));
-        hud.AttackPressed += () => WithSelected(id => TryAct(id, Intent.Attack));
-        hud.ChopPressed += () => WithSelected(id => TryAct(id, Intent.Chop));
-        hud.MinePressed += () => WithSelected(id => TryAct(id, Intent.Mine));
-        hud.PickupPressed += () => WithSelected(id => TryAct(id, Intent.Pickup));
-        hud.DemolishPressed += () =>
-        {
-            if (CanSendGameplay()) WithSelected(id => _client?.Commands.Demolish(id));
-        };
-        hud.BuildPressed += kind =>
-        {
-            if (CanSendGameplay()) _ = DoBuildAsync(kind);
-        };
-        hud.BagUsePressed += slot =>
-        {
-            if (CanSendGameplay()) WithBagSlot(slot, kind => _client?.Commands.Use(kind));
-        };
-        hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
-        {
-            if (!CanSendGameplay()) return;
-            // 背包始终按 kind 装备：同槽替换（换斧只换手持）。kind=0 是卸下，不能从背包发出。
-            _client?.Commands.Equip(kind);
-        });
-        hud.WornSlotUnequipPressed += slotId =>
-        {
-            if (!CanSendGameplay() || WornItem(slotId) is null) return;
-            _client?.Commands.UnequipSlot(EquipSlotNumber(slotId));
-        };
-        hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
-        {
-            if (!CanSendGameplay()) return;
-            var count = OwnItemCount(slot);
-            if (count > 0) _client?.Commands.Drop(kind, count);
-        });
-        hud.BagSplitPressed += slot => WithBagSlot(slot, kind =>
-        {
-            if (!CanSendGameplay()) return;
-            var count = OwnItemCount(slot);
-            if (count > 1) _client?.Commands.Split(slot, count / 2);
-        });
-        hud.CraftPressed += recipeId =>
-        {
-            if (CanSendGameplay()) _ = DoCraftAsync(recipeId);
-        };
-        hud.CancelCraftPressed += () =>
-        {
-            if (CanSendGameplay()) _client?.Commands.CancelCraft();
-        };
-        hud.SleepPressed += () =>
-        {
-            if (_client is null || _ownDead || GameplayLocked()) return;
-            var command = _client.Commands.Sleep();
-            _worldRenderer?.PredictAction(_ownId, ActionKind.Sleep, command);
-        };
-        hud.CancelSleepPressed += () =>
-        {
-            if (_client is null || _ownDead || GameplayLocked()) return;
-            _client.Commands.CancelSleep();
-            _worldRenderer?.CancelActionLocally(_ownId);
-        };
-        hud.UiClicked += () => _sfx?.Play("sfx.ui.click");
-        hud.CraftOpened += () => _sfx?.Play("sfx.ui.craft.open");
-    }
-
-    private async Task StartAsync()
-    {
-        _client = new StarveClient();
-        _client.World.ActionOutcomeReceived += outcome => _actionOutcomes.Enqueue(outcome);
-        _client.World.WorldEventReceived += worldEvent => _worldEvents.Enqueue(worldEvent);
-        try
-        {
-            var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
-            _ownUid = uid;
-            var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
-            _ownId = info.EntityId;
-            _worldRenderer?.SetOwnId(_ownId);
-            _worldRenderer?.SetNameProvider(EntityName);
-            if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
-                float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
-            {
-                _camera.Teleport(cx, cy);
-            }
-            _hud?.Log($"[已连接] uid={info.UserId} entity={info.EntityId}");
-        }
-        catch (Exception ex)
-        {
-            _hud?.Log($"[连接失败] {ex.Message}");
-        }
-    }
-
-    public override void _Process(double delta)
-    {
-        if (CapturePath is not null)
-        {
-            var delay = 3000;
-            if (System.Environment.GetEnvironmentVariable("STARVE_CAPTURE_MS") is { } ms &&
-                int.TryParse(ms, out var custom)) delay = custom;
-            if (_captureAt is null) _captureAt = NowMs() + delay;
-            if (NowMs() >= _captureAt)
-            {
-                var img = GetViewport().GetTexture().GetImage();
-                img.SavePng(CapturePath);
-                GD.Print($"CAPTURE saved: {CapturePath}");
-                GetTree().Quit();
-                return;
-            }
-        }
-
-        var client = _client;
-        if (client is null) return;
-
-        while (_actionOutcomes.TryDequeue(out var outcome))
-        {
-            _worldRenderer?.ApplyActionOutcome(outcome);
-            if (outcome.EntityId != _ownId) continue;
-            if (outcome.Result == ActionOutcomeResult.Completed &&
-                outcome.Kind == ActionKind.Craft)
-            {
-                _sfx?.Play("sfx.ui.craft.done");
-            }
-            if (outcome.Result is ActionOutcomeResult.Canceled or ActionOutcomeResult.Rejected)
-            {
-                var result = outcome.Result == ActionOutcomeResult.Canceled ? "动作已取消" : "动作被拒绝";
-                _hud?.Log($"{result}：{ActionOutcomeReasonText(outcome.Reason)}");
-                if (outcome.Result == ActionOutcomeResult.Rejected) _sfx?.Play("sfx.ui.deny");
-            }
-        }
-
-        if (client.World.Revision != _lastRevision)
-        {
-            _lastRevision = client.World.Revision;
-            ApplyWorld(client.World);
-            try
-            {
-                RefreshOwnVitals(client.World);
-            }
-            catch (Exception ex)
-            {
-                GD.PushError($"HUD vitals: {ex.Message}");
-            }
-        }
-        while (_worldEvents.TryDequeue(out var worldEvent))
-        {
-            if (worldEvent.Impact is { } impact)
-            {
-                _worldRenderer?.ApplyCombatImpact(worldEvent, impact);
-                _damageFlash?.ApplyImpact(
-                    impact.Result,
-                    impact.TargetEntity == _ownId);
-            }
-            else if (worldEvent.HealthChanged is { } healthChanged &&
-                     healthChanged.TargetEntity == _ownId &&
-                     healthChanged.Delta != 0)
-            {
-                var sign = healthChanged.Delta > 0 ? "+" : "";
-                _hud?.Log(
-                    $"生命 {sign}{healthChanged.Delta}（{HealthChangeCauseText(healthChanged.Cause)}）");
-            }
-        }
-
-        RefreshGameplayLock();
-        var now = NowMs();
-        if (!_gameplayLocked) _autoActions.Tick(now, TriggerAutoAction);
-        if (!_gameplayLocked && DemoMove is { } dm && now >= _demoNextAt)
-        {
-            _demoNextAt = now + 100;
-            _client?.Commands.Move(dm.Dx, dm.Dy);
-            _ownSim?.SetIntent(dm.Dx, dm.Dy);
-            _worldRenderer?.SetOwnMoveDir(dm.Dx, dm.Dy);
-            if (dm.Dx != 0 || dm.Dy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
-        }
-        if (_client is { } predictionClient &&
-            predictionClient.Transport.IsConnected &&
-            predictionClient.Commands.CanPredictMovement)
-        {
-            _ownSim?.Tick((float)(delta * 1000));
-        }
-        if (_movementDiagnosticsSampler?.TrySample(now, out var diagnostics, out var changed) == true)
-        {
-            _movementDiagnosticsStatus =
-                $"\n预测误差 last={diagnostics.LastReconciliationError:0.000}" +
-                $" max={diagnostics.MaxReconciliationError:0.000}" +
-                $" soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}" +
-                $"\n输入 epoch={_client?.Commands.InputEpoch ?? 0}" +
-                $" sent={_client?.Commands.LastSentSeq ?? 0}" +
-                $" ack={_client?.Commands.LastAcceptedSeq ?? 0}" +
-                $" pending={_client?.Commands.PendingControlCount ?? 0}";
-            if (changed)
-            {
-                GD.Print(
-                    $"MOVEMENT_DIAGNOSTICS last={diagnostics.LastReconciliationError:0.000} " +
-                    $"max={diagnostics.MaxReconciliationError:0.000} " +
-                    $"soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}");
-            }
-        }
-        System.Numerics.Vector2? own = _ownSim is { Has: true } sim
-            ? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
-            : null;
-        if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
-        _camera.Tick((float)(delta * 1000));
-        if (_render3D)
-        {
-            var orbit = 0f;
-            if (Input.IsPhysicalKeyPressed(Key.Q)) orbit -= 1f;
-            if (Input.IsPhysicalKeyPressed(Key.E)) orbit += 1f;
-            if (orbit != 0f)
-                RotateView(orbit * MathF.PI / 2f * (float)delta);
-        }
-
-        var viewport = GetViewport().GetVisibleRect().Size;
-        if (!_freeCamera)
-        {
-            // 相机半径是 [view_radius, view_radius_max]；view_preload 只在服务端多下发。
-            var worldCfg = client.World.Config;
-            _camera.SetViewRange(
-                worldCfg?.ViewRadius ?? Camera.DefaultViewRadius,
-                worldCfg?.ViewRadiusMax ?? 0);
-            _camera.SyncToViewport(viewport.X, viewport.Y);
-        }
-        var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
-        if (_render3D && _world3D is not null)
-        {
-            _world3D.SyncView(
-                _camera.CenterX(), _camera.CenterY(), hCam,
-                _camera.ZoomLevel, _viewRotation, viewport);
-        }
-        else
-        {
-            // Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
-            // Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。
-            var camLocal = IsoMath.WorldToLocal(_camera.CenterX(), _camera.CenterY(), hCam);
-            _worldPivot!.Position = viewport / 2;
-            _worldPivot.Rotation = _viewRotation;
-            _worldPivot.Scale = Vector2.One * _camera.ZoomLevel;
-            _world!.Position = new Vector2(-camLocal.X, -camLocal.Y);
-            _world.Scale = Vector2.One;
-
-            var fx = (_camera.CenterX() - _camera.CenterY()) * IsoMath.Step * _camera.ZoomLevel;
-            var fy = ((_camera.CenterX() + _camera.CenterY()) * IsoMath.Step / 2 - hCam * IsoMath.Step) *
-                     _camera.ZoomLevel;
-            _parallax!.UpdateParallax(fx, fy, viewport);
-        }
-
-        if (client.World.Revision != _lastWeatherRevision)
-        {
-            _lastWeatherRevision = client.World.Revision;
-            var w = client.World.Weather;
-            _weather!.SetWeather(w?.Rain ?? 0, w?.Fog ?? 0, client.World.Season, viewport);
-            if (_tilemap is not null) _fogGrid!.SetFog(client.World.WeatherFrame, _tilemap);
-            UpdateLut(client.World.DayLight);
-        }
-
-        _weather!.Tick(delta, viewport);
-        _lut!.Size = viewport;
-        if (!_render3D)
-        {
-            UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
-            _lighting!.Size = viewport;
-            var fires = new List<Vector2>();
-            var seeds = new List<long>();
-            foreach (var view in client.World.Entities.Values)
-            {
-                var p = view.Get("Position", Starve.Game.V1.Position.Parser);
-                if (p is null) continue;
-                var ws = view.Get("Workstation", Workstation.Parser);
-                var bld = view.Get("Building", Building.Parser);
-                var isFire = (ws is not null && (int)ws.Type == 1) ||
-                             (bld is not null && bld.Placed && (int)bld.Kind == 1);
-                if (isFire)
-                {
-                    fires.Add(new Vector2(p.X, p.Y));
-                    seeds.Add((long)view.EntityId);
-                }
-            }
-            _volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
-        }
-        if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
-
-        _worldRenderer!.UpdatePositions(
-            _smoothers,
-            id => id == _ownId
-                ? _ownIntentMoving || _ownPathMoving
-                : _movingUntil.GetValueOrDefault(id) > now,
-            now,
-            own);
-        _worldRenderer.SetDayLight(client.World.DayLight);
-        if (_render3D && _world3D is not null)
-        {
-            var rain = client.World.Weather?.Rain ?? 0f;
-            _world3D.SetDayCycle(
-                client.World.DayLight,
-                client.World.Season,
-                rain,
-                NowMs() < _lightningAmbientUntil);
-            var fires = new List<(float X, float Y, float H)>();
-            foreach (var view in client.World.Entities.Values)
-            {
-                if (!EntityVisual.StyleFor(view).IsFire) continue;
-                var p = view.Get("Position", Starve.Game.V1.Position.Parser);
-                if (p is null) continue;
-                fires.Add((p.X, p.Y, _tilemap?.HeightAt(p.X, p.Y) ?? 0f));
-            }
-            var ox = own?.X ?? _camera.CenterX();
-            var oy = own?.Y ?? _camera.CenterY();
-            _world3D.SyncPointLights(fires, ox, oy, _tilemap?.HeightAt(ox, oy) ?? 0f);
-        }
-        _minimap!.SetView(
-            client.World.Entities,
-            new Vector2(_camera.CenterX(), _camera.CenterY()),
-            _camera.ZoomLevel,
-            viewport);
-        try
-        {
-            UpdateHud();
-        }
-        catch (Exception ex)
-        {
-            GD.PushError($"HUD: {ex.Message}");
-        }
-    }
-
-    private void UpdateLighting(WorldService world, Vector2 viewport, float zoom, System.Numerics.Vector2? own)
-    {
-        var dayLight = world.DayLight;
-        var dark = Mathf.Max(0, 1 - dayLight * 2);
-        var sunT = 1 - dark;
-        var ambient = 0.92f - dark * 0.3f;
-        if (NowMs() < _lightningAmbientUntil) ambient += 0.5f;
-        if (world.Weather is { Rain: > 0.15f }) ambient *= 0.93f;
-        var sunColor = new Color(
-            0.3f * (0.33f + 0.67f * sunT),
-            0.29f * (0.41f + 0.59f * sunT),
-            0.26f * (0.62f + 0.38f * sunT));
-        var fogColor = new Color(
-            0.62f * (0.14f + 0.86f * sunT),
-            0.7f * (0.15f + 0.85f * sunT),
-            0.78f * (0.2f + 0.8f * sunT));
-
-        var lightPos = new List<Vector2>();
-        var lightColor = new List<Color>();
-        var lightRadius = new List<float>();
-        foreach (var view in world.Entities.Values)
-        {
-            var p = view.Get("Position", Starve.Game.V1.Position.Parser);
-            if (p is null) continue;
-            var ws = view.Get("Workstation", Workstation.Parser);
-            var bld = view.Get("Building", Building.Parser);
-            var isFire = (ws is not null && (int)ws.Type == 1) ||
-                         (bld is not null && bld.Placed && (int)bld.Kind == 1);
-            if (isFire)
-            {
-                lightPos.Add(new Vector2(p.X, p.Y));
-                lightColor.Add(new Color(1.65f, 0.95f, 0.45f));
-                lightRadius.Add(9f);
-            }
-        }
-        if (own is { } ownPos)
-        {
-            lightPos.Add(new Vector2(ownPos.X, ownPos.Y));
-            lightColor.Add(new Color(1f, 0.85f, 0.6f));
-            lightRadius.Add(3.5f);
-        }
-        while (lightPos.Count > 8) lightPos.RemoveAt(lightPos.Count - 1);
-
-        _lighting!.SetLights(
-            viewport,
-            zoom,
-            ambient,
-            new Vector2(0.707f, -0.707f),
-            sunColor,
-            fogColor,
-            0.012f,
-            lightPos.ToArray(),
-            lightColor.ToArray(),
-            lightRadius.ToArray());
-    }
-
-    private void UpdateLut(float dayLight)
-    {
-        var dark = Mathf.Max(0, 1 - dayLight * 2);
-        var day = Mathf.Clamp((0.35f - dark) / 0.35f, 0, 1);
-        var night = Mathf.Clamp((dark - 0.35f) / 0.65f, 0, 1);
-        var dusk = Mathf.Max(0, 1 - day - night);
-        _lut!.SetWeights(day, dusk, night);
-    }
-
-    private void ApplyWorld(WorldService world)
-    {
-        var map = world.Map;
-        if (map is not null && _tilemap is null)
-        {
-            _tilemap = new TileMap(map) { SmoothSlopes = _render3D };
-            _camera.HeightAt = _tilemap.HeightAt;
-            if (_ownSim is not null) _ownSim.HeightAt = _tilemap.HeightAt;
-            if (_render3D)
-                _world3D!.SetMap(_tilemap);
-            else
-                _mapView!.SetMap(_tilemap);
-            _worldRenderer!.SetTilemap(_tilemap);
-            _worldRenderer.SetViewRotation(_viewRotation);
-            _minimap!.SetMap(_tilemap);
-            _lighting!.SetNormalMap(BakeNormalTexture(_tilemap));
-            _lighting!.SetMapSize(new Vector2(_tilemap.Width, _tilemap.Height));
-            if (SmokeMode)
-            {
-                var chunks = _render3D
-                    ? _world3D!.Terrain.GetChildCount()
-                    : _mapView!.GetChildCount();
-                GD.Print(
-                    $"SMOKE map={_tilemap.Width}x{_tilemap.Height} " +
-                    $"chunks={chunks} entities={world.Count}");
-                GetTree().Quit();
-            }
-        }
-
-        // 放置成功 → 自动退出建造预览
-        if (_buildPreview is { } bp &&
-            world.Entities.TryGetValue(bp.EntityId, out var placedView) &&
-            placedView.Get("Building", Building.Parser) is { Placed: true })
-        {
-            _hud?.Log($"建筑已放置（#{bp.EntityId}）");
-            ExitBuildPreview();
-        }
-
-        var now = NowMs();
-        var tick = world.WorldTick;
-        RebuildBlocked(world.Entities);
-        foreach (var (id, view) in world.Entities)
-        {
-            var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
-            if (pos is null) continue;
-            // M7 连续速度：真实位置 = Position(整格) + sub（sub∈[0,1) 分数偏移，Moveable 携带）
-            var mv = view.Get("Moveable", Moveable.Parser);
-            var fx = pos.X + (float)(mv?.SubX ?? 0);
-            var fy = pos.Y + (float)(mv?.SubY ?? 0);
-            if (id == _ownId)
-            {
-                // 自己的位置走本地预测 + 服务端校正，不进插值缓冲
-                if (mv is not null)
-                {
-                    _lastEffectiveSpeed = (float)mv.EffectiveSpeed;
-                    ApplyDebugMoveSpeed();
-                }
-                _ownPathMoving = mv is { Path.Count: > 0 };
-                if (!_ownIntentMoving && !GameplayLocked())
-                {
-                    var pathDir = _ownPathMoving ? mv!.Path[0] : null;
-                    var pdx = pathDir?.Dx ?? 0;
-                    var pdy = pathDir?.Dy ?? 0;
-                    _ownSim?.SetIntent(pdx, pdy);
-                    if (_ownPathMoving)
-                        _worldRenderer?.SetOwnMoveDir(pdx, pdy);
-                }
-                // 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
-                var serverStopped = mv is { DirX: 0, DirY: 0 } &&
-                                    mv.Path.Count == 0;
-                _ownSim?.Reconcile(fx, fy, serverStopped);
-            }
-            else if (!_smoothers.TryGetValue(id, out var smoother))
-            {
-                smoother = new PositionSmoother();
-                _smoothers[id] = smoother;
-                smoother.Update(fx, fy, tick, now);
-            }
-            else
-            {
-                smoother.Update(fx, fy, tick, now);
-            }
-            if (id != _ownId &&
-                _lastServerPos.TryGetValue(id, out var prev) &&
-                (MathF.Abs(prev.X - fx) > 0.001f || MathF.Abs(prev.Y - fy) > 0.001f))
-            {
-                _movingUntil[id] = now + 240;
-            }
-            _lastServerPos[id] = (fx, fy);
-        }
-
-        NoticeLootPicked(world);
-        _worldRenderer!.SyncEntities(world.Entities);
-        UpdateBagAndCraft(world);
-    }
-
-    /// <summary>从快照重建动态阻挡层（树/矿/建筑等 Block 组件），本地预测墙停用。</summary>
-    private void RebuildBlocked(IReadOnlyDictionary<ulong, EntityView> entities)
-    {
-        var signature = 17;
-        unchecked
-        {
-            foreach (var view in entities.Values.OrderBy(v => v.EntityId))
-            {
-                var b = view.Get("Block", Block.Parser);
-                var p = view.Get("Position", Position.Parser);
-                if (b is null || p is null) continue;
-                signature = signature * 31 + view.EntityId.GetHashCode();
-                signature = signature * 31 + p.X;
-                signature = signature * 31 + p.Y;
-                signature = signature * 31 + b.Width;
-                signature = signature * 31 + b.Height;
-            }
-        }
-        if (signature == _blockedSignature) return;
-        _blockedSignature = signature;
-
-        _blocked.Clear();
-        foreach (var view in entities.Values)
-        {
-            var b = view.Get("Block", Block.Parser);
-            var p = view.Get("Position", Position.Parser);
-            if (b is null || p is null) continue;
-            for (var dy = 0; dy < b.Height; dy++)
-            {
-                for (var dx = 0; dx < b.Width; dx++)
-                {
-                    _blocked.Add((p.X + dx, p.Y + dy));
-                }
-            }
-        }
-    }
-
-    /// <summary>与服务端 Walkable 一致：非水 + 无动态阻挡。</summary>
-    private bool IsWalkable(int x, int y)
-    {
-        if (_tilemap is null) return true;
-        // 地图边界：越界不可走（否则本地预测会走出地图到负坐标，角色跑到角外“消失”）
-        if (x < 0 || y < 0 || x >= _tilemap.Width || y >= _tilemap.Height) return false;
-        if (_blocked.Contains((x, y))) return false;
-        return _tilemap.CornerType(x, y) != (int)TerrainType.Water;
-    }
-
-    /// <summary>取目标受激能力组件（Choppable/Minable/Pickable 共用 WorkTarget 载荷）。</summary>
-    private static WorkTarget? WorkTargetOf(EntityView view) =>
-        view.Get("Choppable", WorkTarget.Parser)
-        ?? view.Get("Minable", WorkTarget.Parser)
-        ?? view.Get("Pickable", WorkTarget.Parser);
-
-    /// <summary>玩家是否持有指定主动能力（服务端把工具能力复制到玩家身上）。</summary>
-    private bool HasOwnCapability(string component) =>
-        OwnComponent<Capability>(component, Capability.Parser) is not null;
-
-    /// <summary>当前手持工具的物品 kind（0 = 徒手）。</summary>
-    private int EquippedKind()
-    {
-        if (HasOwnCapability("Chopper")) return (int)ItemKind.Axe;
-        if (HasOwnCapability("Miner")) return (int)ItemKind.Pickaxe;
-        return 0;
-    }
-
-    private string EquippedName() => EquippedKind() switch
-    {
-        (int)ItemKind.Axe => "斧头",
-        (int)ItemKind.Pickaxe => "镐",
-        _ => "徒手",
-    };
-
-    /// <summary>
-    /// 已穿戴护甲：从 Equip.head/body 反查护甲实体（服务端 Defense 只挂护甲实体，
-    /// 穿戴者身上不存防御），返回 (槽位名, 物品 kind, 减免百分比)。
-    /// </summary>
-    private List<(string Slot, int Kind, int Percent)> WornArmor()
-    {
-        var result = new List<(string, int, int)>();
-        if (_client is null ||
-            !_client.World.Entities.TryGetValue(_ownId, out var own) ||
-            own.Get("Equip", Equip.Parser) is not { } eq)
-        {
-            return result;
-        }
-        var world = _client.World;
-        AddArmor(eq.Head, "头戴");
-        AddArmor(eq.Body, "身穿");
-        return result;
-
-        void AddArmor(ulong id, string slot)
-        {
-            if (id == 0 || !world.Entities.TryGetValue(id, out var item)) return;
-            var def = item.Get("Defense", Defense.Parser);
-            if (def is null) return;
-            var kind = item.Get("Equipment", ItemStack.Parser) is { } eq ? (int)eq.Kind : 0;
-            result.Add((slot, kind, def.Percent));
-        }
-    }
-
-    /// <summary>总防御减免 = 头/身护甲之和（与服务端 Attackable 受击口径一致）。</summary>
-    private int DefensePercent() => WornArmor().Sum(a => a.Percent);
-
-    /// <summary>已装备物品的展示文本（手持 + 头戴/身穿护甲名）。</summary>
-    private string EquipText()
-    {
-        var wear = string.Concat(WornArmor().Select(a =>
-            $" {a.Slot} {ItemName(_client?.World.Config, a.Kind)}"));
-        return $"手持 {EquippedName()}{wear}";
-    }
-
-    private static int EquipSlotNumber(string slotId) => slotId switch
-    {
-        "head" => 1,
-        "hand" => 2,
-        "body" => 3,
-        _ => 0,
-    };
-
-    private ItemView? WornItem(string slotId) =>
-        WornSlots().FirstOrDefault(s => s.Id == slotId)?.Item;
-
-    /// <summary>头/手/身三格：优先 Equip 实体，手持工具无实体时用能力组件兜底。</summary>
-    private List<EquipSlotView> WornSlots()
-    {
-        Equip? eq = null;
-        if (_client is not null &&
-            _client.World.Entities.TryGetValue(_ownId, out var own))
-        {
-            eq = own.Get("Equip", Equip.Parser);
-        }
-        return
-        [
-            new EquipSlotView("head", "头", ItemFromEquipEntity(eq?.Head ?? 0)),
-            new EquipSlotView("hand", "手", ItemFromEquipEntity(eq?.Hand ?? 0) ?? ItemFromKind(EquippedKind())),
-            new EquipSlotView("body", "身", ItemFromEquipEntity(eq?.Body ?? 0)),
-        ];
-    }
-
-    private ItemView? ItemFromEquipEntity(ulong entityId)
-    {
-        if (entityId == 0 || _client is null ||
-            !_client.World.Entities.TryGetValue(entityId, out var item))
-        {
-            return null;
-        }
-        var stack = item.Get("Equipment", ItemStack.Parser);
-        var kind = stack is { Kind: > 0 } ? (int)stack.Kind : 0;
-        var cap = item.Get("Chopper", Capability.Parser) ?? item.Get("Miner", Capability.Parser);
-        var durability = cap is { Durability: > 0 } ? cap.Durability
-            : stack is { Durability: > 0 } ? stack.Durability
-            : 0;
-        return ItemViewOf(kind, 1, durability);
-    }
-
-    private ItemView? ItemFromKind(int kind)
-    {
-        if (kind <= 0) return null;
-        var cfg = _client?.World.Config;
-        return new ItemView(kind, ItemName(cfg, kind), 1, ItemColor(cfg, kind), ItemIcon(kind));
-    }
-
-    private ItemView? ItemViewOf(int kind, int count, int durability)
-    {
-        if (kind <= 0 || count <= 0) return null;
-        var cfg = _client?.World.Config;
-        var max = (int)(cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind)?.Tool?.Durability ?? 0);
-        return new ItemView(
-            kind,
-            ItemName(cfg, kind),
-            count,
-            ItemColor(cfg, kind),
-            ItemIcon(kind),
-            durability,
-            max);
-    }
-
-    private void NoticeLootPicked(WorldService world)
-    {
-        var nowLoot = new Dictionary<ulong, (float X, float Y)>();
-        foreach (var (id, view) in world.Entities)
-        {
-            if (view.LootOf() is null) continue;
-            if (view.Get("Position", Position.Parser) is not { } pos) continue;
-            nowLoot[id] = (pos.X, pos.Y);
-        }
-        (float X, float Y)? own = null;
-        if (world.Entities.TryGetValue(_ownId, out var me) &&
-            me.Get("Position", Position.Parser) is { } mePos)
-        {
-            own = (mePos.X, mePos.Y);
-        }
-        if (own is { } at)
-        {
-            foreach (var (id, pos) in _lootAt)
-            {
-                if (nowLoot.ContainsKey(id)) continue;
-                if (Math.Abs(pos.X - at.X) + Math.Abs(pos.Y - at.Y) > 3) continue;
-                _sfx?.Play("sfx.gather.pickup");
-                break;
-            }
-        }
-        _lootAt.Clear();
-        foreach (var (id, pos) in nowLoot) _lootAt[id] = pos;
-    }
-
-    /// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
-    private void TryAct(ulong id, Intent intent)
-    {
-        if (_ownDead || GameplayLocked()) return;
-        if (_client is null || !_client.World.Entities.TryGetValue(id, out var view))
-        {
-            Deny("目标已消失");
-            return;
-        }
-        if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
-            own.Get("Position", Position.Parser) is not { } mePos ||
-            view.Get("Position", Position.Parser) is not { } tPos)
-        {
-            Deny("目标不可达");
-            return;
-        }
-        var dx = mePos.X - tPos.X;
-        var dy = mePos.Y - tPos.Y;
-        // 与服务端 withinRange 一致：曼哈顿距离 ≤2（客户端曾用欧氏 2.5，
-        // 对角 2 格会被服务端静默拒绝，造成“点了没反应”）
-        if (Math.Abs(dx) + Math.Abs(dy) > 2)
-        {
-            Deny("距离不够，请靠近后再操作");
-            return;
-        }
-
-        ActionKind? predictedKind = null;
-        InputCommandRef? commandRef = null;
-        switch (intent)
-        {
-            case Intent.Gather:
-                if (view.Get("Pickable", WorkTarget.Parser) is null)
-                {
-                    Deny("目标不可采集（不是浆果丛）");
-                    return;
-                }
-                commandRef = _client.Commands.Gather(id);
-                predictedKind = ActionKind.Pick;
-                break;
-            case Intent.Chop:
-                if (view.Get("Choppable", WorkTarget.Parser) is null)
-                {
-                    Deny("目标不可砍伐（不是树木）");
-                    return;
-                }
-                if (!HasOwnCapability("Chopper"))
-                {
-                    Deny("徒手无法砍伐，请先装备斧头");
-                    return;
-                }
-                commandRef = _client.Commands.Chop(id);
-                predictedKind = ActionKind.Chop;
-                break;
-            case Intent.Mine:
-                if (view.Get("Minable", WorkTarget.Parser) is null)
-                {
-                    Deny("目标不可挖掘（不是矿脉）");
-                    return;
-                }
-                if (!HasOwnCapability("Miner"))
-                {
-                    Deny("徒手无法挖掘，请先装备镐");
-                    return;
-                }
-                commandRef = _client.Commands.Mine(id);
-                predictedKind = ActionKind.Mine;
-                break;
-            case Intent.Pickup:
-                if (view.LootOf() is null)
-                {
-                    Deny("目标没有掉落物");
-                    return;
-                }
-                _client.Commands.Pickup(id);
-                _sfx?.Play("sfx.gather.pickup");
-                break;
-            case Intent.Attack:
-                if (view.Get("Health", Health.Parser) is null ||
-                    view.Get("Dead", Dead.Parser) is not null)
-                {
-                    Deny("目标不可攻击");
-                    return;
-                }
-                commandRef = _client.Commands.Attack(id);
-                predictedKind = ActionKind.Attack;
-                break;
-        }
-        if (predictedKind is { } kind && commandRef is { } command)
-        {
-            _worldRenderer?.PredictAction(_ownId, kind, command);
-        }
-    }
-
-    private void TryHaunt(ulong id)
-    {
-        if (_client is null || GameplayLocked()) return;
-        if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
-            !_client.World.Entities.TryGetValue(id, out var target) ||
-            own.Get("Position", Position.Parser) is not { } actorPos ||
-            target.Get("Position", Position.Parser) is not { } targetPos)
-        {
-            _hud?.Log("复活雕像已消失或不可达");
-            return;
-        }
-
-        var hauntable = target.Get("Hauntable", Hauntable.Parser);
-        var block = target.Get("Block", Block.Parser);
-        var validation = HauntInteractionPolicy.Validate(
-            _ownDead,
-            hauntable is not null,
-            hauntable?.RemainingUses ?? 0,
-            actorPos.X,
-            actorPos.Y,
-            targetPos.X,
-            targetPos.Y,
-            block?.Width ?? 1,
-            block?.Height ?? 1);
-        if (validation != HauntValidation.Allowed)
-        {
-            _hud?.Log(validation switch
-            {
-                HauntValidation.ActorAlive => "存活时只能查看复活雕像",
-                HauntValidation.Depleted => "这座复活雕像已耗尽",
-                HauntValidation.OutOfRange => "距离复活雕像太远，请靠近到 2 格内",
-                _ => "目标不是可作祟的复活雕像",
-            });
-            return;
-        }
-
-        var command = _client.Commands.Haunt(id);
-        _worldRenderer?.PredictAction(_ownId, ActionKind.Haunt, command);
-        RefreshGameplayLock();
-    }
-
-    /// <summary>选中实体的可读描述（名称/血量/工作量/可用动作）。</summary>
-    private string DescribeSelected()
-    {
-        if (_selected is not { } id || _client is null ||
-            !_client.World.Entities.TryGetValue(id, out var view))
-        {
-            return "无";
-        }
-        var cfg = _client.World.Config;
-        if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
-            return $"复活雕像 #{id} 剩余次数 {hauntable.RemainingUses} " +
-                   $"作祟时长 {hauntable.DurationTicks} ticks" +
-                   (_ownDead ? " [点击作祟]" : " [灵魂可用]");
-        if (view.Get("Player", Player.Parser) is not null)
-            return $"玩家 #{id}";
-        if (view.Get("Dead", Dead.Parser) is not null)
-            return $"尸体 #{id}";
-        var loot = view.LootOf();
-        if (loot is not null)
-        {
-            var names = loot.Items.Select(i => $"{ItemName(cfg, (int)i.Kind)}×{i.Count}");
-            return $"掉落物 #{id}：{string.Join("、", names)} [拾取]";
-        }
-        var wt = WorkTargetOf(view);
-        if (wt is not null)
-        {
-            var action = view.Get("Choppable", WorkTarget.Parser) is not null ? "砍伐"
-                : view.Get("Minable", WorkTarget.Parser) is not null ? "挖掘"
-                : "采集";
-            return $"{ItemName(cfg, (int)wt.Kind)} #{id} 工作量 {wt.WorkLeft}/{wt.MaxWork} [{action}]";
-        }
-        var ws = view.Get("Workstation", Workstation.Parser);
-        if (ws is not null)
-            return $"工作站#{ws.Type} #{id}";
-        var bld = view.Get("Building", Building.Parser);
-        if (bld is not null)
-            return $"{((int)bld.Kind == 1 ? "火堆" : "木墙")} #{id}" + (bld.Placed ? "" : " [未放置]");
-        var cr = view.Get("Creature", Creature.Parser);
-        if (cr is not null)
-        {
-            var hp = view.Get("Health", Health.Parser);
-            var hpTxt = hp is null ? "" : $" hp={hp.Cur}/{hp.Max}";
-            var name = cr.Kind switch
-            {
-                CreatureKind.Rabbit => "兔子",
-                CreatureKind.Wolf => "狼",
-                CreatureKind.Boar => "野猪",
-                CreatureKind.Deer => "鹿",
-                CreatureKind.Spider => "蜘蛛",
-                CreatureKind.Fishman => "鱼人",
-                CreatureKind.Lizard => "蜥蜴",
-                _ => "生物",
-            };
-            return $"{name} #{id}{hpTxt} [攻击]";
-        }
-        return $"实体 #{id}";
-    }
-
-    private void UpdateBagAndCraft(WorldService world)
-    {
-        if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
-        var inv = own.Get("Inventory", Inventory.Parser);
-        var crafting = own.Get("Crafting", Crafting.Parser);
-        var cfg = world.Config;
-        var signature = ComputeHudSignature(world, own);
-        if (signature == _hudSignature) return;
-        _hudSignature = signature;
-
-        var items = (inv?.Items ?? new()).Select(it =>
-            ItemViewOf((int)it.Kind, it.Count, it.Durability)
-            ?? new ItemView(0, "", 0, Colors.Transparent)).ToList();
-        // 已穿戴的在头/手/身格里看；背包同 kind 不再标「装」（装备已从背包扣走）。
-        var worn = WornSlots();
-        _hud.RenderInventory(items, new HashSet<int>(), cfg?.InventorySlots ?? 12, worn);
-
-        if (cfg is null) return;
-        var ownPos = own.Get("Position", Position.Parser);
-        var near = StationNear(world, ownPos);
-        var materials = (inv?.Items ?? new())
-            .Where(i => (int)i.Kind > 0)
-            .GroupBy(i => (int)i.Kind)
-            .ToDictionary(g => g.Key, g => g.Sum(i => i.Count)); // 同种多堆合并，否则重复键抛异常
-        var recipes = cfg.Recipes.Select(r =>
-        {
-            var stationOk = (int)r.Workstation == 0 || near.Contains((int)r.Workstation);
-            var can = stationOk && r.Ingredients.All(i => materials.GetValueOrDefault((int)i.Kind) >= i.Count);
-            return new RecipeView(
-                r.Id,
-                ItemName(cfg, (int)r.Output.Kind),
-                r.Ticks,
-                (int)r.Workstation == 0
-                    ? "徒手可做"
-                    : stationOk
-                        ? $"{WorkstationName((int)r.Workstation)}附近 ✓"
-                        : $"需要靠近{WorkstationName((int)r.Workstation)}",
-                can,
-                r.Ingredients.Select(i =>
-                    new IngredientView(
-                        ItemName(cfg, (int)i.Kind),
-                        materials.GetValueOrDefault((int)i.Kind),
-                        i.Count,
-                        ItemIcon((int)i.Kind),
-                        ItemColor(cfg, (int)i.Kind))).ToList(),
-                ItemIcon((int)r.Output.Kind));
-        }).ToList();
-        var total = crafting is null
-            ? 0
-            : (long)(cfg.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0);
-        _hud.RenderCraft(
-            recipes,
-            crafting is null ? null : new CraftingView(crafting.RecipeId, (long)crafting.TicksLeft, total));
-    }
-
-    private static int ComputeHudSignature(WorldService world, EntityView own)
-    {
-        var hash = new HashCode();
-        hash.Add(world.Config?.GetHashCode() ?? 0);
-        // 不把原始坐标打进签名：走动时 Position 每拍都变，会把制作/背包整棵拆掉重建。
-        foreach (var name in new[] { "Inventory", "Equip", "Chopper", "Miner", "Health" })
-        {
-            if (own.Components.TryGetValue(name, out var data)) AddBytes(ref hash, data);
-        }
-        foreach (var type in StationNear(world, own.Get("Position", Position.Parser)).OrderBy(t => t))
-            hash.Add(type);
-        var health = own.Get("Health", Health.Parser);
-        hash.Add(HudVitalsViewModel.Create(
-            health?.Cur ?? 0,
-            health?.Max ?? 0,
-            own.Components.ContainsKey("Dead")).Signature);
-        if (own.Get("Crafting", Crafting.Parser) is { } crafting)
-        {
-            hash.Add(crafting.RecipeId);
-            var total = world.Config?.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0;
-            hash.Add(total > 0 ? crafting.TicksLeft * 20 / total : crafting.TicksLeft);
-        }
-        foreach (var view in world.Entities.Values.OrderBy(v => v.EntityId))
-        {
-            if (view.Components.ContainsKey("Workstation"))
-            {
-                hash.Add(view.EntityId);
-                if (view.Components.TryGetValue("Workstation", out var ws)) AddBytes(ref hash, ws);
-                if (view.Components.TryGetValue("Position", out var pos)) AddBytes(ref hash, pos);
-            }
-            if (view.Components.ContainsKey("Equipment") || view.Components.ContainsKey("Defense"))
-            {
-                hash.Add(view.EntityId);
-                if (view.Components.TryGetValue("Equipment", out var eq)) AddBytes(ref hash, eq);
-                if (view.Components.TryGetValue("Defense", out var def)) AddBytes(ref hash, def);
-                if (view.Components.TryGetValue("Chopper", out var chop)) AddBytes(ref hash, chop);
-                if (view.Components.TryGetValue("Miner", out var mine)) AddBytes(ref hash, mine);
-            }
-        }
-        return hash.ToHashCode();
-    }
-
-    private static void AddBytes(ref HashCode hash, byte[] data)
-    {
-        foreach (var b in data) hash.Add(b);
-    }
-
-    private static string WorkstationName(int type) => type switch
-    {
-        1 => "火堆",
-        2 => "工作台",
-        _ => $"工作站#{type}",
-    };
-
-    private static HashSet<int> StationNear(WorldService world, Position? ownPos)
-    {
-        var set = new HashSet<int>();
-        if (ownPos is null) return set;
-        foreach (var view in world.Entities.Values)
-        {
-            var ws = view.Get("Workstation", Workstation.Parser);
-            var p = view.Get("Position", Position.Parser);
-            if (ws is null || p is null) continue;
-            if (Math.Abs(p.X - ownPos.X) + Math.Abs(p.Y - ownPos.Y) <= 3) set.Add((int)ws.Type);
-        }
-        return set;
-    }
-
-    private static string ItemName(GameConfig? cfg, int kind)
-    {
-        var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
-        return t?.Name ?? kind.ToString();
-    }
-
-    /// <summary>世界实体标签：资源带动作/掉落/工具提示，掉落物带数量，生物/建筑带中文名。</summary>
-    private string? EntityName(EntityView view)
-    {
-        var pl = view.Get("Player", Player.Parser);
-        if (pl is not null)
-            return pl.Uid == _ownUid ? "我" : $"玩家 {pl.Uid}";
-        if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
-            return $"复活雕像·剩余 {hauntable.RemainingUses}";
-        if (view.LootOf() is { } lt)
-            return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
-        if (view.Get("Choppable", WorkTarget.Parser) is not null)
-            return HasOwnCapability("Chopper") ? "树·砍伐→木头" : "树·需斧头";
-        if (view.Get("Minable", WorkTarget.Parser) is not null)
-            return HasOwnCapability("Miner") ? "矿石·挖掘→燧石" : "矿石·需镐";
-        if (view.Get("Pickable", WorkTarget.Parser) is not null)
-            return "浆果丛·采集→浆果";
-        if (view.Get("Creature", Creature.Parser) is { } cr)
-        {
-            var name = cr.Kind switch
-            {
-                CreatureKind.Rabbit => "兔子",
-                CreatureKind.Wolf => "狼",
-                CreatureKind.Boar => "野猪",
-                CreatureKind.Deer => "鹿",
-                CreatureKind.Spider => "蜘蛛",
-                CreatureKind.Fishman => "鱼人",
-                CreatureKind.Lizard => "蜥蜴",
-                _ => "生物",
-            };
-            return view.Get("Dead", Dead.Parser) is not null ? name + "尸体" : name;
-        }
-        if (view.Get("Workstation", Workstation.Parser) is { } ws)
-            return (int)ws.Type == 1 ? "火堆工作站" : "工作台";
-        if (view.Get("Building", Building.Parser) is { } bld)
-            return (int)bld.Kind == 1 ? "火堆" : "木墙";
-        return null;
-    }
-
-    private static Color ItemColor(GameConfig? cfg, int kind)
-    {
-        var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
-        if (t is not null && t.Color.StartsWith("#") && int.TryParse(t.Color.AsSpan(1), NumberStyles.HexNumber, null, out var v))
-        {
-            return new Color(((v >> 16) & 0xff) / 255f, ((v >> 8) & 0xff) / 255f, (v & 0xff) / 255f);
-        }
-        return Colors.White;
-    }
-
-    private void WithBagSlot(int slot, Action<int> act)
-    {
-        var inv = OwnComponent("Inventory", Inventory.Parser);
-        if (inv is null || slot < 0 || slot >= inv.Items.Count) return;
-        var kind = (int)inv.Items[slot].Kind;
-        if (kind > 0) act(kind);
-    }
-
-    private int OwnItemCount(int slot)
-    {
-        var inv = OwnComponent("Inventory", Inventory.Parser);
-        return inv is not null && slot >= 0 && slot < inv.Items.Count ? inv.Items[slot].Count : 0;
-    }
-
-    private T? OwnComponent<T>(string name, MessageParser<T> parser) where T : class, IMessage<T> =>
-        _client is not null && _client.World.Entities.TryGetValue(_ownId, out var view)
-            ? view.Get(name, parser)
-            : null;
-
-    private async Task DoCraftAsync(string recipeId)
-    {
-        if (_client is null || _ownDead || GameplayLocked()) return;
-        var submission = _client.Commands.BeginCraft(recipeId);
-        _worldRenderer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
-        var resp = await submission.ResponseTask;
-        if (resp is { Started: true })
-        {
-            _sfx?.Play("sfx.ui.craft.start");
-        }
-        else
-        {
-            _worldRenderer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
-            _sfx?.Play("sfx.ui.craft.fail");
-        }
-        _hud?.Log(resp is { Started: true }
-            ? $"开始制作 {recipeId}（{resp.Ticks} ticks）"
-            : $"制作失败: {CraftFailureText(resp?.Message)}");
-    }
-
-    private void Deny(string message)
-    {
-        _hud?.Log(message);
-        _sfx?.Play("sfx.ui.deny");
-    }
-
-    private static string CraftFailureText(string? code) => code switch
-    {
-        null or "" => "请求超时，请检查连接",
-        "insufficient materials" => "材料不足，请查看配方中的持有数量",
-        "need workstation nearby" => "需要靠近配方指定的工作站（曼哈顿距离不超过 3 格）",
-        "output stack full" => "背包没有足够空间",
-        "already crafting" => "已有物品正在制作",
-        "player dead" => "死亡状态无法制作",
-        "player not found" => "玩家状态尚未就绪",
-        "unknown recipe" => "配方不存在或客户端配置已过期",
-        "world_unavailable" => "世界服务暂不可用",
-        _ => code,
-    };
-
-    private static string ActionOutcomeReasonText(ActionOutcomeReason reason) => reason switch
-    {
-        ActionOutcomeReason.Moved => "开始移动",
-        ActionOutcomeReason.Damaged => "受到攻击",
-        ActionOutcomeReason.Dead => "角色死亡",
-        ActionOutcomeReason.Explicit => "主动取消",
-        ActionOutcomeReason.Busy => "正在执行其他动作",
-        ActionOutcomeReason.InvalidTarget => "目标无效",
-        ActionOutcomeReason.Unsupported => "动作不受支持",
-        ActionOutcomeReason.InvalidActor => "当前角色无效",
-        _ => "状态已变化",
-    };
-
-    private static string HealthChangeCauseText(HealthChangeCause cause) => cause switch
-    {
-        HealthChangeCause.Attack => "攻击",
-        HealthChangeCause.Poison => "中毒",
-        HealthChangeCause.Starvation => "饥饿",
-        HealthChangeCause.Weather => "天气",
-        HealthChangeCause.Healing => "治疗",
-        _ => "状态变化",
-    };
-
-    private static Texture2D BakeNormalTexture(TileMap tm)
-    {
-        var buf = new byte[tm.Width * tm.Height * 4];
-        NormalMapBaker.Bake(tm, buf);
-        var img = Image.CreateFromData(tm.Width, tm.Height, false, Image.Format.Rgba8, buf);
-        return ImageTexture.CreateFromImage(img);
-    }
-
-    public override void _Input(InputEvent @event)
-    {
-        if (@event is not InputEventKey key || key.Echo) return;
-        var name = OS.GetKeycodeString(key.Keycode);
-        if (key.Pressed)
-        {
-            if (_render3D && name == "F1" && _toonPanel is not null)
-                _toonPanel.Visible = !_toonPanel.Visible;
-            if (_render3D && name == "F2" && _actorPanel is not null)
-                _actorPanel.Visible = !_actorPanel.Visible;
-            if (!_render3D)
-            {
-                if (name == "Q") RotateView(-Mathf.Pi / 4);
-                else if (name == "E") RotateView(Mathf.Pi / 4);
-            }
-        }
-        var intent = name switch
-        {
-            "Space" => AutoActionIntent.Any,
-            "F" => AutoActionIntent.AttackOnly,
-            _ => (AutoActionIntent?)null,
-        };
-        if (intent is not { } autoIntent) return;
-        if (GameplayLocked())
-        {
-            _autoActions.Release(autoIntent);
-            return;
-        }
-        if (key.Pressed)
-        {
-            _autoActions.Press(autoIntent, NowMs(), TriggerAutoAction);
-        }
-        else
-        {
-            _autoActions.Release(autoIntent);
-        }
-    }
-
-    private void TriggerAutoAction(AutoActionIntent intent)
-    {
-        if (_ownDead || GameplayLocked()) return;
-        if (intent == AutoActionIntent.AttackOnly) _client?.Commands.AttackNearest();
-        else _client?.Commands.Automate();
-    }
-
-    public override void _UnhandledInput(InputEvent @event)
-    {
-        if (@event is InputEventMouseMotion mm)
-        {
-            _mouseWorld = ScreenToWorld(mm.Position);
-        }
-        else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
-        {
-            if (PointerOnHud(mb.Position)) return;
-            if ((_toonPanel is { Visible: true, PickMode: true } ||
-                 _actorPanel is { Visible: true, PickMode: true }) &&
-                _world3D is not null)
-            {
-                if (_world3D.TryPickVisual(mb.Position, out var pickId, out var visual))
-                {
-                    _toonPanel?.BindSelected(pickId, visual);
-                    _actorPanel?.BindSelected(pickId, visual);
-                    _world3D.ShowToonMark(visual);
-                    _hud?.Log($"已选 {visual.Name}");
-                }
-                else
-                {
-                    _hud?.Log("没点到模型，对准角色身体再点");
-                }
-                return;
-            }
-            if (GameplayLocked()) return;
-            if (_ownDead)
-            {
-                var deadPicked = ScreenToWorld(mb.Position);
-                _selected = FindNearest(deadPicked);
-                if (_selected is { } deadSelection &&
-                    deadSelection != _ownId &&
-                    _client is not null &&
-                    _client.World.Entities.TryGetValue(deadSelection, out var deadTarget) &&
-                    deadTarget.Get("Hauntable", Hauntable.Parser) is not null)
-                {
-                    TryHaunt(deadSelection);
-                }
-                return;
-            }
-            if (_buildPreview is { } bp && _mouseWorld is { } mw)
-            {
-                _client?.Commands.Place(bp.EntityId, (int)MathF.Round(mw.X), (int)MathF.Round(mw.Y));
-                _hud?.Log($"已请求放置 #{bp.EntityId} 到 ({mw.X:0},{mw.Y:0})");
-                ExitBuildPreview();
-                return;
-            }
-            var picked = ScreenToWorld(mb.Position);
-            _selected = FindNearest(picked);
-            // 点击实体 = 选中并直接执行对应动作（掉落物→拾取、浆果→采集、树→砍伐、矿→挖掘、生物→攻击）。
-            if (_selected is { } sel &&
-                sel != _ownId &&
-                _client is not null &&
-                _client.World.Entities.TryGetValue(sel, out var selView))
-            {
-                if (selView.Get("Hauntable", Hauntable.Parser) is not null) return;
-                if (selView.LootOf() is not null)
-                    TryAct(sel, Intent.Pickup);
-                else if (selView.Get("Pickable", WorkTarget.Parser) is not null)
-                    TryAct(sel, Intent.Gather);
-                else if (selView.Get("Choppable", WorkTarget.Parser) is not null)
-                    TryAct(sel, Intent.Chop);
-                else if (selView.Get("Minable", WorkTarget.Parser) is not null)
-                    TryAct(sel, Intent.Mine);
-                else if (selView.Get("Health", Health.Parser) is not null &&
-                         selView.Get("Dead", Dead.Parser) is null)
-                    TryAct(sel, Intent.Attack);
-            }
-        }
-    }
-
-    private void UpdateGhost()
-    {
-        if (_buildPreview is not { } bp || _ghost is null || _mouseWorld is not { } mw) return;
-        var local = IsoMath.WorldToLocal(mw.X, mw.Y);
-        _ghost.SetLocal(new Vector2(local.X, local.Y));
-        var now = NowMs();
-        if (now - _lastBuildCheckAt < 100) return;
-        _lastBuildCheckAt = now;
-        var x = (int)MathF.Round(mw.X);
-        var y = (int)MathF.Round(mw.Y);
-        _ = CheckPlaceAsync(bp.EntityId, x, y);
-    }
-
-    private async Task CheckPlaceAsync(ulong entity, int x, int y)
-    {
-        if (_client is null || _buildPreview is null || GameplayLocked()) return;
-        var resp = await _client.Commands.BuildCheckAsync(entity, x, y);
-        if (_buildPreview is not { } bp) return;
-        _buildPreview = (bp.EntityId, bp.Kind, bp.W, bp.H, resp?.Ok ?? false);
-        _ghost?.SetOk(resp?.Ok ?? false);
-    }
-
-    private void ExitBuildPreview()
-    {
-        _buildPreview = null;
-        if (_ghost is not null) _ghost.Visible = false;
-    }
-
-    private ulong? FindNearest(System.Numerics.Vector2 world)
-    {
-        if (_client is null) return null;
-        ulong? best = null;
-        var bestDist = 0.6f;
-        foreach (var (id, view) in _client.World.Entities)
-        {
-            var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
-            if (pos is null) continue;
-            var dx = pos.X - world.X;
-            var dy = pos.Y - world.Y;
-            var d = MathF.Sqrt(dx * dx + dy * dy);
-            if (d < bestDist)
-            {
-                best = id;
-                bestDist = d;
-            }
-        }
-        return best;
-    }
-
-    private void WithSelected(Action<ulong> act)
-    {
-        if (_selected is null)
-        {
-            Deny("先点击选中目标");
-            return;
-        }
-        act(_selected.Value);
-    }
-
-    private async Task DoBuildAsync(int kind)
-    {
-        if (_client is null || !CanSendGameplay()) return;
-        var resp = await _client.Commands.BuildAsync(kind);
-        if (resp is null || !resp.Ok)
-        {
-            _hud?.Log($"建造失败: {resp?.Message ?? "超时"}");
-            return;
-        }
-        if (!CanSendGameplay()) return;
-        var cfg = _client.World.Config;
-        var b = cfg?.Buildings.FirstOrDefault(x => (int)x.Kind == kind);
-        var w = b?.Width ?? 1;
-        var h = b?.Height ?? 1;
-        _buildPreview = (resp.Entity, kind, w, h, true);
-        _ghost!.Configure(w, h);
-        _ghost.Visible = true;
-        if (_mouseWorld is not null) UpdateGhost();
-        _hud?.Log($"已创建蓝图 #{resp.Entity}，移动鼠标选位置，点击放置");
-    }
-
-    private void RefreshOwnVitals(WorldService world)
-    {
-        if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
-        var health = own.Get("Health", Health.Parser);
-        var hunger = own.Get("Hunger", Hunger.Parser);
-        var dead = own.Components.ContainsKey("Dead");
-        _hud.SetVitals(HudVitalsViewModel.Create(
-            health?.Cur ?? 0, health?.Max ?? 0, dead, hunger?.Level ?? 0));
-        _hud.SetInteractionsDisabled(dead || GameplayLocked());
-        if (dead && !_ownDead)
-        {
-            ExitBuildPreview();
-            _hud.Log("灵魂状态：靠近复活雕像并点击作祟");
-        }
-        _ownDead = dead;
-    }
-
-    private void UpdateHud()
-    {
-        if (_hud is null || _client is null) return;
-        var w = _client.World;
-        RefreshOwnVitals(w);
-        var hauntStatus = _worldRenderer?.ActionStatusOf(_ownId);
-        var actionState = w.Entities.TryGetValue(_ownId, out var own)
-            ? own.Get("ActionState", ActionState.Parser)
-            : null;
-        var hauntText = HauntInteractionPolicy.IsGameplayLocked(hauntStatus)
-            ? HauntProgressText(w.WorldTick, hauntStatus, actionState)
-            : _ownDead
-                ? "灵魂状态：靠近复活雕像并点击作祟"
-                : "";
-        var defense = DefensePercent();
-        var selected = DescribeSelected();
-        var status = hauntText.Length > 0 ? hauntText : selected;
-        if (defense > 0) status = $"{status}  防御{defense}%";
-        if (_movementDiagnosticsStatus.Length > 0) status += _movementDiagnosticsStatus;
-        _hud.SetStatus(status);
-        _hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
-    }
-
-    private bool PointerOnHud(Vector2 screen)
-    {
-        if (_hud is null) return false;
-        if (_hud.HitsInteractive(screen)) return true;
-        if (_toonPanel is { Visible: true } && _toonPanel.Hits(screen)) return true;
-        if (_actorPanel is { Visible: true } && _actorPanel.Hits(screen)) return true;
-        var hovered = GetViewport()?.GuiGetHoveredControl();
-        if (hovered is null) return false;
-        if (hovered == _hud || _hud.IsAncestorOf(hovered)) return true;
-        if (_toonPanel is not null && (hovered == _toonPanel || _toonPanel.IsAncestorOf(hovered))) return true;
-        return _actorPanel is not null && (hovered == _actorPanel || _actorPanel.IsAncestorOf(hovered));
-    }
-
-    private bool GameplayLocked() =>
-        HauntInteractionPolicy.IsGameplayLocked(_worldRenderer?.ActionStatusOf(_ownId));
-
-    private bool CanSendGameplay() => !_ownDead && !GameplayLocked();
-
-    private void RefreshGameplayLock()
-    {
-        var locked = GameplayLocked();
-        if (_gameplayLocked == locked)
-        {
-            _hud?.SetInteractionsDisabled(_ownDead || locked);
-            return;
-        }
-
-        _gameplayLocked = locked;
-        _moveController?.SetBlocked(locked);
-        if (locked)
-        {
-            _ownSim?.SetIntent(0, 0);
-            _worldRenderer?.SetOwnMoveDir(0, 0);
-            _worldRenderer?.SetOwnFacing(0f, 0f);
-            _ownIntentMoving = false;
-            _ownPathMoving = false;
-            _autoActions.Release(AutoActionIntent.Any);
-            _autoActions.Release(AutoActionIntent.AttackOnly);
-            ExitBuildPreview();
-        }
-        try
-        {
-            _hud?.SetInteractionsDisabled(_ownDead || locked);
-        }
-        catch (Exception ex)
-        {
-            GD.PushError($"HUD disable: {ex.Message}");
-        }
-    }
-
-    private static string HauntProgressText(
-        long worldTick,
-        ActionPresentationStatus? status,
-        ActionState? state)
-    {
-        if (status is { Predicted: true }) return "作祟中：等待服务器确认（输入已锁定，不可取消）";
-        if (state is null) return "作祟中：等待复活快照（输入已锁定，不可取消）";
-        var start = state.PhaseStartTick;
-        var end = state.EndTick > start ? state.EndTick : state.PhaseEndTick;
-        if (end <= start) return "作祟中（输入已锁定，不可取消）";
-        var pct = Math.Clamp((worldTick - start) * 100 / (end - start), 0, 100);
-        return $"作祟中：{pct}%（输入已锁定，不可取消）";
-    }
-
-    private static string SeasonName(int season) => season switch
-    {
-        1 => "春",
-        2 => "夏",
-        3 => "秋",
-        4 => "冬",
-        _ => "?",
-    };
-
-    private void ApplyDebugMoveSpeed()
-    {
-        var speed = _lastEffectiveSpeed * (_actorPanel?.MoveSpeedMul ?? 1f);
-        _ownSim?.SetSpeed(speed);
-        _world3D?.Entities.SetOwnMoveSpeed(speed);
-    }
-
-    /// <summary>Q/E：2D 为 45° 步进转菱形；3D 为按住绕玩家水平环绕。</summary>
-    private void RotateView(float delta)
-    {
-        _viewRotation += delta;
-        _worldRenderer?.SetViewRotation(_viewRotation);
-        _moveController?.SetViewYaw(_viewRotation);
-    }
-
-    /// <summary>屏幕坐标经场景变换逆投影为世界坐标，覆盖 2D 旋转/缩放或 3D 正交射线。</summary>
-    private System.Numerics.Vector2 ScreenToWorld(Vector2 screen)
-    {
-        Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
-        if (_render3D && _world3D is not null)
-            return _world3D.ScreenToWorld(screen, heightAt);
-        if (_world is null) return System.Numerics.Vector2.Zero;
-        var local = _world.ToLocal(screen);
-        return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
-    }
-
-    private static long NowMs() => checked((long)Time.GetTicksMsec());
+	private readonly Camera _camera = new();
+	private readonly Dictionary<ulong, PositionSmoother> _smoothers = new();
+	private readonly ConcurrentQueue<ActionOutcome> _actionOutcomes = new();
+	private readonly ConcurrentQueue<WorldEvent> _worldEvents = new();
+	private OwnMovementSim? _ownSim;
+	private readonly HashSet<(int X, int Y)> _blocked = new();
+	private readonly Dictionary<ulong, long> _movingUntil = new();
+	private readonly Dictionary<ulong, (float X, float Y)> _lastServerPos = new();
+	private bool _ownIntentMoving;
+	private bool _ownPathMoving;
+
+	private StarveClient? _client;
+	private TileMap? _tilemap;
+	private Node2D? _worldPivot;
+	private Node2D? _world;
+	private MapView? _mapView;
+	private IWorldRenderer? _worldRenderer;
+	private World3DView? _world3D;
+	private CloudShadowView? _clouds;
+	private ParallaxView? _parallax;
+	private WeatherView? _weather;
+	private FogGrid? _fogGrid;
+	private MinimapView? _minimap;
+	private LightingPass? _lighting;
+	private LutPass? _lut;
+	private VolumetricView? _volumetric;
+	private GhostNode? _ghost;
+	private Control? _uiRoot;
+	private Hud? _hud;
+	private ToonTunePanel? _toonPanel;
+	private ActorTunePanel? _actorPanel;
+	private PerfMonitor? _perf;
+	private PerfPanel? _perfPanel;
+	private float _lastEffectiveSpeed = OwnMovementSim.DefaultTilesPerSec;
+	private SfxService? _sfx;
+	private DamageFlashOverlay? _damageFlash;
+	private MoveController? _moveController;
+	private int _lastRevision = -1;
+	private int _lastWeatherRevision = -1;
+	private long? _captureAt;
+	private ulong _ownId;
+	private string _ownUid = "";
+	private ulong? _selected;
+	private (ulong EntityId, int Kind, int W, int H, bool Ok)? _buildPreview;
+	private System.Numerics.Vector2? _mouseWorld;
+	private long _lastBuildCheckAt;
+	private long _lightningAmbientUntil;
+	private readonly bool _freeCamera = CameraArg is not null;
+	private readonly bool _render3D = Render3DMode;
+	private readonly AutoActionInputState _autoActions = new();
+	private long _demoNextAt;
+	private float _viewRotation;
+	private int _blockedSignature = int.MinValue;
+	private int _hudSignature = int.MinValue;
+	private readonly bool _showMovementDiagnostics =
+		System.Environment.GetEnvironmentVariable("STARVE_DEBUG_MOVEMENT") == "1";
+	private MovementDiagnosticsSampler? _movementDiagnosticsSampler;
+	private string _movementDiagnosticsStatus = "";
+	private bool _ownDead;
+	private bool _gameplayLocked;
+	private Vector2 _uiRootSize;
+	private readonly Dictionary<ulong, (float X, float Y)> _lootAt = new();
+
+	/// <summary>道具图标（equipment/ 集）：kind → 资源路径；没有图标的物品继续用色块。</summary>
+	private static readonly Dictionary<int, string> ItemIconFiles = new()
+	{
+		[(int)ItemKind.Axe] = "res://assets/equipment/wood/axe.png",
+		[(int)ItemKind.Pickaxe] = "res://assets/equipment/wood/chisel.png", // 凿子充当镐图标
+		[(int)ItemKind.WoodArmor] = "res://assets/equipment/wood/armor.png",
+		[(int)ItemKind.Helmet] = "res://assets/equipment/wood/helmet.png",
+	};
+	private static readonly Dictionary<int, Texture2D> ItemIconCache = new();
+
+	private static Texture2D? ItemIcon(int kind)
+	{
+		if (!ItemIconFiles.TryGetValue(kind, out var path)) return null;
+		if (!ItemIconCache.TryGetValue(kind, out var tex))
+		{
+			tex = GD.Load<Texture2D>(path);
+			ItemIconCache[kind] = tex;
+		}
+		return tex;
+	}
+
+	private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
+	private static string? CapturePath => OS.GetCmdlineUserArgs()
+		.SkipWhile(a => a != "--capture")
+		.Skip(1)
+		.FirstOrDefault();
+	private static string? CameraArg => OS.GetCmdlineUserArgs()
+		.SkipWhile(a => a != "--cam")
+		.Skip(1)
+		.FirstOrDefault();
+	/// <summary>
+	/// 默认走 3D 主场景（玩家为猪人）。加 --render-2d 或 STARVE_RENDER_2D=1 回到 2D 鱼人。
+	/// </summary>
+	private static bool Render3DMode =>
+		!OS.GetCmdlineUserArgs().Contains("--render-2d") &&
+		System.Environment.GetEnvironmentVariable("STARVE_RENDER_2D") != "1";
+	/// <summary>演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。</summary>
+	private static (int Dx, int Dy)? DemoMove =>
+		System.Environment.GetEnvironmentVariable("STARVE_DEMO_MOVE") is { } s &&
+		s.Split(',') is { Length: 2 } parts &&
+		int.TryParse(parts[0], out var dx) && int.TryParse(parts[1], out var dy)
+			? (dx, dy)
+			: null;
+
+	public override void _Ready()
+	{
+		// Godot 内建 Bloom：2D 用全屏 Environment；3D 的 glow 挂在 World3DView 的日夜环境上，避免两套环境抢天空。
+		if (!_render3D)
+		{
+			var env = new Godot.Environment();
+			env.GlowEnabled = true;
+			env.GlowIntensity = 0.9f;
+			env.GlowStrength = 1.1f;
+			env.GlowBloom = 0.12f;
+			env.GlowHdrThreshold = 0.55f;
+			AddChild(new WorldEnvironment { Environment = env });
+		}
+
+		_parallax = new ParallaxView { Name = "Parallax" };
+		AddChild(_parallax);
+		_worldPivot = new Node2D { Name = "WorldPivot" };
+		AddChild(_worldPivot);
+		_world = new Node2D { Name = "World" };
+		_worldPivot.AddChild(_world);
+		_mapView = new MapView { Name = "MapView" };
+		_world.AddChild(_mapView);
+		_clouds = new CloudShadowView { Name = "CloudShadows" };
+		_world.AddChild(_clouds);
+		_sfx = new SfxService();
+		AddChild(_sfx);
+		_sfx.SetSpatialRoot(_world);
+		if (_render3D)
+		{
+			_world3D = new World3DView();
+			AddChild(_world3D);
+			_worldRenderer = _world3D.Entities;
+			_worldPivot.Visible = false;
+		}
+		else
+		{
+			var entityLayer = new EntityLayer { Name = "EntityLayer" };
+			_world.AddChild(entityLayer);
+			_worldRenderer = entityLayer;
+		}
+		_worldRenderer.SetSfx(_sfx);
+		_fogGrid = new FogGrid { Name = "FogGrid" };
+		_world.AddChild(_fogGrid);
+		_ghost = new GhostNode { Name = "Ghost", ZIndex = 4096, Visible = false };
+		_world.AddChild(_ghost);
+
+		_weather = new WeatherView { Name = "Weather" };
+		_weather.OnLightning += () => _lightningAmbientUntil = NowMs() + 350;
+		AddChild(_weather);
+		_lighting = new LightingPass { Name = "Lighting" };
+		AddChild(_lighting);
+		_lut = new LutPass { Name = "Lut" };
+		_lut.SetAtlas(LutBuilder.Build().Atlas);
+		AddChild(_lut);
+		_volumetric = new VolumetricView { Name = "Volumetric" };
+		AddChild(_volumetric);
+		if (_render3D)
+		{
+			if (_parallax is not null) _parallax.Visible = false;
+			_lighting.Visible = false;
+			_volumetric.Visible = false;
+			GD.Print("RENDER 3D main scene, player=pigman");
+		}
+
+		var ui = new CanvasLayer { Layer = 10 };
+		AddChild(ui);
+		// CanvasLayer 不是 Control：子控件的锚点不会跟窗口走，底栏会算到屏幕外。
+		_uiRoot = new Control
+		{
+			Name = "UiRoot",
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+		};
+		ui.AddChild(_uiRoot);
+		// CanvasLayer 不是 Control，子节点 FullRect 不会自动吃到窗口。必须把 UiRoot.Size 写成视口大小。
+		GetViewport().SizeChanged += FitUiRoot;
+		_minimap = new MinimapView { Name = "Minimap" };
+		_uiRoot.AddChild(_minimap);
+		_damageFlash = new DamageFlashOverlay { Name = "DamageFlash" };
+		_uiRoot.AddChild(_damageFlash);
+		try
+		{
+			_hud = new Hud { Name = "Hud" };
+			_uiRoot.AddChild(_hud);
+			WireHud(_hud);
+			FitUiRoot();
+			CallDeferred(MethodName.FitUiRoot);
+			if (_render3D) _hud.Log("渲染：3D 主场景 · 玩家=猪人（--render-2d 回 2D）");
+			if (_render3D && OS.IsDebugBuild())
+			{
+				_toonPanel = new ToonTunePanel
+				{
+					CollectActors = () => _world3D!.Entities.Visuals,
+					TerrainRoot = _world3D!.Terrain,
+				};
+				_uiRoot.AddChild(_toonPanel);
+				_actorPanel = new ActorTunePanel { World = _world3D };
+				_actorPanel.MoveSpeedChanged = ApplyDebugMoveSpeed;
+				_uiRoot.AddChild(_actorPanel);
+				_hud.Log("调试面板：F1 Toon，F2 缩放/速度/光雾；点选模型后拖滑条");
+			}
+
+			try
+			{
+				_perf = PerfMonitor.TryStart();
+			}
+			catch (Exception ex)
+			{
+				GD.PushWarning("性能采样未启动: " + ex.Message);
+				_perf = null;
+			}
+			_perfPanel = new PerfPanel();
+			_uiRoot.AddChild(_perfPanel);
+			_perfPanel.Bind(_perf);
+			if (_perf?.Url is { } perfUrl)
+				_hud.Log($"性能：F3 面板 · 网页 {perfUrl} · 日志 {_perf.LogPath}");
+			else
+				_hud.Log("性能：F3 面板（本局未写日志）");
+		}
+		catch (Exception ex)
+		{
+			GD.PushError("UI 初始化失败: " + ex.Message);
+		}
+
+		AddChild(new CameraController { Camera = _camera });
+		var move = new MoveController();
+		_moveController = move;
+		_ownSim = new OwnMovementSim(IsWalkable);
+		if (_showMovementDiagnostics)
+		{
+			_movementDiagnosticsSampler = new MovementDiagnosticsSampler(
+				() => _ownSim?.Diagnostics ?? default);
+		}
+		move.OnMove += dir =>
+		{
+			if (!GameplayLocked()) _client?.Commands.Move(dir.Dx, dir.Dy);
+		};
+		move.OnIntent += dir =>
+		{
+			if (GameplayLocked())
+			{
+				_ownSim?.SetIntent(0, 0);
+				_worldRenderer?.SetOwnMoveDir(0, 0);
+				_worldRenderer?.SetOwnFacing(0f, 0f);
+				_ownIntentMoving = false;
+				return;
+			}
+			_ownSim?.SetIntent(dir.Dx, dir.Dy);
+			_worldRenderer?.SetOwnMoveDir(dir.Dx, dir.Dy);
+			if (dir.Dx != 0 || dir.Dy != 0)
+			{
+				_worldRenderer?.CancelActionForMovement(_ownId);
+			}
+			// 自己的动画严格跟随本地输入，松键立即 idle；服务端位置只负责校正。
+			_ownIntentMoving = dir.Dx != 0 || dir.Dy != 0;
+		};
+		move.OnFacing += face =>
+		{
+			if (!GameplayLocked())
+				_worldRenderer?.SetOwnFacing(face.X, face.Y);
+		};
+		AddChild(move);
+		if (System.Environment.GetEnvironmentVariable("STARVE_DEMO_ROTATE") is { } rr &&
+			float.TryParse(rr, out var deg))
+		{
+			RotateView(deg * Mathf.Pi / 180f);
+		}
+
+		_hud?.Log("连接中…");
+		_ = StartAsync();
+	}
+
+	public override void _ExitTree()
+	{
+		var vp = GetViewport();
+		if (vp is not null) vp.SizeChanged -= FitUiRoot;
+		_perf?.Dispose();
+		_perf = null;
+	}
+
+	private void FitUiRoot()
+	{
+		if (_uiRoot is null) return;
+		var size = GetViewport().GetVisibleRect().Size;
+		if (size.X < 2 || size.Y < 2)
+		{
+			var win = GetWindow();
+			if (win is not null) size = win.Size;
+		}
+		if (size.X < 2 || size.Y < 2)
+		{
+			CallDeferred(MethodName.FitUiRoot);
+			return;
+		}
+		if (_uiRoot.Size.DistanceSquaredTo(size) < 1f && _uiRoot.Position == Vector2.Zero)
+			return;
+		_uiRootSize = size;
+		_uiRoot.Position = Vector2.Zero;
+		_uiRoot.Size = size;
+		_hud?.Relayout();
+	}
+
+	private void WireHud(Hud hud)
+	{
+		hud.GatherPressed += () => WithSelected(id => TryAct(id, Intent.Gather));
+		hud.AttackPressed += () => WithSelected(id => TryAct(id, Intent.Attack));
+		hud.ChopPressed += () => WithSelected(id => TryAct(id, Intent.Chop));
+		hud.MinePressed += () => WithSelected(id => TryAct(id, Intent.Mine));
+		hud.PickupPressed += () => WithSelected(id => TryAct(id, Intent.Pickup));
+		hud.DemolishPressed += () =>
+		{
+			if (CanSendGameplay()) WithSelected(id => _client?.Commands.Demolish(id));
+		};
+		hud.BuildPressed += kind =>
+		{
+			if (CanSendGameplay()) _ = DoBuildAsync(kind);
+		};
+		hud.BagUsePressed += slot =>
+		{
+			if (CanSendGameplay()) WithBagSlot(slot, kind => _client?.Commands.Use(kind));
+		};
+		hud.BagEquipPressed += slot => WithBagSlot(slot, kind =>
+		{
+			if (!CanSendGameplay()) return;
+			// 背包始终按 kind 装备：同槽替换（换斧只换手持）。kind=0 是卸下，不能从背包发出。
+			_client?.Commands.Equip(kind);
+		});
+		hud.WornSlotUnequipPressed += slotId =>
+		{
+			if (!CanSendGameplay() || WornItem(slotId) is null) return;
+			_client?.Commands.UnequipSlot(EquipSlotNumber(slotId));
+		};
+		hud.BagDropPressed += slot => WithBagSlot(slot, kind =>
+		{
+			if (!CanSendGameplay()) return;
+			var count = OwnItemCount(slot);
+			if (count > 0) _client?.Commands.Drop(kind, count);
+		});
+		hud.BagSplitPressed += slot => WithBagSlot(slot, kind =>
+		{
+			if (!CanSendGameplay()) return;
+			var count = OwnItemCount(slot);
+			if (count > 1) _client?.Commands.Split(slot, count / 2);
+		});
+		hud.CraftPressed += recipeId =>
+		{
+			if (CanSendGameplay()) _ = DoCraftAsync(recipeId);
+		};
+		hud.CancelCraftPressed += () =>
+		{
+			if (CanSendGameplay()) _client?.Commands.CancelCraft();
+		};
+		hud.SleepPressed += () =>
+		{
+			if (_client is null || _ownDead || GameplayLocked()) return;
+			var command = _client.Commands.Sleep();
+			_worldRenderer?.PredictAction(_ownId, ActionKind.Sleep, command);
+		};
+		hud.CancelSleepPressed += () =>
+		{
+			if (_client is null || _ownDead || GameplayLocked()) return;
+			_client.Commands.CancelSleep();
+			_worldRenderer?.CancelActionLocally(_ownId);
+		};
+		hud.UiClicked += () => _sfx?.Play("sfx.ui.click");
+		hud.CraftOpened += () => _sfx?.Play("sfx.ui.craft.open");
+	}
+
+	private async Task StartAsync()
+	{
+		_client = new StarveClient();
+		_client.World.ActionOutcomeReceived += outcome => _actionOutcomes.Enqueue(outcome);
+		_client.World.WorldEventReceived += worldEvent => _worldEvents.Enqueue(worldEvent);
+		try
+		{
+			var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
+			_ownUid = uid;
+			var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
+			_ownId = info.EntityId;
+			_worldRenderer?.SetOwnId(_ownId);
+			_worldRenderer?.SetNameProvider(EntityName);
+			if (CameraArg is { } cam && cam.Split(',') is { Length: 2 } parts &&
+				float.TryParse(parts[0], out var cx) && float.TryParse(parts[1], out var cy))
+			{
+				_camera.Teleport(cx, cy);
+			}
+			_hud?.Log($"[已连接] uid={info.UserId} entity={info.EntityId}");
+		}
+		catch (Exception ex)
+		{
+			_hud?.Log($"[连接失败] {ex.Message}");
+		}
+	}
+
+	public override void _Process(double delta)
+	{
+		_perf?.Tick(delta);
+		if (_perfPanel is { Visible: true })
+			_perfPanel.Render(_perf?.Latest ?? default, (float)Engine.GetFramesPerSecond());
+
+		if (CapturePath is not null)
+		{
+			var delay = 3000;
+			if (System.Environment.GetEnvironmentVariable("STARVE_CAPTURE_MS") is { } ms &&
+				int.TryParse(ms, out var custom)) delay = custom;
+			if (_captureAt is null) _captureAt = NowMs() + delay;
+			if (NowMs() >= _captureAt)
+			{
+				var img = GetViewport().GetTexture().GetImage();
+				img.SavePng(CapturePath);
+				GD.Print($"CAPTURE saved: {CapturePath}");
+				GetTree().Quit();
+				return;
+			}
+		}
+
+		var client = _client;
+		if (client is null) return;
+
+		while (_actionOutcomes.TryDequeue(out var outcome))
+		{
+			_worldRenderer?.ApplyActionOutcome(outcome);
+			if (outcome.EntityId != _ownId) continue;
+			if (outcome.Result == ActionOutcomeResult.Completed &&
+				outcome.Kind == ActionKind.Craft)
+			{
+				_sfx?.Play("sfx.ui.craft.done");
+			}
+			if (outcome.Result is ActionOutcomeResult.Canceled or ActionOutcomeResult.Rejected)
+			{
+				var result = outcome.Result == ActionOutcomeResult.Canceled ? "动作已取消" : "动作被拒绝";
+				_hud?.Log($"{result}：{ActionOutcomeReasonText(outcome.Reason)}");
+				if (outcome.Result == ActionOutcomeResult.Rejected) _sfx?.Play("sfx.ui.deny");
+			}
+		}
+
+		if (client.World.Revision != _lastRevision)
+		{
+			_lastRevision = client.World.Revision;
+			ApplyWorld(client.World);
+			try
+			{
+				RefreshOwnVitals(client.World);
+			}
+			catch (Exception ex)
+			{
+				GD.PushError($"HUD vitals: {ex.Message}");
+			}
+		}
+		while (_worldEvents.TryDequeue(out var worldEvent))
+		{
+			if (worldEvent.Impact is { } impact)
+			{
+				_worldRenderer?.ApplyCombatImpact(worldEvent, impact);
+				_damageFlash?.ApplyImpact(
+					impact.Result,
+					impact.TargetEntity == _ownId);
+			}
+			else if (worldEvent.HealthChanged is { } healthChanged &&
+					 healthChanged.TargetEntity == _ownId &&
+					 healthChanged.Delta != 0)
+			{
+				var sign = healthChanged.Delta > 0 ? "+" : "";
+				_hud?.Log(
+					$"生命 {sign}{healthChanged.Delta}（{HealthChangeCauseText(healthChanged.Cause)}）");
+			}
+		}
+
+		RefreshGameplayLock();
+		var now = NowMs();
+		if (!_gameplayLocked) _autoActions.Tick(now, TriggerAutoAction);
+		if (!_gameplayLocked && DemoMove is { } dm && now >= _demoNextAt)
+		{
+			_demoNextAt = now + 100;
+			_client?.Commands.Move(dm.Dx, dm.Dy);
+			_ownSim?.SetIntent(dm.Dx, dm.Dy);
+			_worldRenderer?.SetOwnMoveDir(dm.Dx, dm.Dy);
+			if (dm.Dx != 0 || dm.Dy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
+		}
+		if (_client is { } predictionClient &&
+			predictionClient.Transport.IsConnected &&
+			predictionClient.Commands.CanPredictMovement)
+		{
+			_ownSim?.Tick((float)(delta * 1000));
+		}
+		if (_movementDiagnosticsSampler?.TrySample(now, out var diagnostics, out var changed) == true)
+		{
+			_movementDiagnosticsStatus =
+				$"\n预测误差 last={diagnostics.LastReconciliationError:0.000}" +
+				$" max={diagnostics.MaxReconciliationError:0.000}" +
+				$" soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}" +
+				$"\n输入 epoch={_client?.Commands.InputEpoch ?? 0}" +
+				$" sent={_client?.Commands.LastSentSeq ?? 0}" +
+				$" ack={_client?.Commands.LastAcceptedSeq ?? 0}" +
+				$" pending={_client?.Commands.PendingControlCount ?? 0}";
+			if (changed)
+			{
+				GD.Print(
+					$"MOVEMENT_DIAGNOSTICS last={diagnostics.LastReconciliationError:0.000} " +
+					$"max={diagnostics.MaxReconciliationError:0.000} " +
+					$"soft={diagnostics.SoftCorrections} hard={diagnostics.HardSnaps}");
+			}
+		}
+		System.Numerics.Vector2? own = _ownSim is { Has: true } sim
+			? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
+			: null;
+		if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
+		_camera.Tick((float)(delta * 1000));
+		if (_render3D)
+		{
+			var orbit = 0f;
+			if (Input.IsPhysicalKeyPressed(Key.Q)) orbit -= 1f;
+			if (Input.IsPhysicalKeyPressed(Key.E)) orbit += 1f;
+			if (orbit != 0f)
+				RotateView(orbit * MathF.PI / 2f * (float)delta);
+		}
+
+		var viewport = GetViewport().GetVisibleRect().Size;
+		if (!_freeCamera)
+		{
+			// 相机半径是 [view_radius, view_radius_max]；view_preload 只在服务端多下发。
+			var worldCfg = client.World.Config;
+			_camera.SetViewRange(
+				worldCfg?.ViewRadius ?? Camera.DefaultViewRadius,
+				worldCfg?.ViewRadiusMax ?? 0);
+			_camera.SyncToViewport(viewport.X, viewport.Y);
+		}
+		var hCam = _tilemap?.HeightAt(_camera.CenterX(), _camera.CenterY()) ?? 0;
+		if (_render3D && _world3D is not null)
+		{
+			_world3D.SyncView(
+				_camera.CenterX(), _camera.CenterY(), hCam,
+				_camera.ZoomLevel, _viewRotation, viewport);
+		}
+		else
+		{
+			// Pivot 固定在屏幕中心，WorldContent 抵消相机中心投影：
+			// Q/E 旋转 Pivot 时，玩家始终留在屏幕中心。
+			var camLocal = IsoMath.WorldToLocal(_camera.CenterX(), _camera.CenterY(), hCam);
+			_worldPivot!.Position = viewport / 2;
+			_worldPivot.Rotation = _viewRotation;
+			_worldPivot.Scale = Vector2.One * _camera.ZoomLevel;
+			_world!.Position = new Vector2(-camLocal.X, -camLocal.Y);
+			_world.Scale = Vector2.One;
+
+			var fx = (_camera.CenterX() - _camera.CenterY()) * IsoMath.Step * _camera.ZoomLevel;
+			var fy = ((_camera.CenterX() + _camera.CenterY()) * IsoMath.Step / 2 - hCam * IsoMath.Step) *
+					 _camera.ZoomLevel;
+			_parallax!.UpdateParallax(fx, fy, viewport);
+		}
+
+		if (client.World.Revision != _lastWeatherRevision)
+		{
+			_lastWeatherRevision = client.World.Revision;
+			var w = client.World.Weather;
+			_weather!.SetWeather(w?.Rain ?? 0, w?.Fog ?? 0, client.World.Season, viewport);
+			if (_tilemap is not null) _fogGrid!.SetFog(client.World.WeatherFrame, _tilemap);
+			UpdateLut(client.World.DayLight);
+		}
+
+		_weather!.Tick(delta, viewport);
+		_lut!.Size = viewport;
+		if (!_render3D)
+		{
+			UpdateLighting(client.World, viewport, _camera.ZoomLevel, own);
+			_lighting!.Size = viewport;
+			var fires = new List<Vector2>();
+			var seeds = new List<long>();
+			foreach (var view in client.World.Entities.Values)
+			{
+				var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+				if (p is null) continue;
+				var ws = view.Get("Workstation", Workstation.Parser);
+				var bld = view.Get("Building", Building.Parser);
+				var isFire = (ws is not null && (int)ws.Type == 1) ||
+							 (bld is not null && bld.Placed && (int)bld.Kind == 1);
+				if (isFire)
+				{
+					fires.Add(new Vector2(p.X, p.Y));
+					seeds.Add((long)view.EntityId);
+				}
+			}
+			_volumetric!.SetView(_camera, fires.ToArray(), seeds.ToArray(), viewport, client.World.DayLight, _camera.ZoomLevel);
+		}
+		if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
+
+		_worldRenderer!.UpdatePositions(
+			_smoothers,
+			id => id == _ownId
+				? _ownIntentMoving || _ownPathMoving
+				: _movingUntil.GetValueOrDefault(id) > now,
+			now,
+			own);
+		_worldRenderer.SetDayLight(client.World.DayLight);
+		if (_render3D && _world3D is not null)
+		{
+			var rain = client.World.Weather?.Rain ?? 0f;
+			_world3D.SetDayCycle(
+				client.World.DayLight,
+				client.World.Season,
+				rain,
+				NowMs() < _lightningAmbientUntil);
+			var fires = new List<(float X, float Y, float H)>();
+			foreach (var view in client.World.Entities.Values)
+			{
+				if (!EntityVisual.StyleFor(view).IsFire) continue;
+				var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+				if (p is null) continue;
+				fires.Add((p.X, p.Y, _tilemap?.HeightAt(p.X, p.Y) ?? 0f));
+			}
+			var ox = own?.X ?? _camera.CenterX();
+			var oy = own?.Y ?? _camera.CenterY();
+			_world3D.SyncPointLights(fires, ox, oy, _tilemap?.HeightAt(ox, oy) ?? 0f);
+		}
+		_minimap!.SetView(
+			client.World.Entities,
+			new Vector2(_camera.CenterX(), _camera.CenterY()),
+			_camera.ZoomLevel,
+			viewport);
+		try
+		{
+			UpdateHud();
+		}
+		catch (Exception ex)
+		{
+			GD.PushError($"HUD: {ex.Message}");
+		}
+	}
+
+	private void UpdateLighting(WorldService world, Vector2 viewport, float zoom, System.Numerics.Vector2? own)
+	{
+		var dayLight = world.DayLight;
+		var dark = Mathf.Max(0, 1 - dayLight * 2);
+		var sunT = 1 - dark;
+		var ambient = 0.92f - dark * 0.3f;
+		if (NowMs() < _lightningAmbientUntil) ambient += 0.5f;
+		if (world.Weather is { Rain: > 0.15f }) ambient *= 0.93f;
+		var sunColor = new Color(
+			0.3f * (0.33f + 0.67f * sunT),
+			0.29f * (0.41f + 0.59f * sunT),
+			0.26f * (0.62f + 0.38f * sunT));
+		var fogColor = new Color(
+			0.62f * (0.14f + 0.86f * sunT),
+			0.7f * (0.15f + 0.85f * sunT),
+			0.78f * (0.2f + 0.8f * sunT));
+
+		var lightPos = new List<Vector2>();
+		var lightColor = new List<Color>();
+		var lightRadius = new List<float>();
+		foreach (var view in world.Entities.Values)
+		{
+			var p = view.Get("Position", Starve.Game.V1.Position.Parser);
+			if (p is null) continue;
+			var ws = view.Get("Workstation", Workstation.Parser);
+			var bld = view.Get("Building", Building.Parser);
+			var isFire = (ws is not null && (int)ws.Type == 1) ||
+						 (bld is not null && bld.Placed && (int)bld.Kind == 1);
+			if (isFire)
+			{
+				lightPos.Add(new Vector2(p.X, p.Y));
+				lightColor.Add(new Color(1.65f, 0.95f, 0.45f));
+				lightRadius.Add(9f);
+			}
+		}
+		if (own is { } ownPos)
+		{
+			lightPos.Add(new Vector2(ownPos.X, ownPos.Y));
+			lightColor.Add(new Color(1f, 0.85f, 0.6f));
+			lightRadius.Add(3.5f);
+		}
+		while (lightPos.Count > 8) lightPos.RemoveAt(lightPos.Count - 1);
+
+		_lighting!.SetLights(
+			viewport,
+			zoom,
+			ambient,
+			new Vector2(0.707f, -0.707f),
+			sunColor,
+			fogColor,
+			0.012f,
+			lightPos.ToArray(),
+			lightColor.ToArray(),
+			lightRadius.ToArray());
+	}
+
+	private void UpdateLut(float dayLight)
+	{
+		var dark = Mathf.Max(0, 1 - dayLight * 2);
+		var day = Mathf.Clamp((0.35f - dark) / 0.35f, 0, 1);
+		var night = Mathf.Clamp((dark - 0.35f) / 0.65f, 0, 1);
+		var dusk = Mathf.Max(0, 1 - day - night);
+		_lut!.SetWeights(day, dusk, night);
+	}
+
+	private void ApplyWorld(WorldService world)
+	{
+		var map = world.Map;
+		if (map is not null && _tilemap is null)
+		{
+			_tilemap = new TileMap(map) { SmoothSlopes = _render3D };
+			_camera.HeightAt = _tilemap.HeightAt;
+			if (_ownSim is not null) _ownSim.HeightAt = _tilemap.HeightAt;
+			if (_render3D)
+				_world3D!.SetMap(_tilemap);
+			else
+				_mapView!.SetMap(_tilemap);
+			_worldRenderer!.SetTilemap(_tilemap);
+			_worldRenderer.SetViewRotation(_viewRotation);
+			_minimap!.SetMap(_tilemap);
+			_lighting!.SetNormalMap(BakeNormalTexture(_tilemap));
+			_lighting!.SetMapSize(new Vector2(_tilemap.Width, _tilemap.Height));
+			if (SmokeMode)
+			{
+				var chunks = _render3D
+					? _world3D!.Terrain.GetChildCount()
+					: _mapView!.GetChildCount();
+				GD.Print(
+					$"SMOKE map={_tilemap.Width}x{_tilemap.Height} " +
+					$"chunks={chunks} entities={world.Count}");
+				GetTree().Quit();
+			}
+		}
+
+		// 放置成功 → 自动退出建造预览
+		if (_buildPreview is { } bp &&
+			world.Entities.TryGetValue(bp.EntityId, out var placedView) &&
+			placedView.Get("Building", Building.Parser) is { Placed: true })
+		{
+			_hud?.Log($"建筑已放置（#{bp.EntityId}）");
+			ExitBuildPreview();
+		}
+
+		var now = NowMs();
+		var tick = world.WorldTick;
+		RebuildBlocked(world.Entities);
+		foreach (var (id, view) in world.Entities)
+		{
+			var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
+			if (pos is null) continue;
+			// M7 连续速度：真实位置 = Position(整格) + sub（sub∈[0,1) 分数偏移，Moveable 携带）
+			var mv = view.Get("Moveable", Moveable.Parser);
+			var fx = pos.X + (float)(mv?.SubX ?? 0);
+			var fy = pos.Y + (float)(mv?.SubY ?? 0);
+			if (id == _ownId)
+			{
+				// 自己的位置走本地预测 + 服务端校正，不进插值缓冲
+				if (mv is not null)
+				{
+					_lastEffectiveSpeed = (float)mv.EffectiveSpeed;
+					ApplyDebugMoveSpeed();
+				}
+				_ownPathMoving = mv is { Path.Count: > 0 };
+				if (!_ownIntentMoving && !GameplayLocked())
+				{
+					var pathDir = _ownPathMoving ? mv!.Path[0] : null;
+					var pdx = pathDir?.Dx ?? 0;
+					var pdy = pathDir?.Dy ?? 0;
+					_ownSim?.SetIntent(pdx, pdy);
+					if (_ownPathMoving)
+						_worldRenderer?.SetOwnMoveDir(pdx, pdy);
+				}
+				// 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
+				var serverStopped = mv is { DirX: 0, DirY: 0 } &&
+									mv.Path.Count == 0;
+				_ownSim?.Reconcile(fx, fy, serverStopped);
+			}
+			else if (!_smoothers.TryGetValue(id, out var smoother))
+			{
+				smoother = new PositionSmoother();
+				_smoothers[id] = smoother;
+				smoother.Update(fx, fy, tick, now);
+			}
+			else
+			{
+				smoother.Update(fx, fy, tick, now);
+			}
+			if (id != _ownId &&
+				_lastServerPos.TryGetValue(id, out var prev) &&
+				(MathF.Abs(prev.X - fx) > 0.001f || MathF.Abs(prev.Y - fy) > 0.001f))
+			{
+				_movingUntil[id] = now + 240;
+			}
+			_lastServerPos[id] = (fx, fy);
+		}
+
+		NoticeLootPicked(world);
+		_worldRenderer!.SyncEntities(world.Entities);
+		UpdateBagAndCraft(world);
+	}
+
+	/// <summary>从快照重建动态阻挡层（树/矿/建筑等 Block 组件），本地预测墙停用。</summary>
+	private void RebuildBlocked(IReadOnlyDictionary<ulong, EntityView> entities)
+	{
+		var signature = 17;
+		unchecked
+		{
+			foreach (var view in entities.Values.OrderBy(v => v.EntityId))
+			{
+				var b = view.Get("Block", Block.Parser);
+				var p = view.Get("Position", Position.Parser);
+				if (b is null || p is null) continue;
+				signature = signature * 31 + view.EntityId.GetHashCode();
+				signature = signature * 31 + p.X;
+				signature = signature * 31 + p.Y;
+				signature = signature * 31 + b.Width;
+				signature = signature * 31 + b.Height;
+			}
+		}
+		if (signature == _blockedSignature) return;
+		_blockedSignature = signature;
+
+		_blocked.Clear();
+		foreach (var view in entities.Values)
+		{
+			var b = view.Get("Block", Block.Parser);
+			var p = view.Get("Position", Position.Parser);
+			if (b is null || p is null) continue;
+			for (var dy = 0; dy < b.Height; dy++)
+			{
+				for (var dx = 0; dx < b.Width; dx++)
+				{
+					_blocked.Add((p.X + dx, p.Y + dy));
+				}
+			}
+		}
+	}
+
+	/// <summary>与服务端 Walkable 一致：非水 + 无动态阻挡。</summary>
+	private bool IsWalkable(int x, int y)
+	{
+		if (_tilemap is null) return true;
+		// 地图边界：越界不可走（否则本地预测会走出地图到负坐标，角色跑到角外“消失”）
+		if (x < 0 || y < 0 || x >= _tilemap.Width || y >= _tilemap.Height) return false;
+		if (_blocked.Contains((x, y))) return false;
+		return _tilemap.CornerType(x, y) != (int)TerrainType.Water;
+	}
+
+	/// <summary>取目标受激能力组件（Choppable/Minable/Pickable 共用 WorkTarget 载荷）。</summary>
+	private static WorkTarget? WorkTargetOf(EntityView view) =>
+		view.Get("Choppable", WorkTarget.Parser)
+		?? view.Get("Minable", WorkTarget.Parser)
+		?? view.Get("Pickable", WorkTarget.Parser);
+
+	/// <summary>玩家是否持有指定主动能力（服务端把工具能力复制到玩家身上）。</summary>
+	private bool HasOwnCapability(string component) =>
+		OwnComponent<Capability>(component, Capability.Parser) is not null;
+
+	/// <summary>当前手持工具的物品 kind（0 = 徒手）。</summary>
+	private int EquippedKind()
+	{
+		if (HasOwnCapability("Chopper")) return (int)ItemKind.Axe;
+		if (HasOwnCapability("Miner")) return (int)ItemKind.Pickaxe;
+		return 0;
+	}
+
+	private string EquippedName() => EquippedKind() switch
+	{
+		(int)ItemKind.Axe => "斧头",
+		(int)ItemKind.Pickaxe => "镐",
+		_ => "徒手",
+	};
+
+	/// <summary>
+	/// 已穿戴护甲：从 Equip.head/body 反查护甲实体（服务端 Defense 只挂护甲实体，
+	/// 穿戴者身上不存防御），返回 (槽位名, 物品 kind, 减免百分比)。
+	/// </summary>
+	private List<(string Slot, int Kind, int Percent)> WornArmor()
+	{
+		var result = new List<(string, int, int)>();
+		if (_client is null ||
+			!_client.World.Entities.TryGetValue(_ownId, out var own) ||
+			own.Get("Equip", Equip.Parser) is not { } eq)
+		{
+			return result;
+		}
+		var world = _client.World;
+		AddArmor(eq.Head, "头戴");
+		AddArmor(eq.Body, "身穿");
+		return result;
+
+		void AddArmor(ulong id, string slot)
+		{
+			if (id == 0 || !world.Entities.TryGetValue(id, out var item)) return;
+			var def = item.Get("Defense", Defense.Parser);
+			if (def is null) return;
+			var kind = item.Get("Equipment", ItemStack.Parser) is { } eq ? (int)eq.Kind : 0;
+			result.Add((slot, kind, def.Percent));
+		}
+	}
+
+	/// <summary>总防御减免 = 头/身护甲之和（与服务端 Attackable 受击口径一致）。</summary>
+	private int DefensePercent() => WornArmor().Sum(a => a.Percent);
+
+	/// <summary>已装备物品的展示文本（手持 + 头戴/身穿护甲名）。</summary>
+	private string EquipText()
+	{
+		var wear = string.Concat(WornArmor().Select(a =>
+			$" {a.Slot} {ItemName(_client?.World.Config, a.Kind)}"));
+		return $"手持 {EquippedName()}{wear}";
+	}
+
+	private static int EquipSlotNumber(string slotId) => slotId switch
+	{
+		"head" => 1,
+		"hand" => 2,
+		"body" => 3,
+		_ => 0,
+	};
+
+	private ItemView? WornItem(string slotId) =>
+		WornSlots().FirstOrDefault(s => s.Id == slotId)?.Item;
+
+	/// <summary>头/手/身三格：优先 Equip 实体，手持工具无实体时用能力组件兜底。</summary>
+	private List<EquipSlotView> WornSlots()
+	{
+		Equip? eq = null;
+		if (_client is not null &&
+			_client.World.Entities.TryGetValue(_ownId, out var own))
+		{
+			eq = own.Get("Equip", Equip.Parser);
+		}
+		return
+		[
+			new EquipSlotView("head", "头", ItemFromEquipEntity(eq?.Head ?? 0)),
+			new EquipSlotView("hand", "手", ItemFromEquipEntity(eq?.Hand ?? 0) ?? ItemFromKind(EquippedKind())),
+			new EquipSlotView("body", "身", ItemFromEquipEntity(eq?.Body ?? 0)),
+		];
+	}
+
+	private ItemView? ItemFromEquipEntity(ulong entityId)
+	{
+		if (entityId == 0 || _client is null ||
+			!_client.World.Entities.TryGetValue(entityId, out var item))
+		{
+			return null;
+		}
+		var stack = item.Get("Equipment", ItemStack.Parser);
+		var kind = stack is { Kind: > 0 } ? (int)stack.Kind : 0;
+		var cap = item.Get("Chopper", Capability.Parser) ?? item.Get("Miner", Capability.Parser);
+		var durability = cap is { Durability: > 0 } ? cap.Durability
+			: stack is { Durability: > 0 } ? stack.Durability
+			: 0;
+		return ItemViewOf(kind, 1, durability);
+	}
+
+	private ItemView? ItemFromKind(int kind)
+	{
+		if (kind <= 0) return null;
+		var cfg = _client?.World.Config;
+		return new ItemView(kind, ItemName(cfg, kind), 1, ItemColor(cfg, kind), ItemIcon(kind));
+	}
+
+	private ItemView? ItemViewOf(int kind, int count, int durability)
+	{
+		if (kind <= 0 || count <= 0) return null;
+		var cfg = _client?.World.Config;
+		var max = (int)(cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind)?.Tool?.Durability ?? 0);
+		return new ItemView(
+			kind,
+			ItemName(cfg, kind),
+			count,
+			ItemColor(cfg, kind),
+			ItemIcon(kind),
+			durability,
+			max);
+	}
+
+	private void NoticeLootPicked(WorldService world)
+	{
+		var nowLoot = new Dictionary<ulong, (float X, float Y)>();
+		foreach (var (id, view) in world.Entities)
+		{
+			if (view.LootOf() is null) continue;
+			if (view.Get("Position", Position.Parser) is not { } pos) continue;
+			nowLoot[id] = (pos.X, pos.Y);
+		}
+		(float X, float Y)? own = null;
+		if (world.Entities.TryGetValue(_ownId, out var me) &&
+			me.Get("Position", Position.Parser) is { } mePos)
+		{
+			own = (mePos.X, mePos.Y);
+		}
+		if (own is { } at)
+		{
+			foreach (var (id, pos) in _lootAt)
+			{
+				if (nowLoot.ContainsKey(id)) continue;
+				if (Math.Abs(pos.X - at.X) + Math.Abs(pos.Y - at.Y) > 3) continue;
+				_sfx?.Play("sfx.gather.pickup");
+				break;
+			}
+		}
+		_lootAt.Clear();
+		foreach (var (id, pos) in nowLoot) _lootAt[id] = pos;
+	}
+
+	/// <summary>一次交互：按新组件校验 + 距离检查，再发命令。</summary>
+	private void TryAct(ulong id, Intent intent)
+	{
+		if (_ownDead || GameplayLocked()) return;
+		if (_client is null || !_client.World.Entities.TryGetValue(id, out var view))
+		{
+			Deny("目标已消失");
+			return;
+		}
+		if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
+			own.Get("Position", Position.Parser) is not { } mePos ||
+			view.Get("Position", Position.Parser) is not { } tPos)
+		{
+			Deny("目标不可达");
+			return;
+		}
+		var dx = mePos.X - tPos.X;
+		var dy = mePos.Y - tPos.Y;
+		// 与服务端 withinRange 一致：曼哈顿距离 ≤2（客户端曾用欧氏 2.5，
+		// 对角 2 格会被服务端静默拒绝，造成“点了没反应”）
+		if (Math.Abs(dx) + Math.Abs(dy) > 2)
+		{
+			Deny("距离不够，请靠近后再操作");
+			return;
+		}
+
+		ActionKind? predictedKind = null;
+		InputCommandRef? commandRef = null;
+		switch (intent)
+		{
+			case Intent.Gather:
+				if (view.Get("Pickable", WorkTarget.Parser) is null)
+				{
+					Deny("目标不可采集（不是浆果丛）");
+					return;
+				}
+				commandRef = _client.Commands.Gather(id);
+				predictedKind = ActionKind.Pick;
+				break;
+			case Intent.Chop:
+				if (view.Get("Choppable", WorkTarget.Parser) is null)
+				{
+					Deny("目标不可砍伐（不是树木）");
+					return;
+				}
+				if (!HasOwnCapability("Chopper"))
+				{
+					Deny("徒手无法砍伐，请先装备斧头");
+					return;
+				}
+				commandRef = _client.Commands.Chop(id);
+				predictedKind = ActionKind.Chop;
+				break;
+			case Intent.Mine:
+				if (view.Get("Minable", WorkTarget.Parser) is null)
+				{
+					Deny("目标不可挖掘（不是矿脉）");
+					return;
+				}
+				if (!HasOwnCapability("Miner"))
+				{
+					Deny("徒手无法挖掘，请先装备镐");
+					return;
+				}
+				commandRef = _client.Commands.Mine(id);
+				predictedKind = ActionKind.Mine;
+				break;
+			case Intent.Pickup:
+				if (view.LootOf() is null)
+				{
+					Deny("目标没有掉落物");
+					return;
+				}
+				_client.Commands.Pickup(id);
+				_sfx?.Play("sfx.gather.pickup");
+				break;
+			case Intent.Attack:
+				if (view.Get("Health", Health.Parser) is null ||
+					view.Get("Dead", Dead.Parser) is not null)
+				{
+					Deny("目标不可攻击");
+					return;
+				}
+				commandRef = _client.Commands.Attack(id);
+				predictedKind = ActionKind.Attack;
+				break;
+		}
+		if (predictedKind is { } kind && commandRef is { } command)
+		{
+			_worldRenderer?.PredictAction(_ownId, kind, command);
+		}
+	}
+
+	private void TryHaunt(ulong id)
+	{
+		if (_client is null || GameplayLocked()) return;
+		if (!_client.World.Entities.TryGetValue(_ownId, out var own) ||
+			!_client.World.Entities.TryGetValue(id, out var target) ||
+			own.Get("Position", Position.Parser) is not { } actorPos ||
+			target.Get("Position", Position.Parser) is not { } targetPos)
+		{
+			_hud?.Log("复活雕像已消失或不可达");
+			return;
+		}
+
+		var hauntable = target.Get("Hauntable", Hauntable.Parser);
+		var block = target.Get("Block", Block.Parser);
+		var validation = HauntInteractionPolicy.Validate(
+			_ownDead,
+			hauntable is not null,
+			hauntable?.RemainingUses ?? 0,
+			actorPos.X,
+			actorPos.Y,
+			targetPos.X,
+			targetPos.Y,
+			block?.Width ?? 1,
+			block?.Height ?? 1);
+		if (validation != HauntValidation.Allowed)
+		{
+			_hud?.Log(validation switch
+			{
+				HauntValidation.ActorAlive => "存活时只能查看复活雕像",
+				HauntValidation.Depleted => "这座复活雕像已耗尽",
+				HauntValidation.OutOfRange => "距离复活雕像太远，请靠近到 2 格内",
+				_ => "目标不是可作祟的复活雕像",
+			});
+			return;
+		}
+
+		var command = _client.Commands.Haunt(id);
+		_worldRenderer?.PredictAction(_ownId, ActionKind.Haunt, command);
+		RefreshGameplayLock();
+	}
+
+	/// <summary>选中实体的可读描述（名称/血量/工作量/可用动作）。</summary>
+	private string DescribeSelected()
+	{
+		if (_selected is not { } id || _client is null ||
+			!_client.World.Entities.TryGetValue(id, out var view))
+		{
+			return "无";
+		}
+		var cfg = _client.World.Config;
+		if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
+			return $"复活雕像 #{id} 剩余次数 {hauntable.RemainingUses} " +
+				   $"作祟时长 {hauntable.DurationTicks} ticks" +
+				   (_ownDead ? " [点击作祟]" : " [灵魂可用]");
+		if (view.Get("Player", Player.Parser) is not null)
+			return $"玩家 #{id}";
+		if (view.Get("Dead", Dead.Parser) is not null)
+			return $"尸体 #{id}";
+		var loot = view.LootOf();
+		if (loot is not null)
+		{
+			var names = loot.Items.Select(i => $"{ItemName(cfg, (int)i.Kind)}×{i.Count}");
+			return $"掉落物 #{id}：{string.Join("、", names)} [拾取]";
+		}
+		var wt = WorkTargetOf(view);
+		if (wt is not null)
+		{
+			var action = view.Get("Choppable", WorkTarget.Parser) is not null ? "砍伐"
+				: view.Get("Minable", WorkTarget.Parser) is not null ? "挖掘"
+				: "采集";
+			return $"{ItemName(cfg, (int)wt.Kind)} #{id} 工作量 {wt.WorkLeft}/{wt.MaxWork} [{action}]";
+		}
+		var ws = view.Get("Workstation", Workstation.Parser);
+		if (ws is not null)
+			return $"工作站#{ws.Type} #{id}";
+		var bld = view.Get("Building", Building.Parser);
+		if (bld is not null)
+			return $"{((int)bld.Kind == 1 ? "火堆" : "木墙")} #{id}" + (bld.Placed ? "" : " [未放置]");
+		var cr = view.Get("Creature", Creature.Parser);
+		if (cr is not null)
+		{
+			var hp = view.Get("Health", Health.Parser);
+			var hpTxt = hp is null ? "" : $" hp={hp.Cur}/{hp.Max}";
+			var name = cr.Kind switch
+			{
+				CreatureKind.Rabbit => "兔子",
+				CreatureKind.Wolf => "狼",
+				CreatureKind.Boar => "野猪",
+				CreatureKind.Deer => "鹿",
+				CreatureKind.Spider => "蜘蛛",
+				CreatureKind.Fishman => "鱼人",
+				CreatureKind.Lizard => "蜥蜴",
+				_ => "生物",
+			};
+			return $"{name} #{id}{hpTxt} [攻击]";
+		}
+		return $"实体 #{id}";
+	}
+
+	private void UpdateBagAndCraft(WorldService world)
+	{
+		if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
+		var inv = own.Get("Inventory", Inventory.Parser);
+		var crafting = own.Get("Crafting", Crafting.Parser);
+		var cfg = world.Config;
+		var signature = ComputeHudSignature(world, own);
+		if (signature == _hudSignature) return;
+		_hudSignature = signature;
+
+		var items = (inv?.Items ?? new()).Select(it =>
+			ItemViewOf((int)it.Kind, it.Count, it.Durability)
+			?? new ItemView(0, "", 0, Colors.Transparent)).ToList();
+		// 已穿戴的在头/手/身格里看；背包同 kind 不再标「装」（装备已从背包扣走）。
+		var worn = WornSlots();
+		_hud.RenderInventory(items, new HashSet<int>(), cfg?.InventorySlots ?? 12, worn);
+
+		if (cfg is null) return;
+		var ownPos = own.Get("Position", Position.Parser);
+		var near = StationNear(world, ownPos);
+		var materials = (inv?.Items ?? new())
+			.Where(i => (int)i.Kind > 0)
+			.GroupBy(i => (int)i.Kind)
+			.ToDictionary(g => g.Key, g => g.Sum(i => i.Count)); // 同种多堆合并，否则重复键抛异常
+		var recipes = cfg.Recipes.Select(r =>
+		{
+			var stationOk = (int)r.Workstation == 0 || near.Contains((int)r.Workstation);
+			var can = stationOk && r.Ingredients.All(i => materials.GetValueOrDefault((int)i.Kind) >= i.Count);
+			return new RecipeView(
+				r.Id,
+				ItemName(cfg, (int)r.Output.Kind),
+				r.Ticks,
+				(int)r.Workstation == 0
+					? "徒手可做"
+					: stationOk
+						? $"{WorkstationName((int)r.Workstation)}附近 ✓"
+						: $"需要靠近{WorkstationName((int)r.Workstation)}",
+				can,
+				r.Ingredients.Select(i =>
+					new IngredientView(
+						ItemName(cfg, (int)i.Kind),
+						materials.GetValueOrDefault((int)i.Kind),
+						i.Count,
+						ItemIcon((int)i.Kind),
+						ItemColor(cfg, (int)i.Kind))).ToList(),
+				ItemIcon((int)r.Output.Kind));
+		}).ToList();
+		var total = crafting is null
+			? 0
+			: (long)(cfg.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0);
+		_hud.RenderCraft(
+			recipes,
+			crafting is null ? null : new CraftingView(crafting.RecipeId, (long)crafting.TicksLeft, total));
+	}
+
+	private static int ComputeHudSignature(WorldService world, EntityView own)
+	{
+		var hash = new HashCode();
+		hash.Add(world.Config?.GetHashCode() ?? 0);
+		// 不把原始坐标打进签名：走动时 Position 每拍都变，会把制作/背包整棵拆掉重建。
+		foreach (var name in new[] { "Inventory", "Equip", "Chopper", "Miner", "Health" })
+		{
+			if (own.Components.TryGetValue(name, out var data)) AddBytes(ref hash, data);
+		}
+		foreach (var type in StationNear(world, own.Get("Position", Position.Parser)).OrderBy(t => t))
+			hash.Add(type);
+		var health = own.Get("Health", Health.Parser);
+		hash.Add(HudVitalsViewModel.Create(
+			health?.Cur ?? 0,
+			health?.Max ?? 0,
+			own.Components.ContainsKey("Dead")).Signature);
+		if (own.Get("Crafting", Crafting.Parser) is { } crafting)
+		{
+			hash.Add(crafting.RecipeId);
+			var total = world.Config?.Recipes.FirstOrDefault(r => r.Id == crafting.RecipeId)?.Ticks ?? 0;
+			hash.Add(total > 0 ? crafting.TicksLeft * 20 / total : crafting.TicksLeft);
+		}
+		foreach (var view in world.Entities.Values.OrderBy(v => v.EntityId))
+		{
+			if (view.Components.ContainsKey("Workstation"))
+			{
+				hash.Add(view.EntityId);
+				if (view.Components.TryGetValue("Workstation", out var ws)) AddBytes(ref hash, ws);
+				if (view.Components.TryGetValue("Position", out var pos)) AddBytes(ref hash, pos);
+			}
+			if (view.Components.ContainsKey("Equipment") || view.Components.ContainsKey("Defense"))
+			{
+				hash.Add(view.EntityId);
+				if (view.Components.TryGetValue("Equipment", out var eq)) AddBytes(ref hash, eq);
+				if (view.Components.TryGetValue("Defense", out var def)) AddBytes(ref hash, def);
+				if (view.Components.TryGetValue("Chopper", out var chop)) AddBytes(ref hash, chop);
+				if (view.Components.TryGetValue("Miner", out var mine)) AddBytes(ref hash, mine);
+			}
+		}
+		return hash.ToHashCode();
+	}
+
+	private static void AddBytes(ref HashCode hash, byte[] data)
+	{
+		foreach (var b in data) hash.Add(b);
+	}
+
+	private static string WorkstationName(int type) => type switch
+	{
+		1 => "火堆",
+		2 => "工作台",
+		_ => $"工作站#{type}",
+	};
+
+	private static HashSet<int> StationNear(WorldService world, Position? ownPos)
+	{
+		var set = new HashSet<int>();
+		if (ownPos is null) return set;
+		foreach (var view in world.Entities.Values)
+		{
+			var ws = view.Get("Workstation", Workstation.Parser);
+			var p = view.Get("Position", Position.Parser);
+			if (ws is null || p is null) continue;
+			if (Math.Abs(p.X - ownPos.X) + Math.Abs(p.Y - ownPos.Y) <= 3) set.Add((int)ws.Type);
+		}
+		return set;
+	}
+
+	private static string ItemName(GameConfig? cfg, int kind)
+	{
+		var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
+		return t?.Name ?? kind.ToString();
+	}
+
+	/// <summary>世界实体标签：资源带动作/掉落/工具提示，掉落物带数量，生物/建筑带中文名。</summary>
+	private string? EntityName(EntityView view)
+	{
+		var pl = view.Get("Player", Player.Parser);
+		if (pl is not null)
+			return pl.Uid == _ownUid ? "我" : $"玩家 {pl.Uid}";
+		if (view.Get("Hauntable", Hauntable.Parser) is { } hauntable)
+			return $"复活雕像·剩余 {hauntable.RemainingUses}";
+		if (view.LootOf() is { } lt)
+			return string.Join("、", lt.Items.Select(i => $"{ItemName(_client?.World.Config, (int)i.Kind)}×{i.Count}"));
+		if (view.Get("Choppable", WorkTarget.Parser) is not null)
+			return HasOwnCapability("Chopper") ? "树·砍伐→木头" : "树·需斧头";
+		if (view.Get("Minable", WorkTarget.Parser) is not null)
+			return HasOwnCapability("Miner") ? "矿石·挖掘→燧石" : "矿石·需镐";
+		if (view.Get("Pickable", WorkTarget.Parser) is not null)
+			return "浆果丛·采集→浆果";
+		if (view.Get("Creature", Creature.Parser) is { } cr)
+		{
+			var name = cr.Kind switch
+			{
+				CreatureKind.Rabbit => "兔子",
+				CreatureKind.Wolf => "狼",
+				CreatureKind.Boar => "野猪",
+				CreatureKind.Deer => "鹿",
+				CreatureKind.Spider => "蜘蛛",
+				CreatureKind.Fishman => "鱼人",
+				CreatureKind.Lizard => "蜥蜴",
+				_ => "生物",
+			};
+			return view.Get("Dead", Dead.Parser) is not null ? name + "尸体" : name;
+		}
+		if (view.Get("Workstation", Workstation.Parser) is { } ws)
+			return (int)ws.Type == 1 ? "火堆工作站" : "工作台";
+		if (view.Get("Building", Building.Parser) is { } bld)
+			return (int)bld.Kind == 1 ? "火堆" : "木墙";
+		return null;
+	}
+
+	private static Color ItemColor(GameConfig? cfg, int kind)
+	{
+		var t = cfg?.Templates.FirstOrDefault(x => (int)x.Kind == kind);
+		if (t is not null && t.Color.StartsWith("#") && int.TryParse(t.Color.AsSpan(1), NumberStyles.HexNumber, null, out var v))
+		{
+			return new Color(((v >> 16) & 0xff) / 255f, ((v >> 8) & 0xff) / 255f, (v & 0xff) / 255f);
+		}
+		return Colors.White;
+	}
+
+	private void WithBagSlot(int slot, Action<int> act)
+	{
+		var inv = OwnComponent("Inventory", Inventory.Parser);
+		if (inv is null || slot < 0 || slot >= inv.Items.Count) return;
+		var kind = (int)inv.Items[slot].Kind;
+		if (kind > 0) act(kind);
+	}
+
+	private int OwnItemCount(int slot)
+	{
+		var inv = OwnComponent("Inventory", Inventory.Parser);
+		return inv is not null && slot >= 0 && slot < inv.Items.Count ? inv.Items[slot].Count : 0;
+	}
+
+	private T? OwnComponent<T>(string name, MessageParser<T> parser) where T : class, IMessage<T> =>
+		_client is not null && _client.World.Entities.TryGetValue(_ownId, out var view)
+			? view.Get(name, parser)
+			: null;
+
+	private async Task DoCraftAsync(string recipeId)
+	{
+		if (_client is null || _ownDead || GameplayLocked()) return;
+		var submission = _client.Commands.BeginCraft(recipeId);
+		_worldRenderer?.PredictAction(_ownId, ActionKind.Craft, submission.CommandRef);
+		var resp = await submission.ResponseTask;
+		if (resp is { Started: true })
+		{
+			_sfx?.Play("sfx.ui.craft.start");
+		}
+		else
+		{
+			_worldRenderer?.CancelPredictedAction(_ownId, submission.CommandRef.RequestId);
+			_sfx?.Play("sfx.ui.craft.fail");
+		}
+		_hud?.Log(resp is { Started: true }
+			? $"开始制作 {recipeId}（{resp.Ticks} ticks）"
+			: $"制作失败: {CraftFailureText(resp?.Message)}");
+	}
+
+	private void Deny(string message)
+	{
+		_hud?.Log(message);
+		_sfx?.Play("sfx.ui.deny");
+	}
+
+	private static string CraftFailureText(string? code) => code switch
+	{
+		null or "" => "请求超时，请检查连接",
+		"insufficient materials" => "材料不足，请查看配方中的持有数量",
+		"need workstation nearby" => "需要靠近配方指定的工作站（曼哈顿距离不超过 3 格）",
+		"output stack full" => "背包没有足够空间",
+		"already crafting" => "已有物品正在制作",
+		"player dead" => "死亡状态无法制作",
+		"player not found" => "玩家状态尚未就绪",
+		"unknown recipe" => "配方不存在或客户端配置已过期",
+		"world_unavailable" => "世界服务暂不可用",
+		_ => code,
+	};
+
+	private static string ActionOutcomeReasonText(ActionOutcomeReason reason) => reason switch
+	{
+		ActionOutcomeReason.Moved => "开始移动",
+		ActionOutcomeReason.Damaged => "受到攻击",
+		ActionOutcomeReason.Dead => "角色死亡",
+		ActionOutcomeReason.Explicit => "主动取消",
+		ActionOutcomeReason.Busy => "正在执行其他动作",
+		ActionOutcomeReason.InvalidTarget => "目标无效",
+		ActionOutcomeReason.Unsupported => "动作不受支持",
+		ActionOutcomeReason.InvalidActor => "当前角色无效",
+		_ => "状态已变化",
+	};
+
+	private static string HealthChangeCauseText(HealthChangeCause cause) => cause switch
+	{
+		HealthChangeCause.Attack => "攻击",
+		HealthChangeCause.Poison => "中毒",
+		HealthChangeCause.Starvation => "饥饿",
+		HealthChangeCause.Weather => "天气",
+		HealthChangeCause.Healing => "治疗",
+		_ => "状态变化",
+	};
+
+	private static Texture2D BakeNormalTexture(TileMap tm)
+	{
+		var buf = new byte[tm.Width * tm.Height * 4];
+		NormalMapBaker.Bake(tm, buf);
+		var img = Image.CreateFromData(tm.Width, tm.Height, false, Image.Format.Rgba8, buf);
+		return ImageTexture.CreateFromImage(img);
+	}
+
+	public override void _Input(InputEvent @event)
+	{
+		if (@event is not InputEventKey key || key.Echo) return;
+		var name = OS.GetKeycodeString(key.Keycode);
+		if (key.Pressed)
+		{
+			if (_render3D && name == "F1" && _toonPanel is not null)
+				_toonPanel.Visible = !_toonPanel.Visible;
+			if (_render3D && name == "F2" && _actorPanel is not null)
+				_actorPanel.Visible = !_actorPanel.Visible;
+			if (name == "F3" && _perfPanel is not null)
+				_perfPanel.Visible = !_perfPanel.Visible;
+			if (!_render3D)
+			{
+				if (name == "Q") RotateView(-Mathf.Pi / 4);
+				else if (name == "E") RotateView(Mathf.Pi / 4);
+			}
+		}
+		var intent = name switch
+		{
+			"Space" => AutoActionIntent.Any,
+			"F" => AutoActionIntent.AttackOnly,
+			_ => (AutoActionIntent?)null,
+		};
+		if (intent is not { } autoIntent) return;
+		if (GameplayLocked())
+		{
+			_autoActions.Release(autoIntent);
+			return;
+		}
+		if (key.Pressed)
+		{
+			_autoActions.Press(autoIntent, NowMs(), TriggerAutoAction);
+		}
+		else
+		{
+			_autoActions.Release(autoIntent);
+		}
+	}
+
+	private void TriggerAutoAction(AutoActionIntent intent)
+	{
+		if (_ownDead || GameplayLocked()) return;
+		if (intent == AutoActionIntent.AttackOnly) _client?.Commands.AttackNearest();
+		else _client?.Commands.Automate();
+	}
+
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (@event is InputEventMouseMotion mm)
+		{
+			_mouseWorld = ScreenToWorld(mm.Position);
+		}
+		else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+		{
+			if (PointerOnHud(mb.Position)) return;
+			if ((_toonPanel is { Visible: true, PickMode: true } ||
+				 _actorPanel is { Visible: true, PickMode: true }) &&
+				_world3D is not null)
+			{
+				if (_world3D.TryPickVisual(mb.Position, out var pickId, out var visual))
+				{
+					_toonPanel?.BindSelected(pickId, visual);
+					_actorPanel?.BindSelected(pickId, visual);
+					_world3D.ShowToonMark(visual);
+					_hud?.Log($"已选 {visual.Name}");
+				}
+				else
+				{
+					_hud?.Log("没点到模型，对准角色身体再点");
+				}
+				return;
+			}
+			if (GameplayLocked()) return;
+			if (_ownDead)
+			{
+				var deadPicked = ScreenToWorld(mb.Position);
+				_selected = FindNearest(deadPicked);
+				if (_selected is { } deadSelection &&
+					deadSelection != _ownId &&
+					_client is not null &&
+					_client.World.Entities.TryGetValue(deadSelection, out var deadTarget) &&
+					deadTarget.Get("Hauntable", Hauntable.Parser) is not null)
+				{
+					TryHaunt(deadSelection);
+				}
+				return;
+			}
+			if (_buildPreview is { } bp && _mouseWorld is { } mw)
+			{
+				_client?.Commands.Place(bp.EntityId, (int)MathF.Round(mw.X), (int)MathF.Round(mw.Y));
+				_hud?.Log($"已请求放置 #{bp.EntityId} 到 ({mw.X:0},{mw.Y:0})");
+				ExitBuildPreview();
+				return;
+			}
+			var picked = ScreenToWorld(mb.Position);
+			_selected = FindNearest(picked);
+			// 点击实体 = 选中并直接执行对应动作（掉落物→拾取、浆果→采集、树→砍伐、矿→挖掘、生物→攻击）。
+			if (_selected is { } sel &&
+				sel != _ownId &&
+				_client is not null &&
+				_client.World.Entities.TryGetValue(sel, out var selView))
+			{
+				if (selView.Get("Hauntable", Hauntable.Parser) is not null) return;
+				if (selView.LootOf() is not null)
+					TryAct(sel, Intent.Pickup);
+				else if (selView.Get("Pickable", WorkTarget.Parser) is not null)
+					TryAct(sel, Intent.Gather);
+				else if (selView.Get("Choppable", WorkTarget.Parser) is not null)
+					TryAct(sel, Intent.Chop);
+				else if (selView.Get("Minable", WorkTarget.Parser) is not null)
+					TryAct(sel, Intent.Mine);
+				else if (selView.Get("Health", Health.Parser) is not null &&
+						 selView.Get("Dead", Dead.Parser) is null)
+					TryAct(sel, Intent.Attack);
+			}
+		}
+	}
+
+	private void UpdateGhost()
+	{
+		if (_buildPreview is not { } bp || _ghost is null || _mouseWorld is not { } mw) return;
+		var local = IsoMath.WorldToLocal(mw.X, mw.Y);
+		_ghost.SetLocal(new Vector2(local.X, local.Y));
+		var now = NowMs();
+		if (now - _lastBuildCheckAt < 100) return;
+		_lastBuildCheckAt = now;
+		var x = (int)MathF.Round(mw.X);
+		var y = (int)MathF.Round(mw.Y);
+		_ = CheckPlaceAsync(bp.EntityId, x, y);
+	}
+
+	private async Task CheckPlaceAsync(ulong entity, int x, int y)
+	{
+		if (_client is null || _buildPreview is null || GameplayLocked()) return;
+		var resp = await _client.Commands.BuildCheckAsync(entity, x, y);
+		if (_buildPreview is not { } bp) return;
+		_buildPreview = (bp.EntityId, bp.Kind, bp.W, bp.H, resp?.Ok ?? false);
+		_ghost?.SetOk(resp?.Ok ?? false);
+	}
+
+	private void ExitBuildPreview()
+	{
+		_buildPreview = null;
+		if (_ghost is not null) _ghost.Visible = false;
+	}
+
+	private ulong? FindNearest(System.Numerics.Vector2 world)
+	{
+		if (_client is null) return null;
+		ulong? best = null;
+		var bestDist = 0.6f;
+		foreach (var (id, view) in _client.World.Entities)
+		{
+			var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
+			if (pos is null) continue;
+			var dx = pos.X - world.X;
+			var dy = pos.Y - world.Y;
+			var d = MathF.Sqrt(dx * dx + dy * dy);
+			if (d < bestDist)
+			{
+				best = id;
+				bestDist = d;
+			}
+		}
+		return best;
+	}
+
+	private void WithSelected(Action<ulong> act)
+	{
+		if (_selected is null)
+		{
+			Deny("先点击选中目标");
+			return;
+		}
+		act(_selected.Value);
+	}
+
+	private async Task DoBuildAsync(int kind)
+	{
+		if (_client is null || !CanSendGameplay()) return;
+		var resp = await _client.Commands.BuildAsync(kind);
+		if (resp is null || !resp.Ok)
+		{
+			_hud?.Log($"建造失败: {resp?.Message ?? "超时"}");
+			return;
+		}
+		if (!CanSendGameplay()) return;
+		var cfg = _client.World.Config;
+		var b = cfg?.Buildings.FirstOrDefault(x => (int)x.Kind == kind);
+		var w = b?.Width ?? 1;
+		var h = b?.Height ?? 1;
+		_buildPreview = (resp.Entity, kind, w, h, true);
+		_ghost!.Configure(w, h);
+		_ghost.Visible = true;
+		if (_mouseWorld is not null) UpdateGhost();
+		_hud?.Log($"已创建蓝图 #{resp.Entity}，移动鼠标选位置，点击放置");
+	}
+
+	private void RefreshOwnVitals(WorldService world)
+	{
+		if (_hud is null || !world.Entities.TryGetValue(_ownId, out var own)) return;
+		var health = own.Get("Health", Health.Parser);
+		var hunger = own.Get("Hunger", Hunger.Parser);
+		var dead = own.Components.ContainsKey("Dead");
+		_hud.SetVitals(HudVitalsViewModel.Create(
+			health?.Cur ?? 0, health?.Max ?? 0, dead, hunger?.Level ?? 0));
+		_hud.SetInteractionsDisabled(dead || GameplayLocked());
+		if (dead && !_ownDead)
+		{
+			ExitBuildPreview();
+			_hud.Log("灵魂状态：靠近复活雕像并点击作祟");
+		}
+		_ownDead = dead;
+	}
+
+	private void UpdateHud()
+	{
+		if (_hud is null || _client is null) return;
+		var w = _client.World;
+		RefreshOwnVitals(w);
+		var hauntStatus = _worldRenderer?.ActionStatusOf(_ownId);
+		var actionState = w.Entities.TryGetValue(_ownId, out var own)
+			? own.Get("ActionState", ActionState.Parser)
+			: null;
+		var hauntText = HauntInteractionPolicy.IsGameplayLocked(hauntStatus)
+			? HauntProgressText(w.WorldTick, hauntStatus, actionState)
+			: _ownDead
+				? "灵魂状态：靠近复活雕像并点击作祟"
+				: "";
+		var defense = DefensePercent();
+		var selected = DescribeSelected();
+		var status = hauntText.Length > 0 ? hauntText : selected;
+		if (defense > 0) status = $"{status}  防御{defense}%";
+		if (_movementDiagnosticsStatus.Length > 0) status += _movementDiagnosticsStatus;
+		_hud.SetStatus(status);
+		_hud.SetToolState(HasOwnCapability("Chopper"), HasOwnCapability("Miner"));
+	}
+
+	private bool PointerOnHud(Vector2 screen)
+	{
+		if (_hud is null) return false;
+		if (_hud.HitsInteractive(screen)) return true;
+		if (_toonPanel is { Visible: true } && _toonPanel.Hits(screen)) return true;
+		if (_actorPanel is { Visible: true } && _actorPanel.Hits(screen)) return true;
+		if (_perfPanel is { Visible: true } && _perfPanel.Hits(screen)) return true;
+		var hovered = GetViewport()?.GuiGetHoveredControl();
+		if (hovered is null) return false;
+		if (hovered == _hud || _hud.IsAncestorOf(hovered)) return true;
+		if (_toonPanel is not null && (hovered == _toonPanel || _toonPanel.IsAncestorOf(hovered))) return true;
+		if (_actorPanel is not null && (hovered == _actorPanel || _actorPanel.IsAncestorOf(hovered))) return true;
+		return _perfPanel is not null && (hovered == _perfPanel || _perfPanel.IsAncestorOf(hovered));
+	}
+
+	private bool GameplayLocked() =>
+		HauntInteractionPolicy.IsGameplayLocked(_worldRenderer?.ActionStatusOf(_ownId));
+
+	private bool CanSendGameplay() => !_ownDead && !GameplayLocked();
+
+	private void RefreshGameplayLock()
+	{
+		var locked = GameplayLocked();
+		if (_gameplayLocked == locked)
+		{
+			_hud?.SetInteractionsDisabled(_ownDead || locked);
+			return;
+		}
+
+		_gameplayLocked = locked;
+		_moveController?.SetBlocked(locked);
+		if (locked)
+		{
+			_ownSim?.SetIntent(0, 0);
+			_worldRenderer?.SetOwnMoveDir(0, 0);
+			_worldRenderer?.SetOwnFacing(0f, 0f);
+			_ownIntentMoving = false;
+			_ownPathMoving = false;
+			_autoActions.Release(AutoActionIntent.Any);
+			_autoActions.Release(AutoActionIntent.AttackOnly);
+			ExitBuildPreview();
+		}
+		try
+		{
+			_hud?.SetInteractionsDisabled(_ownDead || locked);
+		}
+		catch (Exception ex)
+		{
+			GD.PushError($"HUD disable: {ex.Message}");
+		}
+	}
+
+	private static string HauntProgressText(
+		long worldTick,
+		ActionPresentationStatus? status,
+		ActionState? state)
+	{
+		if (status is { Predicted: true }) return "作祟中：等待服务器确认（输入已锁定，不可取消）";
+		if (state is null) return "作祟中：等待复活快照（输入已锁定，不可取消）";
+		var start = state.PhaseStartTick;
+		var end = state.EndTick > start ? state.EndTick : state.PhaseEndTick;
+		if (end <= start) return "作祟中（输入已锁定，不可取消）";
+		var pct = Math.Clamp((worldTick - start) * 100 / (end - start), 0, 100);
+		return $"作祟中：{pct}%（输入已锁定，不可取消）";
+	}
+
+	private static string SeasonName(int season) => season switch
+	{
+		1 => "春",
+		2 => "夏",
+		3 => "秋",
+		4 => "冬",
+		_ => "?",
+	};
+
+	private void ApplyDebugMoveSpeed()
+	{
+		var speed = _lastEffectiveSpeed * (_actorPanel?.MoveSpeedMul ?? 1f);
+		_ownSim?.SetSpeed(speed);
+		_world3D?.Entities.SetOwnMoveSpeed(speed);
+	}
+
+	/// <summary>Q/E：2D 为 45° 步进转菱形；3D 为按住绕玩家水平环绕。</summary>
+	private void RotateView(float delta)
+	{
+		_viewRotation += delta;
+		_worldRenderer?.SetViewRotation(_viewRotation);
+		_moveController?.SetViewYaw(_viewRotation);
+	}
+
+	/// <summary>屏幕坐标经场景变换逆投影为世界坐标，覆盖 2D 旋转/缩放或 3D 正交射线。</summary>
+	private System.Numerics.Vector2 ScreenToWorld(Vector2 screen)
+	{
+		Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
+		if (_render3D && _world3D is not null)
+			return _world3D.ScreenToWorld(screen, heightAt);
+		if (_world is null) return System.Numerics.Vector2.Zero;
+		var local = _world.ToLocal(screen);
+		return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
+	}
+
+	private static long NowMs() => checked((long)Time.GetTicksMsec());
 }

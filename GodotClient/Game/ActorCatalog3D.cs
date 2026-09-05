@@ -6,7 +6,7 @@ namespace GodotClient.Game;
 
 /// <summary>
 /// 3D 主场景外观目录。要换模型只改这里。
-/// 当前：玩家/野猪用 Meshy 猪人；工作台用 Meshy 炼金引擎。
+/// 当前：玩家/野猪用 Meshy 猪人；工作台用 Meshy 炼金引擎（靠近抖动见 shaders/anim）。
 /// </summary>
 public static class ActorCatalog3D
 {

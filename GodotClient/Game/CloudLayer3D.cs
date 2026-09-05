@@ -70,7 +70,8 @@ public partial class CloudLayer3D : Node3D
 
     private void PushBounds()
     {
-        var center = new Vector3(GlobalPosition.X, _height, GlobalPosition.Z);
+        var origin = IsInsideTree() ? GlobalPosition : Position;
+        var center = new Vector3(origin.X, _height, origin.Z);
         VolumeMat.SetShaderParameter("box_center", center);
         VolumeMat.SetShaderParameter("box_size", _boxSize);
         ShadowMat.SetShaderParameter("box_center", center);

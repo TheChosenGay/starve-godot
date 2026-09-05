@@ -112,6 +112,14 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _lastNow = now;
         _actions.Tick();
 
+        Vector3? playerWorld = null;
+        if (ownPos is { } approach)
+        {
+            var playerH = _tilemap?.HeightAt(approach.X, approach.Y) ?? 0;
+            var pw = IsoCamera3D.WorldTo3D(approach.X, approach.Y, playerH);
+            playerWorld = new Vector3(pw.X, pw.Y, pw.Z);
+        }
+
         foreach (var (id, node) in _nodes)
         {
             System.Numerics.Vector2 p;
@@ -160,6 +168,17 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             }
 
             if (moving && id == _ownId) MaybeFootstep(id, now);
+        }
+
+        if (playerWorld is { } pp)
+        {
+            foreach (var node in _nodes.Values)
+            {
+                if (node is not AlchemyEngine3D engine) continue;
+                var dxw = node.Position.X - pp.X;
+                var dzw = node.Position.Z - pp.Z;
+                engine.NotifyPlayerDistance(MathF.Sqrt(dxw * dxw + dzw * dzw));
+            }
         }
     }
 
@@ -253,6 +272,9 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             actor.Name = $"Entity_{id}";
             return actor;
         }
+
+        if (style.IsWorkbench)
+            return new AlchemyEngine3D { Name = $"Entity_{id}" };
 
         if (style.IsFire)
         {

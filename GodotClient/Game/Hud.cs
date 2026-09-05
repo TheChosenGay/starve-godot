@@ -97,11 +97,12 @@ public partial class Hud : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         MouseFilter = MouseFilterEnum.Ignore;
         Theme = HudTheme.Create();
+        if (GetChildCount() > 0) return;
 
         AddChild(BuildTopLeft());
         AddChild(BuildLog());
         AddChild(BuildBottomBar());
-        AddChild(BuildCraftDrawer());
+        BuildCraftDrawer();
         AddChild(BuildFps());
 
         CallDeferred(MethodName.RelayoutDrawers);

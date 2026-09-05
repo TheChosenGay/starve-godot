@@ -27,6 +27,8 @@ public partial class LightingStudio3D : Node3D
     private readonly List<MeshInstance3D> _snowCaps = [];
     private readonly List<FireFlame3D> _flames = [];
     private PigmanActor3D _pigman = null!;
+    private AlchemyEngine3D _alchemy = null!;
+    private float _alchemyBounceIn = 0.35f;
 
     private float _yaw = IsoCamera3D.YawDegrees;
     private float _pitch = 34f;
@@ -93,6 +95,13 @@ public partial class LightingStudio3D : Node3D
             + 0.07f * MathF.Sin((float)Time.GetTicksMsec() * 0.0173f);
         if (_solo is Solo.All or Solo.Fire)
             _fireLight.LightEnergy = _panel.FireEnergy * flick;
+
+        _alchemyBounceIn -= (float)delta;
+        if (_alchemyBounceIn <= 0f)
+        {
+            _alchemy.PlayBounce();
+            _alchemyBounceIn = 3.8f;
+        }
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -349,17 +358,19 @@ public partial class LightingStudio3D : Node3D
             Position = new Vector3(2.5f, 0, 2.2f),
         };
         AddChild(_pigman);
-        AddChild(new AlchemyEngine3D
+        _alchemy = new AlchemyEngine3D
         {
             Name = "AlchemyEngine",
             Position = new Vector3(-2.4f, 0, 1.6f),
-        });
+        };
+        AddChild(_alchemy);
 
         _snowFall = MakeSnowFall();
         AddChild(_snowFall);
 
         AddLabel(new Vector3(2.3f, 2.15f, 1.1f), "灯笼");
         AddLabel(new Vector3(2.5f, 1.85f, 2.2f), "角色 Toon");
+        AddLabel(new Vector3(-2.4f, 2.15f, 1.6f), "炼金引擎");
         AddLabel(new Vector3(-3.2f, 2.1f, -2.4f), "树");
     }
 
