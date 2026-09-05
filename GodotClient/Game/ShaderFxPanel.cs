@@ -7,8 +7,8 @@ namespace GodotClient.Game;
 public enum ShaderFxKind
 {
     None,
-    WillowFluff,
     AlchemyBounce,
+    LiquidRise,
 }
 
 /// <summary>光照沙盘右下：点选物体，套 shader 效果并调参。</summary>
@@ -19,16 +19,17 @@ public partial class ShaderFxPanel : CanvasLayer
     public Node3D? Target { get; private set; }
     public ShaderFxKind Kind { get; private set; } = ShaderFxKind.None;
     public bool Loop { get; private set; } = true;
-    public WillowFluffStyle Willow { get; } = new();
+    public LiquidRiseStyle Liquid { get; } = new();
 
     private bool _syncing;
     private Label? _target;
     private PanelContainer _frame = null!;
-    private VBoxContainer _willowBox = null!;
+    private VBoxContainer _liquidBox = null!;
     private readonly List<Button> _kindBtns = [];
     private readonly List<(HSlider Slider, Label Num, Func<float> Get)> _sliders = [];
     private readonly List<(ColorPickerButton Picker, Func<Color> Get)> _colors = [];
     private CheckButton _loop = null!;
+    private CheckButton _bake = null!;
 
     public override void _Ready()
     {
@@ -43,8 +44,8 @@ public partial class ShaderFxPanel : CanvasLayer
 
         _frame = new PanelContainer { MouseFilter = Control.MouseFilterEnum.Stop };
         _frame.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
-        _frame.OffsetLeft = -330;
-        _frame.OffsetTop = -420;
+        _frame.OffsetLeft = -348;
+        _frame.OffsetTop = -440;
         _frame.OffsetRight = -12;
         _frame.OffsetBottom = -12;
         _frame.Theme = HudTheme.Create();
@@ -59,7 +60,7 @@ public partial class ShaderFxPanel : CanvasLayer
         box.AddChild(new Label { Text = "Shader 效果" });
         box.AddChild(new Label
         {
-            Text = "左键点场景物体，再选效果。柳絮从表面取色，再和统一色混合。",
+            Text = "左键点场景物体，再选效果。有骨骼的角色可开「静态网格」，从烤好的姿势上往上飘。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
         _target = new Label { Text = "目标：点一个物体" };
@@ -67,8 +68,8 @@ public partial class ShaderFxPanel : CanvasLayer
 
         var kinds = new HBoxContainer();
         AddKind(kinds, "无", ShaderFxKind.None);
-        AddKind(kinds, "柳絮", ShaderFxKind.WillowFluff);
         AddKind(kinds, "抖动", ShaderFxKind.AlchemyBounce);
+        AddKind(kinds, "飘液", ShaderFxKind.LiquidRise);
         box.AddChild(kinds);
 
         _loop = new CheckButton { Text = "循环播放", ButtonPressed = true };
@@ -84,17 +85,26 @@ public partial class ShaderFxPanel : CanvasLayer
         replay.Pressed += Replay;
         box.AddChild(replay);
 
-        _willowBox = new VBoxContainer();
-        box.AddChild(_willowBox);
-        _willowBox.AddChild(new Label { Text = "柳絮 / 水网上浮" });
-        AddSlider(_willowBox, "混合", 0, 1, 0.02f, () => Willow.ColorMix, v => Willow.ColorMix = v);
-        AddColor(_willowBox, "统一色", () => Willow.Tint, c => Willow.Tint = c);
-        AddSlider(_willowBox, "升幅", 0.2f, 3.2f, 0.02f, () => Willow.Lift, v => Willow.Lift = v);
-        AddSlider(_willowBox, "晃动", 0, 1.2f, 0.02f, () => Willow.Sway, v => Willow.Sway = v);
-        AddSlider(_willowBox, "片大小", 0.02f, 0.16f, 0.005f, () => Willow.Size, v => Willow.Size = v);
-        AddSlider(_willowBox, "辉光", 0.15f, 2f, 0.02f, () => Willow.Glow, v => Willow.Glow = v);
-        AddSlider(_willowBox, "时长", 0.6f, 5f, 0.05f, () => Willow.Duration, v => Willow.Duration = v);
-        AddSlider(_willowBox, "数量", 16, 240, 4, () => Willow.Count, v => Willow.Count = Mathf.RoundToInt(v));
+        _liquidBox = new VBoxContainer();
+        box.AddChild(_liquidBox);
+        _liquidBox.AddChild(new Label { Text = "飘液 / 分块覆膜" });
+        AddSlider(_liquidBox, "混合", 0, 1, 0.02f, () => Liquid.ColorMix, v => Liquid.ColorMix = v);
+        AddColor(_liquidBox, "颜色", () => Liquid.Tint, c => Liquid.Tint = c);
+        AddSlider(_liquidBox, "覆膜", 0.01f, 0.14f, 0.005f, () => Liquid.Thickness, v => Liquid.Thickness = v);
+        AddSlider(_liquidBox, "升空", 0.3f, 2.2f, 0.02f, () => Liquid.Rise, v => Liquid.Rise = v);
+        AddSlider(_liquidBox, "摇曳", 0, 1.4f, 0.02f, () => Liquid.Swirl, v => Liquid.Swirl = v);
+        AddSlider(_liquidBox, "窜动", 0, 2.4f, 0.05f, () => Liquid.Ripple, v => Liquid.Ripple = v);
+        AddSlider(_liquidBox, "分块", 1.2f, 10f, 0.1f, () => Liquid.Dissolve, v => Liquid.Dissolve = v);
+        AddSlider(_liquidBox, "辉光", 0.15f, 2f, 0.02f, () => Liquid.Glow, v => Liquid.Glow = v);
+        AddSlider(_liquidBox, "时长", 0.6f, 6f, 0.05f, () => Liquid.Duration, v => Liquid.Duration = v);
+        _bake = new CheckButton { Text = "静态网格（骨骼）" };
+        _bake.Toggled += on =>
+        {
+            Liquid.BakeStatic = on;
+            _bake.Text = on ? "静态网格（骨骼，已开）" : "静态网格（骨骼）";
+            if (!_syncing) Push();
+        };
+        _liquidBox.AddChild(_bake);
         RefreshKindUi();
     }
 
@@ -113,10 +123,10 @@ public partial class ShaderFxPanel : CanvasLayer
         if (existing != ShaderFxKind.None)
         {
             Kind = existing;
-            if (WillowFluffFx.Find(node) is { } fluff)
+            if (LiquidRiseFx.Find(node) is { } liquid)
             {
-                CopyWillow(fluff.Style);
-                Loop = fluff.Loop;
+                CopyLiquid(liquid.Style);
+                Loop = liquid.Loop;
             }
         }
         else if (Kind != ShaderFxKind.None)
@@ -127,6 +137,8 @@ public partial class ShaderFxPanel : CanvasLayer
         _syncing = true;
         _loop.ButtonPressed = Loop;
         _loop.Text = Loop ? "循环播放（已开）" : "循环播放";
+        _bake.ButtonPressed = Liquid.BakeStatic;
+        _bake.Text = Liquid.BakeStatic ? "静态网格（骨骼，已开）" : "静态网格（骨骼）";
         ReloadSliderValues();
         _syncing = false;
         RefreshKindUi();
@@ -139,15 +151,15 @@ public partial class ShaderFxPanel : CanvasLayer
     {
         if (host is null || !GodotObject.IsInstanceValid(host))
             return;
-        WillowFluffFx.Detach(host);
         AlchemyBounceFx.Detach(host);
+        LiquidRiseFx.Detach(host);
         switch (Kind)
         {
-            case ShaderFxKind.WillowFluff:
-                WillowFluffFx.PlayOn(host, Willow, Loop);
-                break;
             case ShaderFxKind.AlchemyBounce:
                 AlchemyBounceFx.Attach(host, Loop);
+                break;
+            case ShaderFxKind.LiquidRise:
+                LiquidRiseFx.PlayOn(host, Liquid, Loop);
                 break;
         }
     }
@@ -155,10 +167,10 @@ public partial class ShaderFxPanel : CanvasLayer
     private void Replay()
     {
         if (Target is null) return;
-        if (Kind == ShaderFxKind.WillowFluff)
+        if (Kind == ShaderFxKind.LiquidRise)
         {
-            if (WillowFluffFx.Find(Target) is { } fluff)
-                fluff.Replay();
+            if (LiquidRiseFx.Find(Target) is { } liquid)
+                liquid.Replay();
             else
                 ApplyTo(Target);
             return;
@@ -170,11 +182,11 @@ public partial class ShaderFxPanel : CanvasLayer
     private void Push()
     {
         if (Target is null) return;
-        if (Kind == ShaderFxKind.WillowFluff && WillowFluffFx.Find(Target) is { } fluff)
+        if (Kind == ShaderFxKind.LiquidRise && LiquidRiseFx.Find(Target) is { } liquid)
         {
-            fluff.ApplyStyle(Willow);
-            if (fluff.Loop != Loop)
-                WillowFluffFx.PlayOn(Target, Willow, Loop);
+            if (liquid.Loop != Loop)
+                liquid.SetLoop(Loop);
+            liquid.ApplyStyle(Liquid);
             return;
         }
 
@@ -192,8 +204,8 @@ public partial class ShaderFxPanel : CanvasLayer
 
     private void RefreshKindUi()
     {
-        if (_willowBox is not null)
-            _willowBox.Visible = Kind == ShaderFxKind.WillowFluff;
+        if (_liquidBox is not null)
+            _liquidBox.Visible = Kind == ShaderFxKind.LiquidRise;
         for (var i = 0; i < _kindBtns.Count; i++)
             _kindBtns[i].Disabled = i == (int)Kind;
     }
@@ -206,21 +218,23 @@ public partial class ShaderFxPanel : CanvasLayer
         row.AddChild(btn);
     }
 
-    private void CopyWillow(WillowFluffStyle src)
+    private void CopyLiquid(LiquidRiseStyle src)
     {
-        Willow.ColorMix = src.ColorMix;
-        Willow.Tint = src.Tint;
-        Willow.Lift = src.Lift;
-        Willow.Sway = src.Sway;
-        Willow.Size = src.Size;
-        Willow.Glow = src.Glow;
-        Willow.Duration = src.Duration;
-        Willow.Count = src.Count;
+        Liquid.ColorMix = src.ColorMix;
+        Liquid.Tint = src.Tint;
+        Liquid.Thickness = src.Thickness;
+        Liquid.Rise = src.Rise;
+        Liquid.Swirl = src.Swirl;
+        Liquid.Ripple = src.Ripple;
+        Liquid.Glow = src.Glow;
+        Liquid.Dissolve = src.Dissolve;
+        Liquid.Duration = src.Duration;
+        Liquid.BakeStatic = src.BakeStatic;
     }
 
     private static ShaderFxKind KindOn(Node3D host)
     {
-        if (WillowFluffFx.Find(host) is not null) return ShaderFxKind.WillowFluff;
+        if (LiquidRiseFx.Find(host) is not null) return ShaderFxKind.LiquidRise;
         if (host.GetNodeOrNull<AlchemyBounceFx>(AlchemyBounceFx.NodeName) is not null)
             return ShaderFxKind.AlchemyBounce;
         return ShaderFxKind.None;
@@ -272,6 +286,7 @@ public partial class ShaderFxPanel : CanvasLayer
         var picker = new ColorPickerButton
         {
             Color = get(),
+            EditAlpha = true,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             CustomMinimumSize = new Vector2(120, 28),
         };

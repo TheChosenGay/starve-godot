@@ -105,7 +105,7 @@ public static class AlchemyBounce
     {
         for (var p = node; p is not null && p != root; p = p.GetParent())
         {
-            if (p is WillowFluffFx or AlchemyBounceFx) return true;
+            if (p is AlchemyBounceFx or LiquidRiseFx) return true;
         }
         return false;
     }
