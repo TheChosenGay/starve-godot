@@ -8,12 +8,12 @@ namespace GodotClient.Game;
 public partial class TreeActor3D : Node3D
 {
     public const string ModelPath = "res://assets/models/ghibli-bush/ghibli_bush_godot.glb";
-    public const float DefaultModelScale = 0.28f;
+    public const float DefaultModelScale = 0.56f;
 
     private float _modelScale = DefaultModelScale;
     private AnimationPlayer? _windPlayer;
 
-    [Export(PropertyHint.Range, "0.1,1,0.01")]
+    [Export(PropertyHint.Range, "0.1,2,0.01")]
     public float ModelScale
     {
         get => _modelScale;

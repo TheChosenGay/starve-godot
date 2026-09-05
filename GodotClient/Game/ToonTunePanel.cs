@@ -197,7 +197,7 @@ public partial class ToonTunePanel : Control
 
     private void EnableSelectedToon()
     {
-        if (_selectedNode is null) return;
+        if (!ToonMaterials.IsLive(_selectedNode)) return;
         _scope.Selected = (int)Scope.Selected;
         ToonMaterials.CreateKind = CurrentStyle().Kind;
         ToonMaterials.EnableOn(_selectedNode);
@@ -207,7 +207,7 @@ public partial class ToonTunePanel : Control
 
     private void DisableSelectedToon()
     {
-        if (_selectedNode is null) return;
+        if (!ToonMaterials.IsLive(_selectedNode)) return;
         ToonMaterials.DisableOn(_selectedNode);
         UpdateTargetLabel();
     }
@@ -340,8 +340,8 @@ public partial class ToonTunePanel : Control
         _target.Text = CurrentScope switch
         {
             Scope.Terrain => "目标：地形",
-            Scope.Selected when _selectedNode is not null =>
-                $"目标：{_selectedNode.Name}" + (ToonMaterials.HasActorToon(_selectedNode)
+            Scope.Selected when ToonMaterials.IsLive(_selectedNode) =>
+                $"目标：{_selectedNode!.Name}" + (ToonMaterials.HasActorToon(_selectedNode)
                     ? (CurrentStyle().Kind == ToonShaderKind.Cel ? "（Cel Toon）" : "（色阶 Toon）")
                     : "（未 Toon）"),
             Scope.Selected => "目标：已选物体（先点选）",

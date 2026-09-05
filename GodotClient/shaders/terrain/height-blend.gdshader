@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, specular_disabled, shadows_disabled, ambient_light_disabled;
+render_mode cull_back, specular_disabled, shadows_disabled;
 
 // Poly Haven albedo + displacement。COLOR = (草, 土, 岩, 雪)，UV2 = (AO, 水)。
 uniform sampler2D uGrassAlbedo : source_color, filter_linear_mipmap, repeat_enable;

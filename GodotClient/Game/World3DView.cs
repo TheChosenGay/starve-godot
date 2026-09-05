@@ -13,7 +13,8 @@ public readonly record struct LightTune(
     bool FogEnabled,
     float FogNearMul,
     float FogFarMul,
-    CloudTune Cloud)
+    CloudTune Cloud,
+    bool SkyAmbient = true)
 {
     public static LightTune Default { get; } = new(1f, 0f, 1f, false, 1f, 1f, CloudTune.Default);
 
@@ -94,9 +95,10 @@ public partial class World3DView : Node3D
                 ProcessMode = Sky.ProcessModeEnum.Realtime,
                 RadianceSize = Sky.RadianceSizeEnum.Size256,
             },
-            AmbientLightSource = Godot.Environment.AmbientSource.Color,
+            AmbientLightSource = Godot.Environment.AmbientSource.Sky,
             AmbientLightColor = new Color(0.78f, 0.82f, 0.88f),
             AmbientLightEnergy = 0.38f,
+            ReflectedLightSource = Godot.Environment.ReflectionSource.Sky,
             FogEnabled = false,
             FogMode = Godot.Environment.FogModeEnum.Depth,
             FogLightColor = new Color(0.78f, 0.8f, 0.86f),
@@ -262,7 +264,12 @@ public partial class World3DView : Node3D
             -(look.SunPitchDegrees + Tune.SunPitchOffset),
             look.SunYawDegrees,
             0);
-        _env.AmbientLightSource = Godot.Environment.AmbientSource.Color;
+        _env.AmbientLightSource = Tune.SkyAmbient
+            ? Godot.Environment.AmbientSource.Sky
+            : Godot.Environment.AmbientSource.Color;
+        _env.ReflectedLightSource = Tune.SkyAmbient
+            ? Godot.Environment.ReflectionSource.Sky
+            : Godot.Environment.ReflectionSource.Disabled;
         _env.AmbientLightEnergy = look.AmbientEnergy * Tune.AmbientMul;
         _env.AmbientLightColor = ToColor(look.AmbientColor);
         _env.FogEnabled = Tune.FogEnabled;

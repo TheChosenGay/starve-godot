@@ -18,6 +18,7 @@ public partial class ActorTunePanel : Control
     private readonly CheckButton _pick = new() { Text = "点选物体调参（已开）", ButtonPressed = true };
     private readonly Label _target = new() { Text = "目标：已选物体（先点选）" };
     private readonly CheckButton _fog = new() { Text = "深度雾（已关）", ButtonPressed = false };
+    private readonly CheckButton _skyAmbient = new() { Text = "天空环境光（已开）", ButtonPressed = true };
     private PanelContainer? _frame;
     private Node3D? _selectedNode;
     private ulong _selectedId;
@@ -96,6 +97,12 @@ public partial class ActorTunePanel : Control
         _sunEnergy = AddSlider(box, "阳光倍率", 0.3f, 2.2f, 0.05f, 1f);
         _sunPitch = AddSlider(box, "太阳高度±", -25, 25, 1, 0);
         _ambient = AddSlider(box, "环境光倍率", 0.3f, 2.2f, 0.05f, 1f);
+        box.AddChild(_skyAmbient);
+        _skyAmbient.Toggled += on =>
+        {
+            _skyAmbient.Text = on ? "天空环境光（已开）" : "天空环境光（已关）";
+            Push();
+        };
         box.AddChild(_fog);
         _fog.Toggled += on =>
         {
@@ -158,6 +165,7 @@ public partial class ActorTunePanel : Control
         if (_cloudWind is not null) _cloudWind.Value = CloudTune.Default.Wind;
         if (_cloudHeight is not null) _cloudHeight.Value = CloudTune.Default.Height;
         _fog.ButtonPressed = false;
+        _skyAmbient.ButtonPressed = true;
         _syncing = false;
         Push();
     }
@@ -226,12 +234,14 @@ public partial class ActorTunePanel : Control
                 (float)(_cloudCover?.Value ?? CloudTune.Default.Coverage),
                 (float)(_cloudThick?.Value ?? CloudTune.Default.Thickness),
                 (float)(_cloudWind?.Value ?? CloudTune.Default.Wind),
-                (float)(_cloudHeight?.Value ?? CloudTune.Default.Height))));
+                (float)(_cloudHeight?.Value ?? CloudTune.Default.Height)),
+            _skyAmbient.ButtonPressed));
     }
 
     private static float ReadScale(Node3D node)
     {
         if (node is PigmanActor3D pig) return pig.ModelScale;
+        if (node is TreeActor3D tree) return tree.ModelScale;
         return ActorMesh3D.TuneScaleOf(node);
     }
 
@@ -239,6 +249,8 @@ public partial class ActorTunePanel : Control
     {
         if (node is PigmanActor3D pig)
             pig.ModelScale = scale;
+        else if (node is TreeActor3D tree)
+            tree.ModelScale = scale;
         else
             ActorMesh3D.SetTuneScale(node, scale);
     }

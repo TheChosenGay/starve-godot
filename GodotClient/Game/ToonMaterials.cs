@@ -230,8 +230,12 @@ public static class ToonMaterials
         mat.SetShaderParameter("fill", style.Fill);
     }
 
+    public static bool IsLive(Node? root) =>
+        root is not null && GodotObject.IsInstanceValid(root) && !root.IsQueuedForDeletion();
+
     public static void ApplyStyleToTree(Node root, ToonStyle style)
     {
+        if (!IsLive(root)) return;
         foreach (var mat in CollectActorMaterials(root))
             ApplyActor(mat, style);
     }
@@ -247,6 +251,7 @@ public static class ToonMaterials
 
     public static IEnumerable<ShaderMaterial> CollectActorMaterials(Node root)
     {
+        if (!IsLive(root)) yield break;
         foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
         {
             if (child is not MeshInstance3D mesh) continue;
@@ -266,6 +271,7 @@ public static class ToonMaterials
 
     public static void ApplyToMeshTree(Node root)
     {
+        if (!IsLive(root)) return;
         foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
         {
             if (child is not MeshInstance3D mesh) continue;
@@ -299,13 +305,17 @@ public static class ToonMaterials
 
     public static bool HasActorToon(Node root)
     {
+        if (!IsLive(root) || root is TreeActor3D)
+            return false;
         foreach (var _ in CollectActorMaterials(root))
             return true;
         return false;
     }
 
-    public static void EnableOn(Node root)
+    public static void EnableOn(Node? root)
     {
+        if (!IsLive(root) || root is TreeActor3D)
+            return;
         if (root is PigmanActor3D pig)
         {
             pig.ApplyToon = true;
@@ -320,8 +330,10 @@ public static class ToonMaterials
         ApplyToMeshTree(root);
     }
 
-    public static void DisableOn(Node root)
+    public static void DisableOn(Node? root)
     {
+        if (!IsLive(root) || root is TreeActor3D)
+            return;
         if (root is PigmanActor3D pig)
         {
             pig.ApplyToon = false;
@@ -337,6 +349,7 @@ public static class ToonMaterials
 
     public static void RestoreMeshTree(Node root)
     {
+        if (!IsLive(root)) return;
         foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
         {
             if (child is not MeshInstance3D mesh) continue;
