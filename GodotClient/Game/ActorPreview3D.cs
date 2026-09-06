@@ -1,4 +1,5 @@
 using Godot;
+using Starve.Game.V1;
 
 namespace GodotClient.Game;
 
@@ -20,7 +21,7 @@ public enum CharacterPreviewDisplay
 /// 选中节点后改 Kind / PixelSize / Toon 即可，不必运行游戏。
 /// </summary>
 [Tool]
-public partial class ActorPreview3D : Node3D
+public partial class ActorPreview3D : Node3D, IAnimatedActor3D
 {
 	private CharacterPreviewKind _kind = CharacterPreviewKind.Fishman;
 	private CharacterPreviewDisplay _display = CharacterPreviewDisplay.SpriteArt;
@@ -33,6 +34,10 @@ public partial class ActorPreview3D : Node3D
 	private float _rim = 0.35f;
 	private PackedScene? _modelOverride;
 	private bool _rebuildQueued;
+	private bool _moving;
+	private bool _actionActive;
+	private bool _dead;
+	private float _animSpeedMul = 1f;
 
 	[Export]
 	public CharacterPreviewKind Kind
@@ -61,6 +66,20 @@ public partial class ActorPreview3D : Node3D
 		get => _extraScale;
 		set { _extraScale = Mathf.Max(0.05f, value); RequestRebuild(); }
 	}
+
+	public float ModelScale
+	{
+		get => ExtraScale;
+		set => ExtraScale = value;
+	}
+
+	public float AnimSpeedMul
+	{
+		get => _animSpeedMul;
+		set => _animSpeedMul = Mathf.Max(0.05f, value);
+	}
+
+	public bool ApplyToon { get; set; }
 
 	[Export]
 	public bool Billboard
@@ -121,6 +140,52 @@ public partial class ActorPreview3D : Node3D
 		}
 		var mat = ActorMesh3D.MaterialOf(GetNodeOrNull<Node3D>("Visual") ?? this);
 		if (mat is not null) ToonMaterials.SetFlash(mat, on);
+	}
+
+	public void SetLocomotion(bool moving, float tilesPerSec = 10f)
+	{
+		_moving = moving;
+		if (_actionActive || _dead) return;
+		PlaySprite(moving && HasSpriteAnim("walk") ? "walk" : "idle", true,
+			moving ? Mathf.Clamp(tilesPerSec / 6f, 0.7f, 2.2f) * _animSpeedMul : _animSpeedMul);
+	}
+
+	public void PlayAction(ActionKind kind)
+	{
+		if (_dead) return;
+		_actionActive = true;
+		var clip = kind is ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Pick
+			? "attack"
+			: "idle";
+		PlaySprite(HasSpriteAnim(clip) ? clip : "idle", false, _animSpeedMul);
+	}
+
+	public void FinishAction()
+	{
+		_actionActive = false;
+		if (!_dead) SetLocomotion(_moving);
+	}
+
+	public void CancelAction()
+	{
+		_actionActive = false;
+		if (!_dead) SetLocomotion(_moving);
+	}
+
+	public void PlayHit()
+	{
+		if (_dead) return;
+		if (HasSpriteAnim("hit"))
+			PlaySprite("hit", false, 1.2f * _animSpeedMul);
+		else
+			SetFlash(true);
+	}
+
+	public void PlayDeath()
+	{
+		_dead = true;
+		_actionActive = false;
+		PlaySprite("idle", false, 0f);
 	}
 
 	private void RequestRebuild()
@@ -185,6 +250,11 @@ public partial class ActorPreview3D : Node3D
 			sprite.Animation = "idle";
 			sprite.Play();
 		}
+		sprite.AnimationFinished += () =>
+		{
+			if (_dead || _actionActive) return;
+			SetLocomotion(_moving);
+		};
 	}
 
 	private void BuildToon(Node3D visual)
@@ -217,4 +287,20 @@ public partial class ActorPreview3D : Node3D
 		CharacterPreviewKind.Lizard => 9f,
 		_ => 10f,
 	};
+
+	private bool HasSpriteAnim(string name)
+	{
+		var sprite = GetNodeOrNull<AnimatedSprite3D>("Visual/Sprite");
+		return sprite?.SpriteFrames is not null && sprite.SpriteFrames.HasAnimation(name);
+	}
+
+	private void PlaySprite(string name, bool loop, float speed)
+	{
+		var sprite = GetNodeOrNull<AnimatedSprite3D>("Visual/Sprite");
+		if (sprite?.SpriteFrames is null || !sprite.SpriteFrames.HasAnimation(name)) return;
+		sprite.SpriteFrames.SetAnimationLoopMode(name, loop ? SpriteFrames.LoopMode.Linear : SpriteFrames.LoopMode.None);
+		if (sprite.Animation != name) sprite.Play(name);
+		else if (!sprite.IsPlaying() && speed > 0.01f) sprite.Play();
+		sprite.SpeedScale = speed;
+	}
 }

@@ -227,10 +227,12 @@ public partial class GameRoot : Node
 					TerrainRoot = _world3D!.Terrain,
 				};
 				_uiRoot.AddChild(_toonPanel);
+				_toonPanel.Visible = false;
 				_actorPanel = new ActorTunePanel { World = _world3D };
 				_actorPanel.MoveSpeedChanged = ApplyDebugMoveSpeed;
 				_uiRoot.AddChild(_actorPanel);
-				_hud.Log("调试面板：F1 Toon，F2 缩放/速度/光雾；点选模型后拖滑条");
+				_actorPanel.Visible = false;
+				_hud.Log("调试面板：F1 Toon，F2 表现，默认关闭（打开才占 draw call）");
 			}
 
 			try
@@ -243,12 +245,20 @@ public partial class GameRoot : Node
 				_perf = null;
 			}
 			_perfPanel = new PerfPanel();
+			_perfPanel.TerrainToggled = on =>
+			{
+				if (_world3D is not null) _world3D.Terrain.Visible = on;
+			};
+			_perfPanel.CloudsToggled = on => _world3D?.SetCloudsVisible(on);
+			_perfPanel.PlantsToggled = on => _world3D?.Entities.SetPlantsVisible(on);
+			_perfPanel.GlowToggled = on => _world3D?.SetGlowEnabled(on);
 			_uiRoot.AddChild(_perfPanel);
+			_perfPanel.Visible = false;
 			_perfPanel.Bind(_perf);
 			if (_perf?.Url is { } perfUrl)
-				_hud.Log($"性能：F3 面板 · 网页 {perfUrl} · 日志 {_perf.LogPath}");
+				_hud.Log($"性能：F3 打开面板 · 网页 {perfUrl} · 日志 {_perf.LogPath}");
 			else
-				_hud.Log("性能：F3 面板（本局未写日志）");
+				_hud.Log("性能：F3 打开面板（本局未写日志）");
 		}
 		catch (Exception ex)
 		{
@@ -774,6 +784,8 @@ public partial class GameRoot : Node
 			var mv = view.Get("Moveable", Moveable.Parser);
 			var fx = pos.X + (float)(mv?.SubX ?? 0);
 			var fy = pos.Y + (float)(mv?.SubY ?? 0);
+			if (mv is not null)
+				_world3D?.Entities.SetMoveSpeed(id, (float)mv.EffectiveSpeed);
 			if (id == _ownId)
 			{
 				// 自己的位置走本地预测 + 服务端校正，不进插值缓冲
@@ -1102,6 +1114,7 @@ public partial class GameRoot : Node
 				}
 				_client.Commands.Pickup(id);
 				_sfx?.Play("sfx.gather.pickup");
+				_worldRenderer?.PlayLocalAction(_ownId, ActionKind.Pick);
 				break;
 			case Intent.Attack:
 				if (view.Get("Health", Health.Parser) is null ||
@@ -1504,11 +1517,11 @@ public partial class GameRoot : Node
 		if (key.Pressed)
 		{
 			if (_render3D && name == "F1" && _toonPanel is not null)
-				_toonPanel.Visible = !_toonPanel.Visible;
+				_toonPanel.Toggle();
 			if (_render3D && name == "F2" && _actorPanel is not null)
-				_actorPanel.Visible = !_actorPanel.Visible;
+				_actorPanel.Toggle();
 			if (name == "F3" && _perfPanel is not null)
-				_perfPanel.Visible = !_perfPanel.Visible;
+				_perfPanel.Toggle();
 			if (!_render3D)
 			{
 				if (name == "Q") RotateView(-Mathf.Pi / 4);

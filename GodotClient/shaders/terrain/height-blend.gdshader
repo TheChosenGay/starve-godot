@@ -1,13 +1,15 @@
 shader_type spatial;
 render_mode cull_back, specular_disabled, shadows_disabled;
 
-// Poly Haven albedo + displacement。COLOR = (草, 土, 岩, 雪)，UV2 = (AO, 水)。
+// Freestylized albedo + height。COLOR = (草, 土, 岩, 雪)，UV2 = (AO, 水)。
 uniform sampler2D uGrassAlbedo : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D uGrassHeight : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform sampler2D uDirtAlbedo : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D uDirtHeight : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform sampler2D uRockAlbedo : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D uRockHeight : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform sampler2D uSnowAlbedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D uSnowHeight : hint_default_white, filter_linear_mipmap, repeat_enable;
 
 uniform float uWorldTiling = 0.22;
 uniform float uHeightSharpness : hint_range(0.04, 0.8) = 0.22;
@@ -116,9 +118,11 @@ void fragment() {
 	vec3 grass = texture(uGrassAlbedo, uv).rgb;
 	vec3 dirt = texture(uDirtAlbedo, uv).rgb;
 	vec3 rock = texture(uRockAlbedo, uv).rgb;
+	vec3 snow = texture(uSnowAlbedo, uv).rgb;
 	float hg = texture(uGrassHeight, uv).r;
 	float hd = texture(uDirtHeight, uv).r;
 	float hr = texture(uRockHeight, uv).r;
+	float hs = texture(uSnowHeight, uv).r;
 
 	float slope = clamp(1.0 - world_normal.y, 0.0, 1.0);
 	float rock_w = max(COLOR.b, smoothstep(0.14, 0.55, slope) * uSlopeRock);
@@ -136,7 +140,9 @@ void fragment() {
 
 	vec3 water = vec3(0.16, 0.40, 0.68) * (0.88 + 0.12 * noise(world_pos * 2.4));
 	blended = mix(blended, water, UV2.y);
-	blended = mix(blended, vec3(0.86, 0.90, 0.94), COLOR.a * 0.88);
+	float snow_transition = 1.0 - abs(COLOR.a * 2.0 - 1.0);
+	float snow_edge = clamp(COLOR.a + (hs - 0.5) * 0.18 * snow_transition, 0.0, 1.0);
+	blended = mix(blended, snow, smoothstep(0.0, 1.0, snow_edge));
 	blended *= mix(0.58, 1.0, UV2.x);
 
 	float cs = cloud_shade(world_pos);

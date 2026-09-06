@@ -24,7 +24,7 @@ public partial class ToonTunePanel : Control
 
     private readonly Dictionary<ulong, ToonStyle> _overrides = new();
     private readonly CheckButton _pick = new() { Text = "点选物体调参（已开）", ButtonPressed = true };
-    private PanelContainer? _frame;
+    private DebugPanelChrome? _chrome;
     private readonly OptionButton _scope = new();
     private readonly Label _target = new() { Text = "目标：已选物体（先点选）" };
     private readonly CheckButton _hideOutline = new() { Text = "关掉轮廓（地形无效）" };
@@ -39,41 +39,32 @@ public partial class ToonTunePanel : Control
     private HSlider? _fill;
     private HSlider? _rim;
     private HSlider? _outline;
-    private ColorPickerButton? _shadow;
-    private ColorPickerButton? _outlineColor;
+    private DebugColorSwatch? _shadow;
+    private DebugColorSwatch? _outlineColor;
     private HSlider? _threshold;
     private HSlider? _shadowStrength;
     private HSlider? _specThreshold;
     private HSlider? _specStrength;
-    private ColorPickerButton? _specColor;
+    private DebugColorSwatch? _specColor;
     private HSlider? _rimWidth;
     private HSlider? _rimPower;
     private HSlider? _rimStrength;
-    private ColorPickerButton? _rimColor;
+    private DebugColorSwatch? _rimColor;
     private CheckButton _rimLitOnly = new() { Text = "边缘光只在受光面" };
 
     public override void _Ready()
     {
         Name = "ToonTune";
-        SetAnchorsPreset(LayoutPreset.TopRight);
-        OffsetLeft = -312;
-        OffsetTop = 12;
-        OffsetRight = -12;
-        OffsetBottom = 640;
-        MouseFilter = MouseFilterEnum.Ignore;
-        Theme = HudTheme.Create();
-
-        _frame = new PanelContainer { MouseFilter = MouseFilterEnum.Stop };
-        _frame.SetAnchorsPreset(LayoutPreset.FullRect);
-        AddChild(_frame);
-
-        var scroll = new ScrollContainer { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
-        _frame.AddChild(scroll);
+        _chrome = new DebugPanelChrome(this, "Toon  F1", DebugPanelChrome.Corner.TopRight, startCollapsed: true);
+        var scroll = new ScrollContainer
+        {
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            CustomMinimumSize = new Vector2(288, 520),
+        };
+        _chrome.Body.AddChild(scroll);
         var box = new VBoxContainer();
         scroll.AddChild(box);
         box.AddThemeConstantOverride("separation", 6);
-
-        box.AddChild(new Label { Text = "Toon 调参  F1 显隐" });
         box.AddChild(new Label
         {
             Text = "范围：已选物体 / 全部已套用 Toon 的角色 / 地形。点模型后点「套用 Toon」。两套 shader 可切换，不会删掉原来的色阶 Toon。",
@@ -155,10 +146,13 @@ public partial class ToonTunePanel : Control
             Text = "点选开启时左键选模型（脚底黄环=已选），不会攻击。Toon 只作用在点过「套用 Toon」的物体上。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         });
+        _chrome.Fit();
     }
 
+    public void Toggle() => _chrome?.ToggleVisible();
+
     public bool Hits(Vector2 screen) =>
-        Visible && _frame is { } frame && frame.GetGlobalRect().HasPoint(screen);
+        Visible && _chrome is { } chrome && chrome.Frame.GetGlobalRect().HasPoint(screen);
 
     public void BindSelected(ulong id, Node3D node)
     {
@@ -375,20 +369,15 @@ public partial class ToonTunePanel : Control
         return slider;
     }
 
-    private ColorPickerButton AddColor(VBoxContainer box, string title, Color color)
+    private DebugColorSwatch AddColor(VBoxContainer box, string title, Color color)
     {
         var row = new HBoxContainer();
         row.AddChild(new Label { Text = title, CustomMinimumSize = new Vector2(86, 0) });
-        var picker = new ColorPickerButton
-        {
-            Color = color,
-            CustomMinimumSize = new Vector2(140, 28),
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-        };
-        picker.ColorChanged += _ => Push();
-        row.AddChild(picker);
+        var swatch = new DebugColorSwatch { Color = color };
+        swatch.ColorChanged += _ => Push();
+        row.AddChild(swatch);
         box.AddChild(row);
-        return picker;
+        return swatch;
     }
 
     private static void CopyInto(ToonStyle dst, ToonStyle src)

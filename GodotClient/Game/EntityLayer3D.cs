@@ -21,6 +21,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     private readonly Dictionary<ulong, float> _heightSm = new();
     private readonly Dictionary<ulong, long> _flashUntil = new();
     private readonly Dictionary<ulong, long> _footstepAt = new();
+    private readonly Dictionary<ulong, float> _moveSpeed = new();
     private readonly ActionPresentationController _actions;
     private readonly ImpactPresentationController _impacts;
     private SfxService? _sfx;
@@ -32,6 +33,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     private float _ownFaceY;
     private float _ownMoveSpeed = OwnMovementSim.DefaultTilesPerSec;
     private long _lastNow;
+    private bool _plantsVisible = true;
 
     public EntityLayer3D()
     {
@@ -63,6 +65,9 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     public void SetOwnMoveSpeed(float tilesPerSec) =>
         _ownMoveSpeed = MathF.Max(0f, tilesPerSec);
+
+    public void SetMoveSpeed(ulong id, float tilesPerSec) =>
+        _moveSpeed[id] = MathF.Max(0f, tilesPerSec);
 
     public IEnumerable<Node3D> Visuals => _nodes.Values;
     public IReadOnlyDictionary<ulong, Node3D> VisualsById => _nodes;
@@ -98,6 +103,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 ApplyStyle(id, node, style);
             }
             node.Visible = !EntityVisual.IsDepletedFlower(view);
+            if (!_plantsVisible && IsPlant(node))
+                node.Visible = false;
+            // 生物尸体服务端还留约 1 分钟；3D 里非玩家死后立刻藏，掉落是单独的 Loot 实体。
+            if (view.Components.ContainsKey("Dead") &&
+                view.Get("Player", Player.Parser) is null)
+                node.Visible = false;
             SyncAction(id, view);
         }
     }
@@ -152,17 +163,15 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             FaceFromIntentOrMotion(id, node, dx, dy, moving, deltaMs);
             _lastPos[id] = (p.X, p.Y);
 
-            if (node is PigmanActor3D pigman)
-                pigman.SetLocomotion(moving, id == _ownId ? _ownMoveSpeed : OwnMovementSim.DefaultTilesPerSec);
+            if (node is IAnimatedActor3D actor)
+                actor.SetLocomotion(moving, SpeedOf(id));
 
             if (_flashUntil.TryGetValue(id, out var until))
             {
                 var flashing = now < until;
                 if (!flashing) _flashUntil.Remove(id);
-                if (node is ActorPreview3D preview)
-                    preview.SetFlash(flashing);
-                else if (node is PigmanActor3D pig)
-                    pig.SetFlash(flashing);
+                if (node is IAnimatedActor3D flashActor)
+                    flashActor.SetFlash(flashing);
                 else if (node is TreeActor3D tree)
                     tree.SetFlash(flashing);
                 else if (_mats.TryGetValue(id, out var mat))
@@ -187,6 +196,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     public void PredictAction(ulong id, ActionKind kind, InputCommandRef command) =>
         _actions.Predict(id, kind, command);
 
+    public void PlayLocalAction(ulong id, ActionKind kind)
+    {
+        if (_nodes.TryGetValue(id, out var node) && node is IAnimatedActor3D actor)
+            actor.PlayAction(kind);
+    }
+
     public void CancelPredictedAction(ulong id, ulong requestId) =>
         _actions.CancelPrediction(id, requestId);
 
@@ -206,7 +221,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     void IActionPresentationSink.Apply(ulong entityId, ActionKind kind)
     {
-        Flash(entityId);
+        if (_nodes.TryGetValue(entityId, out var node) && node is IAnimatedActor3D actor)
+            actor.PlayAction(kind);
         switch (kind)
         {
             case ActionKind.Attack:
@@ -223,22 +239,36 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         }
     }
 
-    void IActionPresentationSink.Finish(ulong entityId) { }
-    void IActionPresentationSink.Cancel(ulong entityId) { }
-    void IActionPresentationSink.Death(ulong entityId) { }
+    void IActionPresentationSink.Finish(ulong entityId)
+    {
+        if (_nodes.TryGetValue(entityId, out var node) && node is IAnimatedActor3D actor)
+            actor.FinishAction();
+    }
+
+    void IActionPresentationSink.Cancel(ulong entityId)
+    {
+        if (_nodes.TryGetValue(entityId, out var node) && node is IAnimatedActor3D actor)
+            actor.CancelAction();
+    }
+
+    void IActionPresentationSink.Death(ulong entityId)
+    {
+        if (_nodes.TryGetValue(entityId, out var node) && node is IAnimatedActor3D actor)
+            actor.PlayDeath();
+    }
 
     void IImpactPresentationSink.PlayHit(ulong targetEntity)
     {
         Flash(targetEntity);
+        if (_nodes.TryGetValue(targetEntity, out var node) && node is IAnimatedActor3D actor)
+            actor.PlayHit();
         _sfx?.Play("sfx.combat.hit.flesh");
     }
 
     void IImpactPresentationSink.CorrectPredictedHit(ulong targetEntity, CombatImpactResult result)
     {
-        if (_nodes.TryGetValue(targetEntity, out var node) && node is ActorPreview3D preview)
-            preview.SetFlash(false);
-        else if (_nodes.TryGetValue(targetEntity, out var pigNode) && pigNode is PigmanActor3D pig)
-            pig.SetFlash(false);
+        if (_nodes.TryGetValue(targetEntity, out var node) && node is IAnimatedActor3D actor)
+            actor.SetFlash(false);
         else if (_nodes.TryGetValue(targetEntity, out var treeNode) && treeNode is TreeActor3D tree)
             tree.SetFlash(false);
         else if (_mats.TryGetValue(targetEntity, out var mat))
@@ -294,9 +324,22 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         return node;
     }
 
+    public void SetPlantsVisible(bool visible)
+    {
+        _plantsVisible = visible;
+        foreach (var node in _nodes.Values)
+        {
+            if (!IsPlant(node)) continue;
+            node.Visible = visible;
+        }
+    }
+
+    private static bool IsPlant(Node3D node) =>
+        node is TreeActor3D or GhibliPlantActor3D;
+
     private void ApplyStyle(ulong id, Node3D node, EntityStyle style)
     {
-        if (node is ActorPreview3D or PigmanActor3D or AlchemyEngine3D or TreeActor3D or GhibliPlantActor3D) return;
+        if (node is IAnimatedActor3D or AlchemyEngine3D or TreeActor3D or GhibliPlantActor3D) return;
         if (node.GetNodeOrNull<FireFlame3D>("Flame") is not null) return;
         ActorMesh3D.ApplyStyle(node, style);
         if (_mats.TryGetValue(id, out var mat) && !_flashUntil.ContainsKey(id))
@@ -326,7 +369,15 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _heightSm.Remove(id);
         _flashUntil.Remove(id);
         _footstepAt.Remove(id);
+        _moveSpeed.Remove(id);
     }
+
+    private float SpeedOf(ulong id) =>
+        id == _ownId
+            ? _ownMoveSpeed
+            : _moveSpeed.TryGetValue(id, out var speed)
+                ? speed
+                : OwnMovementSim.DefaultTilesPerSec;
 
     private const float TurnRadiansPerSec = 10f;
 

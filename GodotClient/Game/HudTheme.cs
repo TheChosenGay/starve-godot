@@ -95,6 +95,18 @@ public static class HudTheme
         return theme;
     }
 
+    /// <summary>调试面板：去掉 Label 描边/阴影，避免每条字 3 次 draw。</summary>
+    public static Theme CreateDebug()
+    {
+        var theme = Create();
+        theme.SetConstant("outline_size", "Label", 0);
+        theme.SetConstant("shadow_offset_x", "Label", 0);
+        theme.SetConstant("shadow_offset_y", "Label", 0);
+        theme.SetColor("font_shadow_color", "Label", Colors.Transparent);
+        theme.SetConstant("outline_size", "Button", 0);
+        return theme;
+    }
+
     public static StyleBoxFlat MakePanelStyle(Color bg, Color border)
     {
         var box = MakeFlat(bg, border, 1, 8);

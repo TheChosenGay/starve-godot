@@ -126,6 +126,8 @@ public static class ToonMaterials
         mat.SetShaderParameter("uDirtHeight", TerrainHaven.Load(TerrainHaven.DirtHeight, new Color(0.45f, 0.45f, 0.45f)));
         mat.SetShaderParameter("uRockAlbedo", TerrainHaven.Load(TerrainHaven.RockAlbedo, new Color(0.62f, 0.58f, 0.52f)));
         mat.SetShaderParameter("uRockHeight", TerrainHaven.Load(TerrainHaven.RockHeight, new Color(0.5f, 0.5f, 0.5f)));
+        mat.SetShaderParameter("uSnowAlbedo", TerrainHaven.Load(TerrainHaven.SnowAlbedo, new Color(0.86f, 0.9f, 0.94f)));
+        mat.SetShaderParameter("uSnowHeight", TerrainHaven.Load(TerrainHaven.SnowHeight, new Color(0.5f, 0.5f, 0.5f)));
         mat.SetShaderParameter("uWorldTiling", MapMeshBuilder.WorldTiling);
         mat.SetShaderParameter("uHeightSharpness", TerrainHaven.DefaultHeightSharpness);
         mat.SetShaderParameter("uSlopeRock", TerrainHaven.DefaultSlopeRock);
@@ -316,9 +318,9 @@ public static class ToonMaterials
     {
         if (!IsLive(root) || root is TreeActor3D)
             return;
-        if (root is PigmanActor3D pig)
+        if (root is IAnimatedActor3D actor)
         {
-            pig.ApplyToon = true;
+            actor.ApplyToon = true;
             return;
         }
         if (root is AlchemyEngine3D engine)
@@ -334,9 +336,9 @@ public static class ToonMaterials
     {
         if (!IsLive(root) || root is TreeActor3D)
             return;
-        if (root is PigmanActor3D pig)
+        if (root is IAnimatedActor3D actor)
         {
-            pig.ApplyToon = false;
+            actor.ApplyToon = false;
             return;
         }
         if (root is AlchemyEngine3D engine)

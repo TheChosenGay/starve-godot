@@ -30,6 +30,7 @@ public interface IWorldRenderer
         System.Numerics.Vector2? ownPos = null);
 
     void PredictAction(ulong id, ActionKind kind, InputCommandRef command);
+    void PlayLocalAction(ulong id, ActionKind kind);
     void CancelPredictedAction(ulong id, ulong requestId);
     void CancelActionForMovement(ulong id);
     void CancelActionLocally(ulong id);

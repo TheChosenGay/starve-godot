@@ -78,6 +78,7 @@ public partial class TreeActor3D : Node3D
 
         var model = packed.Instantiate<Node3D>();
         visual.AddChild(model);
+        GhibliPlantShading.Apply(model);
         _windPlayer = FindAnimationPlayer(model);
         PlayWind();
     }

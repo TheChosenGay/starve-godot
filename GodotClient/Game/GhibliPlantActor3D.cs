@@ -69,6 +69,7 @@ public partial class GhibliPlantActor3D : Node3D
         var model = packed.Instantiate<Node3D>();
         model.Rotation = new Vector3(0f, VariantYaw(), 0f);
         visual.AddChild(model);
+        GhibliPlantShading.Apply(model);
         _windPlayer = FindAnimationPlayer(model);
         PlayWind();
     }
@@ -111,4 +112,28 @@ public partial class GhibliPlantActor3D : Node3D
         PixelSize = 0.01f,
         Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
     };
+}
+
+/// <summary>
+/// Godot 导入 glTF 时默认不用顶点色；叶子若只有 COLOR_0 会变成白/灰。
+/// 有 albedo 贴图就用贴图；没有则打开顶点色。
+/// </summary>
+public static class GhibliPlantShading
+{
+    public static void Apply(Node root)
+    {
+        foreach (var child in root.FindChildren("*", "MeshInstance3D", true, false))
+        {
+            if (child is not MeshInstance3D mesh) continue;
+            mesh.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            var surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+            for (var i = 0; i < surfaces; i++)
+            {
+                if (mesh.GetActiveMaterial(i) is not StandardMaterial3D src) continue;
+                var mat = (StandardMaterial3D)src.Duplicate();
+                mat.VertexColorUseAsAlbedo = mat.AlbedoTexture is null;
+                mesh.SetSurfaceOverrideMaterial(i, mat);
+            }
+        }
+    }
 }

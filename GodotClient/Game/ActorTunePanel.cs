@@ -19,7 +19,7 @@ public partial class ActorTunePanel : Control
     private readonly Label _target = new() { Text = "目标：已选物体（先点选）" };
     private readonly CheckButton _fog = new() { Text = "深度雾（已关）", ButtonPressed = false };
     private readonly CheckButton _skyAmbient = new() { Text = "天空环境光（已开）", ButtonPressed = true };
-    private PanelContainer? _frame;
+    private DebugPanelChrome? _chrome;
     private Node3D? _selectedNode;
     private ulong _selectedId;
     private bool _syncing;
@@ -47,25 +47,16 @@ public partial class ActorTunePanel : Control
     public override void _Ready()
     {
         Name = "ActorTune";
-        SetAnchorsPreset(LayoutPreset.TopLeft);
-        OffsetLeft = 12;
-        OffsetTop = 12;
-        OffsetRight = 324;
-        OffsetBottom = 720;
-        MouseFilter = MouseFilterEnum.Ignore;
-        Theme = HudTheme.Create();
-
-        _frame = new PanelContainer { MouseFilter = MouseFilterEnum.Stop };
-        _frame.SetAnchorsPreset(LayoutPreset.FullRect);
-        AddChild(_frame);
-
-        var scroll = new ScrollContainer { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
-        _frame.AddChild(scroll);
+        _chrome = new DebugPanelChrome(this, "表现  F2", DebugPanelChrome.Corner.TopLeft, startCollapsed: true);
+        var scroll = new ScrollContainer
+        {
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            CustomMinimumSize = new Vector2(300, 560),
+        };
+        _chrome.Body.AddChild(scroll);
         var box = new VBoxContainer();
         scroll.AddChild(box);
         box.AddThemeConstantOverride("separation", 6);
-
-        box.AddChild(new Label { Text = "表现调参  F2 显隐" });
         box.AddChild(new Label
         {
             Text = "点模型改缩放/动画。移动速度只作用于自己。俯仰越小越不像从天上往下看。",
@@ -125,10 +116,13 @@ public partial class ActorTunePanel : Control
         _terrainRebuild = new Timer { OneShot = true, WaitTime = 0.18 };
         _terrainRebuild.Timeout += () => World?.RebuildTerrain();
         AddChild(_terrainRebuild);
+        _chrome.Fit();
     }
 
+    public void Toggle() => _chrome?.ToggleVisible();
+
     public bool Hits(Vector2 screen) =>
-        Visible && _frame is { } frame && frame.GetGlobalRect().HasPoint(screen);
+        Visible && _chrome is { } chrome && chrome.Frame.GetGlobalRect().HasPoint(screen);
 
     public void BindSelected(ulong id, Node3D node)
     {
@@ -240,15 +234,15 @@ public partial class ActorTunePanel : Control
 
     private static float ReadScale(Node3D node)
     {
-        if (node is PigmanActor3D pig) return pig.ModelScale;
+        if (node is IAnimatedActor3D actor) return actor.ModelScale;
         if (node is TreeActor3D tree) return tree.ModelScale;
         return ActorMesh3D.TuneScaleOf(node);
     }
 
     private static void ApplyScale(Node3D node, float scale)
     {
-        if (node is PigmanActor3D pig)
-            pig.ModelScale = scale;
+        if (node is IAnimatedActor3D actor)
+            actor.ModelScale = scale;
         else if (node is TreeActor3D tree)
             tree.ModelScale = scale;
         else
@@ -256,13 +250,13 @@ public partial class ActorTunePanel : Control
     }
 
     private static float ReadAnimMul(Node3D node) =>
-        node is PigmanActor3D pig ? pig.AnimSpeedMul : 1f;
+        node is IAnimatedActor3D actor ? actor.AnimSpeedMul : 1f;
 
     private static void ApplyAnim(Node3D node, float mul)
     {
-        if (node is PigmanActor3D pig)
+        if (node is IAnimatedActor3D actor)
         {
-            pig.AnimSpeedMul = mul;
+            actor.AnimSpeedMul = mul;
             return;
         }
         foreach (var child in node.FindChildren("*", "AnimationPlayer", true, false))

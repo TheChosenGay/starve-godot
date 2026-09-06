@@ -209,6 +209,10 @@ public partial class World3DView : Node3D
         ApplyCycle();
     }
 
+    public void SetCloudsVisible(bool visible) => _clouds.Visible = visible;
+
+    public void SetGlowEnabled(bool enabled) => _env.GlowEnabled = enabled;
+
     public void SyncPointLights(
         IReadOnlyList<(float X, float Y, float H)> fires,
         float ownX,

@@ -233,6 +233,12 @@ public partial class EntityLayer : Node2D, IWorldRenderer, IActionPresentationSi
 	public void PredictAction(ulong id, ActionKind kind, InputCommandRef command) =>
 		_actions.Predict(id, kind, command);
 
+	public void PlayLocalAction(ulong id, ActionKind kind)
+	{
+		if (_rigs.TryGetValue(id, out var rig))
+			rig.Apply(kind);
+	}
+
 	public void CancelPredictedAction(ulong id, ulong requestId) =>
 		_actions.CancelPrediction(id, requestId);
 
