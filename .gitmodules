@@ -1,0 +1,3 @@
+[submodule "GodotClient/asset-starve"]
+	path = GodotClient/asset-starve
+	url = git@github.com:TheChosenGay/asset-starve.git
