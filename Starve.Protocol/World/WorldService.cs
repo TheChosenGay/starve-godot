@@ -14,16 +14,31 @@ public sealed record WeatherSummary(
     float WindDirY,
     float WindSpeed);
 
-/// <summary>实体视图：entityId + 组件原始字节（按名懒解析）。</summary>
+/// <summary>实体视图：entityId + 组件原始字节（按名懒解析）+ 每个组件"最后到达的世界 tick"。</summary>
 public sealed class EntityView
 {
     public ulong EntityId { get; }
     public System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Components { get; } = new();
 
+    /// <summary>
+    /// 组件名 → 最后一次真正被服务端下发的世界 tick。
+    ///
+    /// 为什么需要它：增量快照只带**脏**组件。玩家停下后服务端 MoveSystem 提前 return，
+    /// 不再标脏 Position/Moveable，于是这两个组件会一直停留在"停下那一刻"的值——
+    /// 数据本身是旧的，但每次增量都会让 Revision +1。校正逻辑如果只看"有没有值"，
+    /// 就会拿着这份冻结的旧位置反复收敛，表现为停下后回拉抖动。
+    /// 用这个 tick 就能判断"这份位置是新鲜的，还是陈旧快照"。
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, long> ComponentTicks { get; } = new();
+
     public EntityView(ulong entityId) => EntityId = entityId;
 
     public T? Get<T>(string component, MessageParser<T> parser) where T : class, IMessage<T> =>
         Components.TryGetValue(component, out var data) ? parser.ParseFrom(data) : null;
+
+    /// <summary>该组件最后一次下发的世界 tick；从未收到返回 -1。</summary>
+    public long ComponentTick(string component) =>
+        ComponentTicks.TryGetValue(component, out var tick) ? tick : -1;
 }
 
 /// <summary>世界数据：消费全量快照 + 每 tick 增量，维护本地权威实体表（阶段 0 最小实现）。</summary>
@@ -88,7 +103,7 @@ public sealed class WorldService
             if (snap.InputEpoch == 0) return;
             ResetEventScope();
             _entities.Clear();
-            foreach (var es in snap.Entities) Add(es);
+            foreach (var es in snap.Entities) Add(es, (long)snap.Tick);
             ApplyWorldState(
                 snap.DayCycle, snap.Weather, snap.Tick, snap.InputEpoch, snap.LastAcceptedSeq);
             _snapshotReady.TrySetResult();
@@ -99,7 +114,7 @@ public sealed class WorldService
             var delta = SnapshotDelta.Parser.ParseFrom(msg.Data);
             if (InputEpoch != 0 && delta.InputEpoch != InputEpoch) return;
             if (delta.Tick != 0 && WorldTick != 0 && delta.Tick < (ulong)WorldTick) return;
-            foreach (var es in delta.Entities) Add(es);
+            foreach (var es in delta.Entities) Add(es, (long)delta.Tick);
             foreach (var id in delta.RemovedEntities) _entities.TryRemove(id, out _);
             foreach (var rc in delta.RemovedComponents)
             {
@@ -156,7 +171,7 @@ public sealed class WorldService
         InputAcknowledged?.Invoke(inputEpoch, lastAcceptedSeq, WorldTick);
     }
 
-    private void Add(EntityState es)
+    private void Add(EntityState es, long serverTick)
     {
         // 增量只带 dirty 组件：合并进已有视图，绝不整体替换（否则其他组件被冲掉）
         if (!_entities.TryGetValue(es.EntityId, out var view))
@@ -166,6 +181,8 @@ public sealed class WorldService
         foreach (var c in es.Components)
         {
             view.Components[c.Component] = c.Data.ToByteArray();
+            // 打上"这一份值是哪一 tick 下发的"：陈旧判定靠它，见 EntityView.ComponentTicks。
+            view.ComponentTicks[c.Component] = serverTick;
         }
         _entities[es.EntityId] = view;
     }

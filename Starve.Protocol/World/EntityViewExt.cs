@@ -11,4 +11,8 @@ public static class EntityViewExt
     /// </summary>
     public static Loot? LootOf(this EntityView view) =>
         view.Get("Lootable", Loot.Parser) ?? view.Get("Loot", Loot.Parser);
+
+    /// <summary>该实体是否带某个组件（按名判断，不解析内容）。</summary>
+    public static bool Has(this EntityView view, string component) =>
+        view.Components.ContainsKey(component);
 }

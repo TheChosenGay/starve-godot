@@ -127,4 +127,70 @@ public sealed class OwnMovementSimTests
         Assert.Equal(12f, sim.Position.Y, 3);
         Assert.Equal(1, sim.Diagnostics.HardSnaps);
     }
+
+    // 停下抖动回归锁：停下后服务端不再标脏 Position/Moveable，快照值会一直冻结在
+    // 停下那一刻。客户端若每次都拿这份旧值收敛，就会"停下后被反复回拉"。
+    // 同一 tick（或更旧）的停止快照只应生效一次。
+    [Fact]
+    public void StaleStoppedSnapshotIsAppliedOnlyOnce()
+    {
+        var sim = new OwnMovementSim((_, _) => true);
+        sim.SnapTo(5.4f, 3f);
+
+        // 第一个停止快照（tick=100）：正常收敛一次
+        sim.Reconcile(5f, 3f, serverStopped: true, serverTick: 100);
+        var afterFirst = sim.Position.X;
+        Assert.Equal(1, sim.Diagnostics.SoftCorrections);
+        Assert.InRange(afterFirst, 5f, 5.4f);
+
+        // 同一份冻结快照又来 20 次：不得再产生任何移动/校正
+        for (var i = 0; i < 20; i++)
+        {
+            sim.Reconcile(5f, 3f, serverStopped: true, serverTick: 100);
+        }
+
+        Assert.Equal(afterFirst, sim.Position.X, 6);
+        Assert.Equal(1, sim.Diagnostics.SoftCorrections); // 仍然只有第一次
+    }
+
+    // 更旧的快照同样不能把角色往回拉。
+    [Fact]
+    public void OlderSnapshotIsIgnored()
+    {
+        var sim = new OwnMovementSim((_, _) => true);
+        sim.SnapTo(5f, 3f);
+
+        sim.Reconcile(6f, 3f, serverStopped: false, serverTick: 200);
+        var after = sim.Position.X;
+
+        // tick=150 的旧位置回来了：忽略
+        sim.Reconcile(5f, 3f, serverStopped: false, serverTick: 150);
+
+        Assert.Equal(after, sim.Position.X, 6);
+    }
+
+    // 停止落定应当一次到位，而不是分多次 20Hz 跳变逼近（渐进正是看得见的抖动）。
+    [Fact]
+    public void StoppedConvergenceSnapsInOneStep()
+    {
+        var sim = new OwnMovementSim((_, _) => true);
+        sim.SnapTo(5.5f, 3f);
+
+        sim.Reconcile(5f, 3f, serverStopped: true, serverTick: 100);
+
+        Assert.Equal(5f, sim.Position.X, 3);
+    }
+
+    // 移动中的新鲜快照仍然照常校正（不能因为防抖把正常校正也关掉）。
+    [Fact]
+    public void FreshMovingSnapshotStillReconciles()
+    {
+        var sim = new OwnMovementSim((_, _) => true);
+        sim.SnapTo(0f, 0f);
+
+        sim.Reconcile(1f, 0f, serverStopped: false, serverTick: 100);
+
+        Assert.Equal(1, sim.Diagnostics.SoftCorrections);
+        Assert.True(sim.Position.X > 0f);
+    }
 }
