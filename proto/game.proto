@@ -80,6 +80,7 @@ enum ActionKind {
   ACTION_KIND_CRAFT = 5;
   ACTION_KIND_SLEEP = 6;
   ACTION_KIND_HAUNT = 7;
+  ACTION_KIND_THROW = 8;
 }
 
 // ActionPhase 是动作时间轴阶段。完成后直接移除 ActionState。
@@ -101,6 +102,14 @@ message ActionState {
   int64 commit_tick = 8;
   int64 end_tick = 9;
   bool uninterruptible = 10;
+  // 投掷（ACTION_KIND_THROW）的目标落点。
+  //
+  // 放在 ActionState 而不是 ControlIntent：动作跨 windup/recovery 两个阶段，
+  // 落点必须**贯穿整个动作**存活（Commit 时才知道要往哪扔），
+  // 而 ControlIntent 在接纳后就被清空了。同时随快照下发，客户端据此画抛物线。
+  bool has_aim = 11;
+  float aim_x = 12;
+  float aim_y = 13;
 }
 
 enum ActionOutcomeResult {
@@ -173,7 +182,23 @@ message WorldEvent {
     CombatImpactEvent impact = 3;
     HealthChangedEvent health_changed = 4;
     ActionOutcome outcome = 5;
+    BlastEvent blast = 6;
   }
+}
+
+// BlastEvent 一次爆炸的**结果**（服务端权威）：在哪炸、多大、谁干的。
+//
+// 职责划分：服务端只确定"范围与作用对象"并广播这个事件；
+// 具体特效（扩散圈、粒子、震屏）全部由客户端负责。
+// 服务端不下发几何细节，客户端也不需要反推伤害——伤害已在同 tick
+// 通过 HealthChanged 逐个下发。
+message BlastEvent {
+  uint64 source_entity = 1; // 投掷者（攻击者）
+  uint64 thrown_entity = 2; // 被投出的实体（0 = 非投掷物，如 Boss 锤地）
+  float x = 3;              // 爆炸中心
+  float y = 4;
+  float radius = 5;         // 影响半径（格）
+  int32 damage = 6;         // 对范围内每个目标造成的伤害（提示用，权威值见 HealthChanged）
 }
 
 message Health {
@@ -245,6 +270,8 @@ enum ItemKind {
   ITEM_KIND_PICKAXE = 101; // 工具（挖掘）
   ITEM_KIND_WOOD_ARMOR = 102; // 护甲（身穿，减伤）
   ITEM_KIND_HELMET = 103;     // 头盔（头戴，减伤）
+  // 可投掷物段 200-299
+  ITEM_KIND_BOMB = 200; // 炸弹（可投掷；落地爆炸。爆炸表现后续完善）
 }
 
 // CreatureKind 生物类型（稳定 ID；配置用名字，内部用枚举）。
@@ -356,6 +383,18 @@ message Creature {
   int32 home_y = 4;
   int32 roam_radius = 5;
   repeated ItemStack drops = 6;      // 旧存档固定掉落；新实体使用 DropSource + 配置表
+  // 直接仇恨：**亲自**攻击过它的实体（0 = 无）。
+  // 规则：不可被传播来的仇恨覆盖；只有"另一个对象亲自攻击了我"才更新。
+  uint64 direct_threat = 7;
+  // 间接仇恨：同伴被打后传播来的目标及其**距离**（越近优先级越高）。
+  // 距离随位置变化重算，所以存的是距离而不是分值。
+  repeated IndirectThreat indirect_threats = 8;
+}
+
+// IndirectThreat 一条间接仇恨：目标 + 当前距离（切比雪夫，格）。
+message IndirectThreat {
+  uint64 entity_id = 1;
+  int32 distance = 2;
 }
 
 // AI 生物行为状态机（idle/chase/attack/flee）+ 受击标记。
@@ -370,6 +409,9 @@ message AI {
   int32 cooldown = 7;                // 攻击冷却剩余 tick
   repeated CreatureKind hostile_kinds = 8; // 视为敌对的生物类型（玩家隐式敌对）
   bool hostile_players = 9;          // 玩家是否视为敌对（false = 友好，不主动攻击玩家）
+  int32 phase = 10;                  // 多阶段 Boss 的当前阶段（0 = 未分阶段）
+  int32 phase2_hp = 11;              // 进入二阶段的血量阈值（0 = 不分阶段）
+  int32 leash = 12;                  // 拴绳半径（格）；0 = 用缺省 4+AOI.Radius
 }
 
 // Weapon 攻击能力（范围/伤害/冷却；生物生成时从模板挂，玩家装备武器后续复用）。
@@ -379,11 +421,47 @@ message Weapon {
   int32 attack_cooldown = 3; // 攻击间隔（tick）
 }
 
+// BehaviorTreeKind 内置行为树种类（见 internal/game/behavior 的工厂函数）。
+// 树定义是静态的、同类生物共享；实体只存"用哪棵" + 各自的运行态。
+enum BehaviorTreeKind {
+  BEHAVIOR_TREE_KIND_UNSPECIFIED = 0;
+  BEHAVIOR_TREE_KIND_PREDATOR = 1; // 掠食者：低血逃 / 攻击 / 追击 / 游荡
+  BEHAVIOR_TREE_KIND_PREY = 2;     // 被动生物：有威胁就逃 / 游荡
+  BEHAVIOR_TREE_KIND_DORMANT = 3;  // 完全被动：只会游荡
+  BEHAVIOR_TREE_KIND_BOSS = 4;     // 多阶段 Boss：投弹 / 嚎叫+闪现+三拳一砸
+}
+
+// BTNodeCursor 组合节点的 Running 游标：该节点当前正在跑第几个子节点。
+// 必须进快照/存档，否则读档后 AI 会从树根重新决策、行为突变。
+message BTNodeCursor {
+  uint32 node_id = 1; // 树内节点 id（构建时按深度优先顺序分配，稳定）
+  int32 child = 2;    // 子节点下标
+}
+
+// BTNodeCounter 节点级计数器（当前只有 Cooldown 装饰器用：剩余冷却 tick）。
+message BTNodeCounter {
+  uint32 node_id = 1;
+  int32 value = 2;
+}
+
+// BehaviorTree 行为树运行态组件：选用哪棵树 + 每个实体各自的运行态。
+// 树的结构不进组件（静态定义），因此对快照体积几乎无影响。
+message BehaviorTree {
+  BehaviorTreeKind kind = 1;
+  repeated BTNodeCursor running_child = 2;
+  repeated BTNodeCounter counters = 3;
+}
+
 // AOI 感知组件：radius = 感知半径（正方形，模板拷贝）；visible = 本 tick 感知到的
 // liveable（派生数据，AOISystem 每 tick 重算；debug 模式才编码进快照）。
 message AOI {
-  int32 radius = 1;
+  int32 radius = 1;      // Visible 的覆盖半径 = max(perception, threat)
   repeated uint64 visible = 2;
+  // 感知半径（发现敌人的范围）。与 radius 分开：业界通常"感知范围小、社会仇恨范围大"，
+  // 太大就没潜行感，太小则群体仇恨只有身边一两只响应。
+  int32 perception = 3;
+  // 仇恨传播半径（同伴被打时的通知范围）。
+  int32 threat = 4;
 }
 
 // Equipped 玩家当前手持的工具（kind=0 表示徒手）。
@@ -517,6 +595,29 @@ enum Season {
 message WeatherState {
   int64 phase = 1;  // 时间相位（世界 tick）
   Season season = 2; // 由 phase 推导（冗余给客户端显示）
+}
+
+// Throwable 可被投掷：质量决定"能扔多远"（距离 ∝ 投掷者力量 / 质量）。
+message Throwable {
+  int32 mass = 1; // 质量（正数；0 = 不可投掷）
+}
+
+// Thrower 投掷能力：力量（决定最大投掷距离）。
+message Thrower {
+  int32 strength = 1; // 力量（<=0 = 不能投掷）
+}
+
+// Thrown 飞行中状态（挂在被投物身上，落地后移除）。
+// 乘过存档：中途存档读回后，物体应在原轨迹上继续飞。
+message Thrown {
+  uint64 thrower = 1;      // 投掷者实体（落地结算时的 attacker）
+  float from_x = 2;        // 起点（水平）
+  float from_y = 3;
+  float to_x = 4;          // 落点（水平）
+  float to_y = 5;
+  int32 flight_ticks = 6;  // 总飞行时长
+  int32 elapsed = 7;       // 已飞 tick 数
+  float gravity = 8;       // 重力（格/tick²），客户端还原抛物线用
 }
 
 // Fan 风扇：局部风力修正 + 下风向雾密度降低（实体组件）。

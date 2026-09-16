@@ -7,6 +7,7 @@ public static class Routes
     public const string Move = "world.player.move";
     public const string Gather = "world.player.gather";
     public const string Attack = "world.player.attack";
+    public const string Throw = "world.player.throw";
     public const string Pickup = "world.player.pickup";
     public const string Use = "world.player.use";
     public const string Equip = "world.player.equip";

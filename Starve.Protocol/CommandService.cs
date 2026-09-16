@@ -73,6 +73,29 @@ public sealed class CommandService
         return command;
     }
 
+    /// <summary>
+    /// 投掷：把 thrown 实体抛向 (toX,toY) 落点。
+    ///
+    /// thrown=0 表示"由服务端从背包取一个炸弹实体化"——客户端通常不指定，
+    /// 因为炸弹在背包里只是物品，还没有世界实体。
+    /// </summary>
+    public InputCommandRef Throw(ulong thrown, float fromX, float fromY, float toX, float toY)
+    {
+        var command = NextControlCommand();
+        Notify(Routes.Throw, new PlayerThrow
+        {
+            ThrownEntity = thrown,
+            FromX = fromX,
+            FromY = fromY,
+            ToX = toX,
+            ToY = toY,
+            Seq = command.Seq,
+            InputEpoch = command.InputEpoch,
+            RequestId = command.RequestId,
+        });
+        return command;
+    }
+
     public void Pickup(ulong lootEntity) =>
         Notify(Routes.Pickup, new PlayerPickup { LootEntity = lootEntity });
 
