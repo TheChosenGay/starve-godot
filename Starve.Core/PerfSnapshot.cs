@@ -28,7 +28,13 @@ public readonly record struct PerfSnapshot(
     float FrameMedianMs = 0f,
     float FrameP95Ms = 0f,
     float FrameWorstMs = 0f,
-    float FrameSpikeRatio = 0f);
+    float FrameSpikeRatio = 0f,
+    // --- GC（托管堆）：回答"卡顿是不是 GC 造成的" ---
+    // Gen0/1/2 是**累计**回收次数，看增量才有意义。
+    long GcGen0 = 0,
+    long GcGen1 = 0,
+    long GcGen2 = 0,
+    long GcPauseMs = 0);
 
 public static class PerfSnapshotJson
 {

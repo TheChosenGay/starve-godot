@@ -122,7 +122,15 @@ public sealed class PerfMonitor : IDisposable
             (int)Performance.GetMonitor(Performance.Monitor.RenderTotalObjectsInFrame),
             (int)Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame),
             (int)Performance.GetMonitor(Performance.Monitor.ObjectNodeCount),
-            (int)Performance.GetMonitor(Performance.Monitor.ObjectCount));
+            (int)Performance.GetMonitor(Performance.Monitor.ObjectCount))
+        {
+            // GC 计数为累计值：写进日志后用相邻样本求增量，即可判断
+            // "每秒回收几次"以及是否与帧尖峰同时发生。
+            GcGen0 = GC.CollectionCount(0),
+            GcGen1 = GC.CollectionCount(1),
+            GcGen2 = GC.CollectionCount(2),
+            GcPauseMs = (long)GC.GetTotalPauseDuration().TotalMilliseconds,
+        };
     }
 
     public void Dispose()
