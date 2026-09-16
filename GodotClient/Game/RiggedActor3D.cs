@@ -123,9 +123,7 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
     public void PlayAction(ActionKind kind)
     {
         if (_dead) return;
-        _actionActive = true;
-        _hitPlaying = false;
-        _actionClip = kind switch
+        var clip = kind switch
         {
             ActionKind.Attack or ActionKind.Chop or ActionKind.Mine =>
                 FirstClip("punch", "hook", "attack", "proc_attack"),
@@ -133,13 +131,19 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
                 FirstClip("pickup", "picking", "proc_pick"),
             _ => FirstClip("idle_loop", "idle", "idle_rest"),
         };
+        // 自动攻击会连续换 action_id；同一挥击没播完就从头切，看起来永远挥不完。
+        if (_actionActive && _actionClip == clip && IsOneShotPlaying())
+            return;
+        _actionActive = true;
+        _hitPlaying = false;
+        _actionClip = clip;
         PlayNamed(_actionClip, loop: false, speed: 1f);
     }
 
     public void FinishAction()
     {
         if (_dead) return;
-        // 服务端采集/攻击往往一帧 Complete；oneshot 必须播完，否则只剩半帧歪一下。
+        // 权威完成：oneshot 播完再回 walk/idle。服务端常在命中帧就摘掉 ActionState。
         if (IsOneShotPlaying())
             return;
         _actionActive = false;
@@ -151,8 +155,6 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
     public void CancelAction()
     {
         if (_dead) return;
-        if (IsOneShotPlaying())
-            return;
         _actionActive = false;
         _hitPlaying = false;
         _actionClip = "";
@@ -435,10 +437,50 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
             if (anim is null) continue;
             var leaf = StoredName(name);
             if (destLib.HasAnimation(leaf) || dest.HasAnimation(name)) continue;
-            destLib.AddAnimation(leaf, (Animation)anim.Duplicate());
+            var copy = (Animation)anim.Duplicate();
+            PruneUnresolvableTracks(copy, dest);
+            if (copy.GetTrackCount() == 0) continue; // 全被裁掉 → 这个 clip 没有可用数据
+            destLib.AddAnimation(leaf, copy);
             count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// 删掉"目标骨架里不存在"的轨道。
+    ///
+    /// 为什么必须删而不是留着：源 GLB 的轨道路径形如
+    /// <c>../Armature/Skeleton3D:RightToeBase</c>，而目标模型的节点层级不同
+    /// （Meshy 导出的骨架与 Mixamo 不一致），于是每个无法解析的 track 都会让
+    /// Godot 打一条 <c>_update_caches: couldn't resolve track</c> 警告。
+    ///
+    /// 实测代价：**45 秒 134 万条警告、日志 300MB**——控制台被刷屏到无法看别的信息，
+    /// 而且每个 actor 实例都会重刷一遍。裁掉之后这些警告消失，
+    /// 动画表现不受影响（本来就解析不到 = 本来就不生效）。
+    /// </summary>
+    internal static void PruneUnresolvableTracks(Animation anim, AnimationPlayer dest)
+    {
+        var root = dest.GetParent();
+        // 从后往前删，避免下标错位。
+        for (var i = anim.GetTrackCount() - 1; i >= 0; i--)
+        {
+            var path = anim.TrackGetPath(i);
+            // 只处理"节点:骨骼"形式的轨道；纯节点轨道（如属性动画）保留。
+            var sub = path.GetSubNameCount();
+            if (sub == 0) continue;
+            var bone = path.GetSubName(sub - 1);
+            var nodePath = path.GetConcatenatedSubNames();
+            var node = root?.GetNodeOrNull(nodePath);
+            if (node is Skeleton3D skel)
+            {
+                if (skel.FindBone(bone) >= 0) continue; // 骨骼存在 → 保留
+            }
+            else if (node is not null)
+            {
+                continue; // 节点存在且不是骨架（普通属性轨道）→ 保留
+            }
+            anim.RemoveTrack(i);
+        }
     }
 
     internal static NodePath FirstBonePath(AnimationPlayer player)

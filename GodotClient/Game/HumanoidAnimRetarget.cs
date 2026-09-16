@@ -147,9 +147,18 @@ public static class HumanoidAnimRetarget
         Dictionary<string, string> boneMap,
         bool mixamoDelta)
     {
-        var destNode = dest.IsInsideTree()
-            ? dest.GetPathTo(destSkel).ToString()
-            : destSkel.Name.ToString();
+        // 目标骨架相对 AnimationPlayer 的路径。
+        //
+        // 必须**相对 dest 自身**算，而不是 dest.GetPathTo()：
+        // MergeInto 会把源 GLB 的临时场景挂在 dest 之下（为了让资源可解析），
+        // 此时 GetPathTo 得到的路径会带上临时节点那一段，实测出现过
+        // `../Armature/Skeleton3D` —— 带 ".." 的路径在 AnimationMixer 里
+        // 以 player 为根解析时越界，于是**每条轨道都告警一次**
+        // （实测 45 秒 134 万条、日志 300MB）。
+        //
+        // 正确做法：用骨架在**自己的场景树**里的路径，即从骨架往上走到
+        // 最近的、不再属于临时场景的那个祖先。
+        var destNode = NodePathRelativeTo(dest, destSkel);
         if (string.IsNullOrEmpty(destNode) || destNode == ".")
             destNode = destSkel.Name;
         var loop = GuessLoop(src, clipName);
@@ -203,6 +212,21 @@ public static class HumanoidAnimRetarget
         }
 
         return mapped > 0 ? anim : null;
+    }
+
+    /// <summary>
+    /// 求 node 相对 root 的路径，但**忽略** root 之下与 root 同级的临时节点。
+    ///
+    /// 简化实现：只要 root 是 node 的祖先，就返回 GetPathTo 的结果，
+    /// 并把开头的 "../" 逐段剥掉——那些段来自临时挂载的兄弟节点，
+    /// 对"以 player 为根"的动画解析没有意义，留着反而越界。
+    /// </summary>
+    private static string NodePathRelativeTo(Node root, Node node)
+    {
+        var path = root.GetPathTo(node).ToString();
+        while (path.StartsWith("../", StringComparison.Ordinal))
+            path = path[3..];
+        return path == "." ? node.Name.ToString() : path;
     }
 
     private static float TargetOneShotLength(string clipName)
