@@ -39,6 +39,7 @@ public partial class GameRoot : Node
 	// 为什么用"模式"而不是直接点地图就扔：投掷是两段动作（windup → 抛出），
 	// 且落点需要先看清抛物线再确认——直接扔会频繁误触。
 	private ThrowAimLayer3D? _throwAim;
+	private BlastFxLayer3D? _blastFx;
 	private bool _throwAiming;
 	private System.Numerics.Vector2 _throwTarget;
 	private bool _throwHasTarget;
@@ -292,6 +293,8 @@ public partial class GameRoot : Node
 		_debugShapes = new DebugShapeLayer3D();
 		AddChild(_debugShapes);
 		// 投掷瞄准层挂在世界根下（与世界坐标系一致，便于用 WorldTo3D 直接摆点）
+		_blastFx = new BlastFxLayer3D { Name = "BlastFx" };
+		_world.AddChild(_blastFx);
 		_throwAim = new ThrowAimLayer3D { Name = "ThrowAim" };
 		_world.AddChild(_throwAim);
 		if (_showMovementDiagnostics)
@@ -579,6 +582,15 @@ public partial class GameRoot : Node
 				_damageFlash?.ApplyImpact(
 					impact.Result,
 					impact.TargetEntity == _ownId);
+			}
+			else if (worldEvent.Blast is { } blast)
+			{
+				// 服务端只给"在哪炸、多大"，表现全在客户端。
+				var ground = _tilemap?.HeightAt(blast.X, blast.Y) ?? 0f;
+				_blastFx?.Spawn(blast.X, blast.Y, blast.Radius, ground);
+				// 自己在爆炸里 → 轻微震屏/提示（伤害本身由 HealthChanged 单独下发）
+				if (blast.SourceEntity == _ownId)
+					_hud?.Log($"炸弹爆炸：半径 {blast.Radius:0.0} 格");
 			}
 			else if (worldEvent.HealthChanged is { } healthChanged &&
 					 healthChanged.TargetEntity == _ownId &&
