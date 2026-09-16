@@ -44,6 +44,10 @@ public sealed class PositionSmoother
 
     // 预测脱节时的平滑收敛：把"脱节瞬间的显示位置"记为混合起点，
     // 在 blendTicks 内线性过渡到权威轨迹，等价于把一次跳变摊成一段短过渡。
+    // 上一渲染帧是否处于外推状态：只有"上一帧靠猜"时，新样本与显示的差异
+    // 才代表预测脱节，需要平滑过渡。正常插值跟随时不应触发。
+    private bool _pendingWasExtrapolated;
+
     private float _blendFromX;
     private float _blendFromY;
     private long _blendStartWall;
@@ -133,33 +137,14 @@ public sealed class PositionSmoother
             return;
         }
 
-        // ── 预测脱节的平滑收敛 ───────────────────────────────────
-        // 判据：**上一帧实际显示的位置** 与这份权威样本是否脱节。
-        // 用实际输出（而不是重新采样）才能覆盖"外推过头"与"丢包后回拉"两种情况。
+        // ── 记录本帧的权威目标，供 Current() 做脱节判定 ─────────────
         //
-        // 收敛方式：记录当前显示位置为混合起点，在 blendTicks 内从它过渡到
-        // **权威轨迹**（SampleAt 的结果），而不是给基础轨迹叠加一个残差偏移。
-        // 叠加残差的写法会与"基础轨迹自身仍在向新样本插值"叠加，导致先过冲
-        // 再回摆，且最终停在错误位置（实测收敛到 10.912 而非权威 10.112）。
-        // 起点→权威轨迹的混合是单调的，按定义必然收敛到权威位置。
-        if (_hasOutput && _blendUntilWall <= wallNow)
-        {
-            var ex = _lastOutputX - x;
-            var ey = _lastOutputY - y;
-            var errDist = MathF.Sqrt(ex * ex + ey * ey);
-            if (errDist > _blendThreshold)
-            {
-                _blendFromX = _lastOutputX;
-                _blendFromY = _lastOutputY;
-                _blendStartWall = wallNow;
-                _blendUntilWall = wallNow + (long)(_blendTicks * 50f);
-                LastBlendDistance = errDist;
-            }
-            else
-            {
-                ClearBlend();
-            }
-        }
+        // 注意：这里**不做**脱节判定。判定必须放在 Current() 里做，因为只有那里
+        // 才同时知道"此刻显示在哪"和"权威轨迹此刻应该在哪"。
+        // 早先在 Update() 里拿 _lastOutputX 与"新样本折算的延迟位置"比较，
+        // 两者时间基准不一致（输出是上一帧的，期望值已按 50ms 折算过），
+        // 稳态运动时残差恒为半个 tick 的位移，于是每个快照都误判为脱节、
+        // 混合被反复重启 —— 表现为持续按住方向键时剧烈抖动。
 
         if (dist > 0.0001f)
         {
@@ -181,12 +166,41 @@ public sealed class PositionSmoother
 
         var p = SampleAt(now, out var extrapolating);
         Extrapolating = extrapolating;
+
+        // ── 预测脱节的平滑收敛（在渲染帧里判定，时间基准统一）─────────
+        //
+        // 只有真正"被预测带偏"时才需要过渡，即：上一帧处于**外推**状态
+        // （样本用尽、靠速度猜），而这一帧新样本到了、且与猜的位置不符。
+        // 正常插值区间里样本本来就在轨迹上，绝不能触发过渡——
+        // 之前误在 Update() 里比较，导致稳态运动时每个快照都误判、反复重启混合，
+        // 输出被一再拉回旧位置，表现为持续移动时剧烈抖动。
+        if (_hasOutput && _blendUntilWall <= now && _pendingWasExtrapolated)
+        {
+            var ex = _lastOutputX - p.X;
+            var ey = _lastOutputY - p.Y;
+            var errDist = MathF.Sqrt(ex * ex + ey * ey);
+            if (errDist > _blendThreshold)
+            {
+                _blendFromX = _lastOutputX;
+                _blendFromY = _lastOutputY;
+                _blendStartWall = now;
+                _blendUntilWall = now + (long)(_blendTicks * 50f);
+                LastBlendDistance = errDist;
+            }
+            else
+            {
+                ClearBlend();
+            }
+        }
+
         var f = BlendFactor(now);
         var outX = _blendFromX + (p.X - _blendFromX) * f;
         var outY = _blendFromY + (p.Y - _blendFromY) * f;
         _lastOutputX = outX;
         _lastOutputY = outY;
         _hasOutput = true;
+        // 记下"本帧是否靠外推"，供下一帧判定新样本是否与预测不符。
+        _pendingWasExtrapolated = extrapolating;
         return new Vector2(outX, outY);
     }
 
@@ -195,27 +209,39 @@ public sealed class PositionSmoother
     /// </summary>
     private Vector2 SampleAt(long now, out bool extrapolating)
     {
-        extrapolating = false;
-        if (_samples.Count == 1) return new Vector2(_samples[0].X, _samples[0].Y);
-
         // 距离上次快照经过的墙钟（ms）按 20Hz 折算成 tick，让插值点帧间连续前进
         var sinceUpdate = Math.Max(0, now - _lastUpdateWall);
         var dt = _latestTick + sinceUpdate / 50f - _delayTicks;
+        return Evaluate(dt, out extrapolating);
+    }
+
+    /// <summary>
+    /// 求"虚拟 tick = targetTick 时轨迹应在的位置"。用于两处：
+    ///   - <see cref="Current"/> 按当前墙钟推进；
+    ///   - 残差判据里把新样本折算成期望延迟位置。
+    /// 纯函数，不改状态。
+    /// </summary>
+    private Vector2 Evaluate(float targetTick, out bool extrapolating)
+    {
+        extrapolating = false;
+        if (_samples.Count == 0) return Vector2.Zero;
+        if (_samples.Count == 1) return new Vector2(_samples[0].X, _samples[0].Y);
+
         for (var i = 1; i < _samples.Count; i++)
         {
-            if (_samples[i].Tick < dt) continue;
+            if (_samples[i].Tick < targetTick) continue;
             var a = _samples[i - 1];
             var b = _samples[i];
             var span = b.Tick - a.Tick;
             if (span <= 0) return new Vector2(b.X, b.Y);
-            var t = MathF.Min(1, MathF.Max(0, (dt - a.Tick) / (float)span));
+            var t = MathF.Min(1, MathF.Max(0, (targetTick - a.Tick) / (float)span));
             return new Vector2(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
         }
 
-        // dt 已超过最后样本：位置更新没跟上（网络抖动 / 该 tick 服务端未下发）。
+        // targetTick 已超过最后样本：位置更新没跟上（网络抖动 / 该 tick 服务端未下发）。
         var last = _samples[^1];
         var prev = _samples.Count >= 2 ? _samples[^2] : last;
-        var beyond = dt - last.Tick;
+        var beyond = targetTick - last.Tick;
         if (beyond <= 0) return new Vector2(last.X, last.Y);
 
         // 服务端确认停止（权威速度清零）→ 不外推，直接停在最后位置。
@@ -262,7 +288,11 @@ public sealed class PositionSmoother
         if (_blendUntilWall <= now) return 1f;
         var total = _blendTicks * 50f;
         if (total <= 0f) return 1f;
-        var elapsed = now - _blendStartWall;
+        var elapsed = (float)(now - _blendStartWall);
+        // 起点帧也必须至少有**一帧**的进度：elapsed=0 时返回 0 会把输出钉死在
+        // 混合起点（= 脱节瞬间的旧位置），表现为每隔一个混合周期画面"卡一下"。
+        // 实测该写法在 200ms 周期上稳定产生一次零位移帧。
+        if (elapsed <= 0f) elapsed = 1000f / 60f;
         return MathF.Min(1f, MathF.Max(0f, elapsed / total));
     }
 
