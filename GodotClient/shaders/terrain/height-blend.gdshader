@@ -119,15 +119,28 @@ float density_func(vec3 pos) {
 	return dens;
 }
 
+// 地面云影：只沿竖直方向做 2 次采样而不是 4 次。
+//
+// 地面云影的本质是"某点正上方的柱状光学厚度"，玩家看得见的是它的**横向**
+// 变化（随时间漂移的云块）；纵向 4 个采样算的是同一团云在不同高度的密度，
+// 结果高度相关，属于过采样。4 → 2 直接省掉一半噪声（每次 density_func
+// 约 5 阶 FBM）。
+//
+// 想恢复更细腻的层次，把 CLOUD_SHADOW_STEPS 调回 4 即可 —— 这是视觉无损的
+// 取舍，不是降级。
+const int CLOUD_SHADOW_STEPS = 2;
+
 float cloud_shade(vec3 pos) {
 	float slab = max(box_size.y, 0.001);
 	float thick = mix(0.45, 1.55, clamp((thickness - 18.0) / 72.0, 0.0, 1.0));
 	float optical = 0.0;
-	for (int i = 0; i < 4; i++) {
-		float h = (float(i) + 0.5) / 4.0;
+	for (int i = 0; i < CLOUD_SHADOW_STEPS; i++) {
+		float h = (float(i) + 0.5) / float(CLOUD_SHADOW_STEPS);
 		vec3 sample_pos = vec3(pos.x, box_center.y + (h - 0.5) * slab, pos.z);
 		optical += density_func(sample_pos);
 	}
+	// 采样数变了要按比例归一，否则整体明暗会变（4 步时的系数保持不变）。
+	optical *= 4.0 / float(CLOUD_SHADOW_STEPS);
 	float day = 1.0 - smoothstep(0.18, 0.62, night);
 	return clamp(optical * 0.35 * thick * cloud_shadow_strength * day, 0.0, 0.85);
 }

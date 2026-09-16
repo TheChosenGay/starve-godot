@@ -16,12 +16,17 @@ namespace GodotClient.Game;
 public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentationSink, IImpactPresentationSink
 {
     private readonly Dictionary<ulong, Node3D> _nodes = new();
+    // 复用缓冲：SyncEntities 每帧都要"找出已消失的实体"，
+    // 原先用 _nodes.Keys.ToArray() 会**每帧分配一个新数组**（60fps 下即
+    // 每秒 60 次），是托管堆增长与 GC 顿挫的来源之一。见 PerfMonitor 的 GC 计数。
+    private readonly List<ulong> _staleScratch = new();
     private readonly Dictionary<ulong, ShaderMaterial> _mats = new();
     private readonly Dictionary<ulong, (float X, float Y)> _lastPos = new();
     private readonly Dictionary<ulong, float> _heightSm = new();
     private readonly Dictionary<ulong, long> _flashUntil = new();
     private readonly Dictionary<ulong, long> _footstepAt = new();
     private readonly Dictionary<ulong, float> _moveSpeed = new();
+    private readonly Dictionary<ulong, (int W, int H)> _blockFootprint = new();
     private readonly ActionPresentationController _actions;
     private readonly ImpactPresentationController _impacts;
     private SfxService? _sfx;
@@ -76,10 +81,13 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
     {
-        foreach (var id in _nodes.Keys.ToArray())
+        // 复用缓冲收集待删除项（先收集再改字典，避免迭代中修改）。
+        _staleScratch.Clear();
+        foreach (var id in _nodes.Keys)
         {
-            if (!entities.ContainsKey(id)) Remove(id);
+            if (!entities.ContainsKey(id)) _staleScratch.Add(id);
         }
+        foreach (var id in _staleScratch) Remove(id);
 
         foreach (var (id, view) in entities)
         {
@@ -103,6 +111,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 ApplyStyle(id, node, style);
             }
             node.Visible = !EntityVisual.IsDepletedFlower(view);
+            RememberBlockFootprint(id, view);
             if (!_plantsVisible && IsPlant(node))
                 node.Visible = false;
             // 生物尸体服务端还留约 1 分钟；3D 里非玩家死后立刻藏，掉落是单独的 Loot 实体。
@@ -147,12 +156,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 continue;
             }
 
-            var targetHeight = _tilemap?.HeightAt(p.X, p.Y) ?? 0;
+            var vis = VisualWorld(id, p.X, p.Y);
+            var targetHeight = _tilemap?.HeightAt(vis.X, vis.Y) ?? 0;
             var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
-            var world = IsoCamera3D.WorldTo3D(p.X, p.Y, h);
+            var world = IsoCamera3D.WorldTo3D(vis.X, vis.Y, h);
             node.Position = new Vector3(world.X, world.Y, world.Z);
 
-            var moving = isMoving(id);
             var dx = 0f;
             var dy = 0f;
             if (_lastPos.TryGetValue(id, out var last))
@@ -160,11 +169,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 dx = p.X - last.X;
                 dy = p.Y - last.Y;
             }
-            FaceFromIntentOrMotion(id, node, dx, dy, moving, deltaMs);
+            var loco = LocomotionPresentation.FromDisplacement(dx, dy, deltaMs, SpeedOf(id));
+            FaceFromIntentOrMotion(id, node, dx, dy, loco.Moving, deltaMs);
             _lastPos[id] = (p.X, p.Y);
 
             if (node is IAnimatedActor3D actor)
-                actor.SetLocomotion(moving, SpeedOf(id));
+                actor.SetLocomotion(loco.Moving, loco.TilesPerSec);
 
             if (_flashUntil.TryGetValue(id, out var until))
             {
@@ -178,7 +188,7 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                     ToonMaterials.SetFlash(mat, flashing);
             }
 
-            if (moving && id == _ownId) MaybeFootstep(id, now);
+            if (loco.Moving && id == _ownId) MaybeFootstep(id, now);
         }
 
         if (playerWorld is { } pp)
@@ -370,6 +380,33 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _flashUntil.Remove(id);
         _footstepAt.Remove(id);
         _moveSpeed.Remove(id);
+        _blockFootprint.Remove(id);
+    }
+
+    /// <summary>取实体节点（调试层用来把碰撞体画在模型身上，跟随同一位置/朝向）。</summary>
+    public bool TryGetEntityNode(ulong id, out Node3D node)
+    {
+        if (_nodes.TryGetValue(id, out var found))
+        {
+            node = found;
+            return true;
+        }
+        node = null!;
+        return false;
+    }
+
+    private void RememberBlockFootprint(ulong id, EntityView view)
+    {
+        var block = view.Get("Block", Block.Parser);
+        if (block is null) return;
+        _blockFootprint[id] = (Math.Max(1, block.Width), Math.Max(1, block.Height));
+    }
+
+    private (float X, float Y) VisualWorld(ulong id, float x, float y)
+    {
+        if (id == _ownId || !_blockFootprint.TryGetValue(id, out var foot))
+            return (x, y);
+        return BlockVisual.Center(x, y, foot.W, foot.H);
     }
 
     private float SpeedOf(ulong id) =>
