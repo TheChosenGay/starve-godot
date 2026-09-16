@@ -101,6 +101,13 @@ public sealed class PerfServer : IDisposable
             return;
         }
 
+        if (path == "/api/frametime")
+        {
+            // 帧节拍单独一个端点：抓"平均 FPS 正常但手感卡"这类问题。
+            WriteJson(ctx.Response, _monitor.FrameTime);
+            return;
+        }
+
         if (path == "/api/history")
         {
             WriteJson(ctx.Response, _monitor.CopyHistory());
@@ -255,6 +262,11 @@ public sealed class PerfServer : IDisposable
               card('DrawCall', s.drawCalls||0),
               card('图元', s.primitives||0),
               card('节点', s.nodeCount||0),
+              // 帧节拍：平均 FPS 正常但这里差 = 手感卡（frame pacing）
+              card('帧中位', (s.frameMedianMs||0).toFixed(1)+' ms'),
+              card('帧 P95', (s.frameP95Ms||0).toFixed(1)+' ms'),
+              card('帧最坏', (s.frameWorstMs||0).toFixed(1)+' ms'),
+              card('尖峰占比', ((s.frameSpikeRatio||0)*100).toFixed(1)+' %'),
             ].join('');
             const hist = await (await fetch('/api/history')).json();
             draw(hist);

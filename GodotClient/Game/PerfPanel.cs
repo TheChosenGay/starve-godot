@@ -13,6 +13,7 @@ public partial class PerfPanel : Control
 	private Label _ram = null!;
 	private Label _vram = null!;
 	private Label _draw = null!;
+	private Label _pacing = null!;
 	private Label _frameMs = null!;
 	private Label _url = null!;
 	private PerfMonitor? _monitor;
@@ -35,6 +36,7 @@ public partial class PerfPanel : Control
 		_ram = AddLine(box, "内存");
 		_vram = AddLine(box, "显存");
 		_draw = AddLine(box, "绘制");
+		_pacing = AddLine(box, "帧节拍");
 		_url = new Label
 		{
 			AutowrapMode = TextServer.AutowrapMode.WordSmart,
@@ -82,7 +84,7 @@ public partial class PerfPanel : Control
 		Callable.From(() => _chrome?.Fit()).CallDeferred();
 	}
 
-	public void Render(in PerfSnapshot snap, float liveFps)
+	public void Render(in PerfSnapshot snap, float liveFps, in FrameTimeReport pacing = default)
 	{
 		if (snap.UnixMs == 0 && liveFps <= 0) return;
 		var fps = liveFps > 0.01f ? liveFps : snap.Fps;
@@ -92,6 +94,13 @@ public partial class PerfPanel : Control
 		_ram.Text = $"内存  {PerfSnapshotJson.FormatBytes(snap.WorkingSetBytes)}  托管 {PerfSnapshotJson.FormatBytes(snap.ManagedBytes)}";
 		_vram.Text = $"显存  {PerfSnapshotJson.FormatBytes(snap.VideoMemBytes)}  贴图 {PerfSnapshotJson.FormatBytes(snap.TextureMemBytes)}";
 		_draw.Text = $"绘制  {snap.DrawCalls} calls  {snap.Primitives} tris  节点 {snap.NodeCount}";
+		if (pacing.Samples > 0)
+		{
+			// 帧节拍：中位/P95/最坏 + 尖峰占比。平均 FPS 正常但这里很差 = 手感卡。
+			_pacing.Text = $"帧节拍  中位 {pacing.MedianMs:0.0}  P95 {pacing.P95Ms:0.0}  " +
+						   $"最坏 {pacing.WorstMs:0.0} ms  尖峰 {pacing.SpikeCount}/{pacing.Samples}" +
+						   $"（{pacing.SpikeRatio * 100f:0.0}%）";
+		}
 	}
 
 	public bool Hits(Vector2 screen) =>

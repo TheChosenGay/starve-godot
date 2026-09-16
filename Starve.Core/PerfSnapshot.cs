@@ -21,7 +21,14 @@ public readonly record struct PerfSnapshot(
     int RenderObjects,
     int Primitives,
     int NodeCount,
-    int ObjectCount);
+    int ObjectCount,
+    // --- 帧节拍（frame pacing）：1 秒窗口内逐帧统计 ---
+    // 平均 Fps 正常但不代表不卡；这组字段专门刻画"顿挫"。
+    // 缺省 0 表示该次采样没带（旧日志/未启用），读取方需容忍。
+    float FrameMedianMs = 0f,
+    float FrameP95Ms = 0f,
+    float FrameWorstMs = 0f,
+    float FrameSpikeRatio = 0f);
 
 public static class PerfSnapshotJson
 {

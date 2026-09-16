@@ -22,6 +22,8 @@ public sealed class PerfMonitor : IDisposable
     private readonly object _gate = new();
     private readonly PerfSessionWriter _log;
     private readonly PerfServer? _server;
+    // 逐帧耗时直方图：1 秒一条的采样看不出 frame pacing 问题（见 FrameTimeStats）。
+    private readonly FrameTimeStats _frames = new();
     private double _accum;
     private bool _disposed;
 
@@ -29,6 +31,9 @@ public sealed class PerfMonitor : IDisposable
     public string LogDir { get; }
     public string? Url => _server?.Url;
     public PerfSnapshot Latest { get; private set; }
+
+    /// <summary>当前窗口的帧时间统计（分位数/尖峰）。面板与网页读它。</summary>
+    public FrameTimeReport FrameTime => _frames.Report();
 
     public PerfMonitor(string logDir, int port, bool startServer)
     {
@@ -54,11 +59,20 @@ public sealed class PerfMonitor : IDisposable
 
     public void Tick(double delta)
     {
+        // 每帧都喂直方图（不是每秒一次）：抓尖峰必须用帧粒度。
+        _frames.Add(delta * 1000.0);
         _accum += delta;
         if (_accum < 1.0) return;
         var wall = _accum;
         _accum = 0;
-        var snap = Sample(wall);
+        var pacing = _frames.Report();
+        var snap = Sample(wall) with
+        {
+            FrameMedianMs = pacing.MedianMs,
+            FrameP95Ms = pacing.P95Ms,
+            FrameWorstMs = pacing.WorstMs,
+            FrameSpikeRatio = pacing.SpikeRatio,
+        };
         Latest = snap;
         _log.Write(snap);
         lock (_gate)

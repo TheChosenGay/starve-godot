@@ -30,9 +30,11 @@ public partial class GameRoot : Node
 	private readonly ConcurrentQueue<ActionOutcome> _actionOutcomes = new();
 	private readonly ConcurrentQueue<WorldEvent> _worldEvents = new();
 	private OwnMovementSim? _ownSim;
-	private readonly HashSet<(int X, int Y)> _blocked = new();
-	private readonly Dictionary<ulong, long> _movingUntil = new();
-	private readonly Dictionary<ulong, (float X, float Y)> _lastServerPos = new();
+	// 占位物形状（树/岩的格心圆 + 建筑/工作站的占格盒）：只喂本地移动预测，不是阻挡网格
+	private readonly List<BlockerShape> _blockers = new();
+	private readonly List<OrcaNeighbor> _orcaNeighbors = new();
+	private DebugShapeLayer3D? _debugShapes;
+	private readonly Dictionary<ulong, bool> _locomotionMoving = new();
 	private bool _ownIntentMoving;
 	private bool _ownPathMoving;
 
@@ -77,7 +79,7 @@ public partial class GameRoot : Node
 	private readonly AutoActionInputState _autoActions = new();
 	private long _demoNextAt;
 	private float _viewRotation;
-	private int _blockedSignature = int.MinValue;
+	private int _blockerSignature = int.MinValue;
 	private int _hudSignature = int.MinValue;
 	private readonly bool _showMovementDiagnostics =
 		System.Environment.GetEnvironmentVariable("STARVE_DEBUG_MOVEMENT") == "1";
@@ -108,6 +110,10 @@ public partial class GameRoot : Node
 		}
 		return tex;
 	}
+
+	/// <summary>服务端地址：缺省本地网关；用 STARVE_GATE_URL 指向别的端口/机器（与 ProtocolSmoke 一致）。</summary>
+	private static string GateUrl =>
+		System.Environment.GetEnvironmentVariable("STARVE_GATE_URL") ?? "ws://localhost:8081/ws";
 
 	private static bool SmokeMode => OS.GetCmdlineUserArgs().Contains("--smoke");
 	private static string? CapturePath => OS.GetCmdlineUserArgs()
@@ -269,6 +275,9 @@ public partial class GameRoot : Node
 		var move = new MoveController();
 		_moveController = move;
 		_ownSim = new OwnMovementSim(IsWalkable);
+		// 调试：把服务端下发的简化碰撞体画出来（GATE_DEBUG_COLLISION=1 才有数据）
+		_debugShapes = new DebugShapeLayer3D();
+		AddChild(_debugShapes);
 		if (_showMovementDiagnostics)
 		{
 			_movementDiagnosticsSampler = new MovementDiagnosticsSampler(
@@ -418,7 +427,7 @@ public partial class GameRoot : Node
 		{
 			var uid = System.Environment.GetEnvironmentVariable("STARVE_UID") ?? "42";
 			_ownUid = uid;
-			var info = await _client.ConnectAsync("ws://localhost:8081/ws", DevTokens.Mint(uid));
+			var info = await _client.ConnectAsync(GateUrl, DevTokens.Mint(uid));
 			_ownId = info.EntityId;
 			_worldRenderer?.SetOwnId(_ownId);
 			_worldRenderer?.SetNameProvider(EntityName);
@@ -439,7 +448,10 @@ public partial class GameRoot : Node
 	{
 		_perf?.Tick(delta);
 		if (_perfPanel is { Visible: true })
-			_perfPanel.Render(_perf?.Latest ?? default, (float)Engine.GetFramesPerSecond());
+			_perfPanel.Render(
+				_perf?.Latest ?? default,
+				(float)Engine.GetFramesPerSecond(),
+				_perf?.FrameTime ?? default);
 
 		if (CapturePath is not null)
 		{
@@ -631,9 +643,10 @@ public partial class GameRoot : Node
 			_smoothers,
 			id => id == _ownId
 				? _ownIntentMoving || _ownPathMoving
-				: _movingUntil.GetValueOrDefault(id) > now,
+				: _locomotionMoving.GetValueOrDefault(id),
 			now,
 			own);
+		_debugShapes?.UpdatePositions(_world3D?.Entities);
 		_worldRenderer.SetDayLight(client.World.DayLight);
 		if (_render3D && _world3D is not null)
 		{
@@ -742,7 +755,7 @@ public partial class GameRoot : Node
 		{
 			_tilemap = new TileMap(map) { SmoothSlopes = _render3D };
 			_camera.HeightAt = _tilemap.HeightAt;
-			if (_ownSim is not null) _ownSim.HeightAt = _tilemap.HeightAt;
+			if (_ownSim is not null) _ownSim.HeightAt = _tilemap.LogicalHeightAt;
 			if (_render3D)
 				_world3D!.SetMap(_tilemap);
 			else
@@ -775,7 +788,8 @@ public partial class GameRoot : Node
 
 		var now = NowMs();
 		var tick = world.WorldTick;
-		RebuildBlocked(world.Entities);
+		RebuildBlockers(world.Entities);
+		_debugShapes?.Sync(world.Entities);
 		foreach (var (id, view) in world.Entities)
 		{
 			var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
@@ -792,7 +806,16 @@ public partial class GameRoot : Node
 				if (mv is not null)
 				{
 					_lastEffectiveSpeed = (float)mv.EffectiveSpeed;
+					foreach (var speed in new[] { 0 }) { _ = speed; }
 					ApplyDebugMoveSpeed();
+					// 服务端权威身体半径：现在来自独立的 Collide 组件（由客户端模型推导）。
+					// 本地预测必须用同一个值，否则贴着树/墙会来回校正。
+					if (view.Get("Collide", Collide.Parser) is { } ownCol)
+					{
+						_ownSim?.SetBodyRadius((float)ownCol.Radius);
+						// ORCA 的输入维度：有效速度上限 + 胶囊半长（与服务端一致）
+						_ownSim?.SetSpeedProfile((float)mv.EffectiveSpeed, (float)ownCol.HalfLength);
+					}
 				}
 				_ownPathMoving = mv is { Path.Count: > 0 };
 				if (!_ownIntentMoving && !GameplayLocked())
@@ -807,7 +830,12 @@ public partial class GameRoot : Node
 				// 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
 				var serverStopped = mv is { DirX: 0, DirY: 0 } &&
 									mv.Path.Count == 0;
-				_ownSim?.Reconcile(fx, fy, serverStopped);
+				// 位置/移动组件最后下发的世界 tick：停下后服务端不再标脏这两个组件，
+				// 快照仍是旧的。把它交给校正逻辑，才能避免拿冻结值反复回拉（停下抖动）。
+				var posTick = view.ComponentTick("Position");
+				var mvTick = view.ComponentTick("Moveable");
+				var freshTick = Math.Max(posTick, mvTick);
+				_ownSim?.Reconcile(fx, fy, serverStopped, freshTick);
 			}
 			else if (!_smoothers.TryGetValue(id, out var smoother))
 			{
@@ -819,13 +847,11 @@ public partial class GameRoot : Node
 			{
 				smoother.Update(fx, fy, tick, now);
 			}
-			if (id != _ownId &&
-				_lastServerPos.TryGetValue(id, out var prev) &&
-				(MathF.Abs(prev.X - fx) > 0.001f || MathF.Abs(prev.Y - fy) > 0.001f))
+			if (id != _ownId)
 			{
-				_movingUntil[id] = now + 240;
+				_locomotionMoving[id] = mv is not null &&
+					(mv.DirX != 0 || mv.DirY != 0 || mv.Path.Count > 0);
 			}
-			_lastServerPos[id] = (fx, fy);
 		}
 
 		NoticeLootPicked(world);
@@ -833,50 +859,113 @@ public partial class GameRoot : Node
 		UpdateBagAndCraft(world);
 	}
 
-	/// <summary>从快照重建动态阻挡层（树/矿/建筑等 Block 组件），本地预测墙停用。</summary>
-	private void RebuildBlocked(IReadOnlyDictionary<ulong, EntityView> entities)
+	/// <summary>
+	/// 从快照重建占位物形状：Block.radius &gt; 0 是格心圆（树/岩，走不满一格），
+	/// 否则是 width×height 的占格盒（建筑/工作站）。占位不等于不可走——
+	/// 这些形状只进本地移动预测（扫掠 + 沿接触切面滑动），可行走网格只看地形。
+	/// </summary>
+	private void RebuildBlockers(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
 		var signature = 17;
 		unchecked
 		{
 			foreach (var view in entities.Values.OrderBy(v => v.EntityId))
 			{
-				var b = view.Get("Block", Block.Parser);
+				// 形状现在来自独立的 Collide 组件（Block 只管占位，不再有 Radius）。
+				var c = view.Get("Collide", Collide.Parser);
 				var p = view.Get("Position", Position.Parser);
-				if (b is null || p is null) continue;
+				if (c is null || p is null) continue;
 				signature = signature * 31 + view.EntityId.GetHashCode();
 				signature = signature * 31 + p.X;
 				signature = signature * 31 + p.Y;
-				signature = signature * 31 + b.Width;
-				signature = signature * 31 + b.Height;
+				signature = signature * 31 + (int)c.Shape;
+				signature = signature * 31 + c.Width;
+				signature = signature * 31 + c.Height;
+				signature = signature * 31 + c.Radius.GetHashCode();
+				signature = signature * 31 + c.HalfLength.GetHashCode();
 			}
 		}
-		if (signature == _blockedSignature) return;
-		_blockedSignature = signature;
+		if (signature == _blockerSignature) return;
+		_blockerSignature = signature;
 
-		_blocked.Clear();
+		_blockers.Clear();
 		foreach (var view in entities.Values)
 		{
-			var b = view.Get("Block", Block.Parser);
+			var c = view.Get("Collide", Collide.Parser);
 			var p = view.Get("Position", Position.Parser);
-			if (b is null || p is null) continue;
-			for (var dy = 0; dy < b.Height; dy++)
+			if (c is null || p is null) continue;
+			switch (c.Shape)
 			{
-				for (var dx = 0; dx < b.Width; dx++)
-				{
-					_blocked.Add((p.X + dx, p.Y + dy));
-				}
+				case CollideShape.Circle:
+					// 格心圆：Position 是格子坐标，圆心在格心
+					_blockers.Add(BlockerShape.Circle(p.X + 0.5f, p.Y + 0.5f, (float)c.Radius));
+					break;
+				case CollideShape.Box:
+					_blockers.Add(BlockerShape.Box(p.X, p.Y, Math.Max(1, c.Width), Math.Max(1, c.Height)));
+					break;
+				case CollideShape.Capsule:
+					// 移动体（玩家/动物）是胶囊：放进动态层，静态滑动不挡它们
+					// （动态之间靠 ORCA 避让，见 OwnMovementSim）。
+					_blockers.Add(BlockerShape.Capsule(p.X, p.Y, (float)c.Radius, (float)c.HalfLength,
+						c.FaceX, c.FaceZ, view.EntityId));
+					break;
 			}
 		}
+		_ownSim?.SetBlockers(_blockers);
+		SyncOrcaNeighbors(entities);
 	}
 
-	/// <summary>与服务端 Walkable 一致：非水 + 无动态阻挡。</summary>
+	/// <summary>
+	/// 刷新 ORCA 邻居（除自己以外的动态体：其他玩家/动物）。
+	///
+	/// 与服务端一致：静态障碍走硬碰撞（阶段②），动态体之间走 ORCA 软避让（阶段③）。
+	/// 邻居的速度取快照里的实际速度 vel_x/vel_y；半径按"外接圆"处理（半径 + 半长），
+	/// 因为服务端 collectNeighbors 也是这么算的——两边必须一样，否则互惠避让不对称。
+	/// </summary>
+	private void SyncOrcaNeighbors(IReadOnlyDictionary<ulong, EntityView> entities)
+	{
+		if (_ownSim is null) return;
+		_ownSim.SetSelfKey(_ownId);
+		_orcaNeighbors.Clear();
+		foreach (var (id, view) in entities)
+		{
+			if (id == _ownId) continue; // 自己不进邻居表
+			var col = view.Get("Collide", Collide.Parser);
+			var pos = view.Get("Position", Position.Parser);
+			if (col is null || pos is null) continue;
+			// 只有动态体参与 ORCA（静态体已在 _blockers 里做硬碰撞）
+			if (!view.Has("Dynamic")) continue;
+			var mv = view.Get("Moveable", Moveable.Parser);
+			var wx = pos.X + (float)(mv?.SubX ?? 0);
+			var wy = pos.Y + (float)(mv?.SubY ?? 0);
+			_orcaNeighbors.Add(new OrcaNeighbor
+			{
+				X = wx, Y = wy,
+				VX = (float)(mv?.VelX ?? 0),
+				VY = (float)(mv?.VelY ?? 0),
+				Radius = (float)col.Radius,
+				HalfLength = (float)col.HalfLength,
+				MaxSpeed = (float)(mv?.EffectiveSpeed ?? mv?.Speed ?? 10),
+			});
+		}
+		// 确定性：按位置排序，与服务端的邻居排序规则一致（LP 对顺序敏感）。
+		_orcaNeighbors.Sort((a, b) =>
+		{
+			var c = a.X.CompareTo(b.X);
+			if (c != 0) return c;
+			c = a.Y.CompareTo(b.Y);
+			if (c != 0) return c;
+			return a.Radius.CompareTo(b.Radius);
+		});
+		_ownSim.SetNeighbors(_orcaNeighbors);
+	}
+
+	/// <summary>与服务端 Walkable 一致：只看地形（水/悬崖）；占位物不是墙，走形状碰撞。</summary>
 	private bool IsWalkable(int x, int y)
 	{
 		if (_tilemap is null) return true;
 		// 地图边界：越界不可走（否则本地预测会走出地图到负坐标，角色跑到角外“消失”）
 		if (x < 0 || y < 0 || x >= _tilemap.Width || y >= _tilemap.Height) return false;
-		if (_blocked.Contains((x, y))) return false;
 		return _tilemap.CornerType(x, y) != (int)TerrainType.Water;
 	}
 
@@ -1553,6 +1642,8 @@ public partial class GameRoot : Node
 	private void TriggerAutoAction(AutoActionIntent intent)
 	{
 		if (_ownDead || GameplayLocked()) return;
+		// 服务端有 ActionState 时再发会被 BUSY 拒绝；攻击 16 tick / 采集 8 tick，150ms 连发只会砍动画。
+		if (_worldRenderer?.ActionStatusOf(_ownId) is not null) return;
 		if (intent == AutoActionIntent.AttackOnly) _client?.Commands.AttackNearest();
 		else _client?.Commands.Automate();
 	}
