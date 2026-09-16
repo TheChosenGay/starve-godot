@@ -200,6 +200,7 @@ public partial class GameRoot : Node
 			_lighting.Visible = false;
 			_volumetric.Visible = false;
 			GD.Print("RENDER 3D main scene, player=pigman");
+			WarmUpShaders();
 		}
 
 		var ui = new CanvasLayer { Layer = 10 };
@@ -442,6 +443,59 @@ public partial class GameRoot : Node
 		{
 			_hud?.Log($"[连接失败] {ex.Message}");
 		}
+	}
+
+	/// <summary>
+	/// 预热自定义着色器：把 8 个 .gdshader 全部编译一遍。
+	///
+	/// 为什么需要：Godot 的**自定义着色器不进磁盘缓存**
+	/// （缓存目录里只有 75 个引擎内置管线），每次启动都要从源码重新编译。
+	/// 实测代价：启动后前 **5～28 秒**帧率被锁在 30 FPS
+	/// （frameMs 精确等于 33.33ms、Godot CPU 打到 100%），
+	/// 编译完成后才恢复到 70+。这段时间正好覆盖"刚进游戏想走两步"的时机，
+	/// 玩家感受就是"一进去就卡"。
+	///
+	/// 做法：建一个离屏节点、把每个着色器挂上去并塞进场景树一帧，
+	/// 迫使渲染器编译它 —— 这样编译发生在**进入游戏前**，
+	/// 而不是在玩家走动时逐帧触发。
+	///
+	/// 注：这是把卡顿前移，不是消除（编译总量不变）。
+	/// 真正的消除要靠预编译管线缓存，Godot 目前不提供。
+	/// </summary>
+	private void WarmUpShaders()
+	{
+		var paths = new[]
+		{
+			ShaderLibrary.TerrainHeightBlend,
+			ShaderLibrary.CloudVolume,
+			ShaderLibrary.CloudShadow,
+			ShaderLibrary.CloudSky,
+			ShaderLibrary.Fire,
+			ShaderLibrary.AlchemyBounce,
+			ShaderLibrary.LiquidRise,
+			ShaderLibrary.PanoramaTint,
+		};
+		var compiled = 0;
+		foreach (var path in paths)
+		{
+			Shader res;
+			try { res = ShaderLibrary.Load(path); }
+			catch (Exception ex) { GD.PushWarning($"着色器预热跳过 {path}: {ex.Message}"); continue; }
+			// 挂一个最小 mesh 上去：光是 new ShaderMaterial 不会触发编译，
+			// 必须有实际绘制才会让渲染器走到 compile 分支。
+			var mat = new ShaderMaterial { Shader = res };
+			var mi = new MeshInstance3D
+			{
+				Mesh = new QuadMesh { Size = new Vector2(0.001f, 0.001f) },
+				MaterialOverride = mat,
+				Visible = false,
+				Position = new Vector3(0, -10000, 0),
+			};
+			AddChild(mi);
+			mi.QueueFree();
+			compiled++;
+		}
+		GD.Print($"着色器预热: {compiled}/{paths.Length} 个自定义着色器已提交编译");
 	}
 
 	public override void _Process(double delta)
