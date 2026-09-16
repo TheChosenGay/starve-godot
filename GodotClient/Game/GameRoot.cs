@@ -34,6 +34,18 @@ public partial class GameRoot : Node
 	private readonly List<BlockerShape> _blockers = new();
 	private readonly List<OrcaNeighbor> _orcaNeighbors = new();
 	private DebugShapeLayer3D? _debugShapes;
+
+	// 投掷瞄准（T 进入，点地图选落点，再按 T 确认）。
+	// 为什么用"模式"而不是直接点地图就扔：投掷是两段动作（windup → 抛出），
+	// 且落点需要先看清抛物线再确认——直接扔会频繁误触。
+	private ThrowAimLayer3D? _throwAim;
+	private bool _throwAiming;
+	private System.Numerics.Vector2 _throwTarget;
+	private bool _throwHasTarget;
+	/// <summary>投掷力量（从自己的 Thrower 组件读；0 = 不能投掷）。</summary>
+	private int _ownThrowStrength;
+	/// <summary>炸弹的质量（从物品模板读；决定最大距离）。</summary>
+	private int _bombMass = 18;
 	private readonly Dictionary<ulong, bool> _locomotionMoving = new();
 	private bool _ownIntentMoving;
 	private bool _ownPathMoving;
@@ -279,6 +291,9 @@ public partial class GameRoot : Node
 		// 调试：把服务端下发的简化碰撞体画出来（GATE_DEBUG_COLLISION=1 才有数据）
 		_debugShapes = new DebugShapeLayer3D();
 		AddChild(_debugShapes);
+		// 投掷瞄准层挂在世界根下（与世界坐标系一致，便于用 WorldTo3D 直接摆点）
+		_throwAim = new ThrowAimLayer3D { Name = "ThrowAim" };
+		_world.AddChild(_throwAim);
 		if (_showMovementDiagnostics)
 		{
 			_movementDiagnosticsSampler = new MovementDiagnosticsSampler(
@@ -693,6 +708,9 @@ public partial class GameRoot : Node
 		}
 		if (_buildPreview is not null && _mouseWorld is not null) UpdateGhost();
 
+		// 投掷预览每帧跟随玩家（起点会随移动变化）
+		if (_throwAiming) RefreshThrowPreview();
+
 		_worldRenderer!.UpdatePositions(
 			_smoothers,
 			id => id == _ownId
@@ -871,7 +889,10 @@ public partial class GameRoot : Node
 						_ownSim?.SetSpeedProfile((float)mv.EffectiveSpeed, (float)ownCol.HalfLength);
 					}
 				}
-				_ownPathMoving = mv is { Path.Count: > 0 };
+				// 自己的投掷力量（决定可达距离；预览与本地校验都要用）
+			if (view.Get("Thrower", Starve.Game.V1.Thrower.Parser) is { } thr)
+				_ownThrowStrength = thr.Strength;
+			_ownPathMoving = mv is { Path.Count: > 0 };
 				if (!_ownIntentMoving && !GameplayLocked())
 				{
 					var pathDir = _ownPathMoving ? mv!.Path[0] : null;
@@ -1691,6 +1712,7 @@ public partial class GameRoot : Node
 				_actorPanel.Toggle();
 			if (name == "F3" && _perfPanel is not null)
 				_perfPanel.Toggle();
+			if (name == "T") HandleThrowKey();
 			if (!_render3D)
 			{
 				if (name == "Q") RotateView(-Mathf.Pi / 4);
@@ -1734,6 +1756,15 @@ public partial class GameRoot : Node
 		{
 			_mouseWorld = ScreenToWorld(mm.Position);
 		}
+		else if (@event is InputEventMouseButton rb && rb.Pressed && rb.ButtonIndex == MouseButton.Right)
+		{
+			// 右键：取消投掷瞄准（不穿透到其他逻辑）
+			if (_throwAiming)
+			{
+				CancelThrowAim();
+				_hud?.Log("已取消投掷瞄准");
+			}
+		}
 		else if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
 		{
 			if (PointerOnHud(mb.Position)) return;
@@ -1755,6 +1786,14 @@ public partial class GameRoot : Node
 				return;
 			}
 			if (GameplayLocked()) return;
+			// 投掷瞄准模式：点地图选落点（不执行常规的选中/动作）
+			if (_throwAiming)
+			{
+				_throwTarget = ScreenToWorld(mb.Position);
+				_throwHasTarget = true;
+				RefreshThrowPreview();
+				return;
+			}
 			if (_ownDead)
 			{
 				var deadPicked = ScreenToWorld(mb.Position);
@@ -2016,6 +2055,106 @@ public partial class GameRoot : Node
 	}
 
 	/// <summary>屏幕坐标经场景变换逆投影为世界坐标，覆盖 2D 旋转/缩放或 3D 正交射线。</summary>
+	// ── 投掷瞄准 ─────────────────────────────────────────────
+	//
+	// 交互：按 T 进入瞄准 → 点地图选落点（实时预览抛物线）→ 再按 T 投出。
+	// 再按一次 Esc/T 之外的取消路径：右键取消（见 _UnhandledInput）。
+	//
+	// 为什么做成"模式"而不是点一下就扔：投掷落点需要先看清抛物线再确认，
+	// 且服务端有两段动作（windup 蓄力），直接扔会频繁误触。
+
+	private void HandleThrowKey()
+	{
+		if (GameplayLocked() || _ownDead) return;
+		if (!_throwAiming)
+		{
+			// 检查能不能投掷（没有 Thrower / 没有炸弹就别进模式，避免白按）
+			if (_ownThrowStrength <= 0)
+			{
+				_hud?.Log("不能投掷：没有投掷能力");
+				return;
+			}
+			_throwAiming = true;
+			_throwHasTarget = false;
+			_hud?.Log("投掷瞄准：点击地面选落点，再按 T 投出（右键取消）");
+			RefreshThrowPreview();
+			return;
+		}
+		// 已在瞄准模式：确认投出
+		if (!_throwHasTarget)
+		{
+			_hud?.Log("先点一下地面选落点");
+			return;
+		}
+		ThrowNow();
+	}
+
+	private void CancelThrowAim()
+	{
+		if (!_throwAiming) return;
+		_throwAiming = false;
+		_throwHasTarget = false;
+		_throwAim?.Hide();
+	}
+
+	/// <summary>刷新抛物线预览（每次改变落点或玩家移动后调用）。</summary>
+	private void RefreshThrowPreview()
+	{
+		if (!_throwAiming || _throwAim is null) return;
+		if (!_throwHasTarget)
+		{
+			// 还没选落点：只显示可达范围（用玩家位置当起点）
+			var selfOnly = OwnPosition();
+			if (selfOnly is { } sp)
+			{
+				_throwAim.Show(sp, sp, MaxThrowDistance(), true, HeightAt);
+			}
+			return;
+		}
+		var self = OwnPosition();
+		if (self is not { } from) return;
+		var to = _throwTarget;
+		var dist = System.Numerics.Vector2.Distance(from, to);
+		var max = MaxThrowDistance();
+		// 本地预览就按"能否投掷"上色；服务端仍会权威校验（不一致时以服务端为准）。
+		var ok = max > 0 && dist <= max;
+		_throwAim.Show(from, to, max, ok, HeightAt);
+	}
+
+	private void ThrowNow()
+	{
+		var self = OwnPosition();
+		if (self is not { } from) return;
+		var to = _throwTarget;
+		var dist = System.Numerics.Vector2.Distance(from, to);
+		var max = MaxThrowDistance();
+		if (max <= 0)
+		{
+			_hud?.Log("不能投掷：力量或物品不对");
+			return;
+		}
+		if (dist > max)
+		{
+			_hud?.Log($"超出投掷距离：{dist:0.0} > {max} 格");
+			return;
+		}
+		// thrown=0：由服务端从背包取一个炸弹实体化（客户端没有世界实体可指）
+		_client?.Commands.Throw(0, from.X, from.Y, to.X, to.Y);
+		var traj = ThrowPhysics.Solve(from, to);
+		_hud?.Log($"投掷 → ({to.X:0},{to.Y:0}) 距离 {dist:0.0} 格 · 飞行 {traj.FlightTicks} tick");
+		CancelThrowAim();
+	}
+
+	private int MaxThrowDistance() =>
+		ThrowPhysics.MaxThrowDistance(_ownThrowStrength, _bombMass);
+
+	private System.Numerics.Vector2? OwnPosition() =>
+		_ownSim is { Has: true } sim
+			? new System.Numerics.Vector2(sim.Position.X, sim.Position.Y)
+			: null;
+
+	private float HeightAt(float x, float y) => _tilemap?.HeightAt(x, y) ?? 0f;
+
 	private System.Numerics.Vector2 ScreenToWorld(Vector2 screen)
 	{
 		Func<float, float, float>? heightAt = _tilemap is null ? null : _tilemap.HeightAt;
