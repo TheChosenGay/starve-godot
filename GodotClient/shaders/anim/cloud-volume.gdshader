@@ -26,8 +26,20 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
+// 整数 hash：替代 fract(sin(n)*k) 的写法。
+//
+// 为什么必须换：sin() 在 GPU 上是多周期超越函数，而这段噪声每像素要调用
+// 上千次（见下方 MARCH_STEPS 注释）。实测"体积云关掉帧率 39→100+"，
+// 说明它就是这个场景最大的 GPU 开销，而开销的大头正是串行执行的 sin()。
+// 整数位运算（乘法 + 异或 + 移位）吞吐远高于 sin，且噪声质量等价。
 float hash(float n) {
-	return fract(sin(n) * 753.5453123);
+	uint x = uint(int(n));
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return float(x & 0x00ffffffu) / float(0x01000000u);
 }
 
 float noise(vec3 x) {
@@ -97,6 +109,19 @@ void fragment() {
 	t_enter = max(t_enter, 0.0);
 
 	float march_step = (t_exit - t_enter) / float(MARCH_STEPS);
+
+	// 空区域提前退出：先用 3 个粗采样探一下这条光线有没有云。
+	// 天空占了屏幕很大面积，其中大部分像素是纯空（alpha≈0，最终被 discard）——
+	// 对它们跑满 16 步是纯浪费。这一步能省掉大量空像素的完整步进。
+	float probe = 0.0;
+	for (int k = 0; k < 3; k++) {
+		vec3 pp = ro + ray_dir * (t_enter + (float(k) + 0.5) * (t_exit - t_enter) / 3.0);
+		probe += density_func(pp, TIME);
+	}
+	if (probe * march_step < 0.0015) {
+		discard;
+	}
+
 	float alpha = 0.0;
 	vec3 cloud_color = vec3(0.0);
 	float T = 1.0;

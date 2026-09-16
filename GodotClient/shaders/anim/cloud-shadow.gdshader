@@ -18,8 +18,16 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
+// 整数 hash（同 cloud-volume.gdshader）：GPU 上比 fract(sin(n)*k) 快得多。
+// 云影覆盖 180x180 的地面，同样是逐像素成本。
 float hash(float n) {
-	return fract(sin(n) * 753.5453123);
+	uint x = uint(int(n));
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return float(x & 0x00ffffffu) / float(0x01000000u);
 }
 
 float noise(vec3 x) {

@@ -33,6 +33,16 @@ uniform float cloud_shadow_strength : hint_range(0.0, 1.0) = 0.78;
 varying vec3 world_pos;
 varying vec3 world_normal;
 
+// 云影缓存：fragment 与 light 都用到云影，若不缓存则 cloud_shade() 被调用两次。
+//
+// cloud_shade() 内部是 4 步光线步进 + 5 阶 FBM（每次 noise 含 8 次 hash），
+// 单次约 160 次 hash，两次就是 320 次 —— 而两次算的是**完全相同**的值。
+// 用 varying 传递后只算一次，直接省掉一半。
+//
+// 这也是"关掉体积云层后地形依然很贵"的原因：地形着色器内联了自己的一份
+// 云噪声采样，与场景里的 CloudLayer3D 是两套独立开销。
+varying float cloud_shade_cached;
+
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -59,8 +69,17 @@ vec3 height_blend(
 	return (c0 * b0 + c1 * b1 + c2 * b2) / max(b0 + b1 + b2, 1e-5);
 }
 
+// 整数 hash：GPU 上远快于 fract(sin(n)*k)。
+// 这个噪声在**每个地形像素**上要跑几百次（见下方 cloud_shade 注释），
+// 是本着色器最大的单点开销。
 float hash(float n) {
-	return fract(sin(n) * 753.5453123);
+	uint x = uint(int(n));
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return float(x & 0x00ffffffu) / float(0x01000000u);
 }
 
 float noise(vec3 x) {
@@ -146,13 +165,16 @@ void fragment() {
 	blended *= mix(0.58, 1.0, UV2.x);
 
 	float cs = cloud_shade(world_pos);
+	cloud_shade_cached = cs;
 	ALBEDO = blended * mix(1.0, 0.32, cs);
 	ROUGHNESS = 1.0;
 	EMISSION = ALBEDO * fill * mix(0.1, 1.0, day_light) * vec3(0.88, 1.0, 1.15) * mix(1.0, 0.18, cs);
 }
 
 void light() {
-	float cs = cloud_shade(world_pos);
+	// 复用 fragment() 里算好的云影（见 cloud_shade_cached 注释）：
+	// 重复调用 cloud_shade() 会让这层噪声的开销翻倍。
+	float cs = cloud_shade_cached;
 	float wrap = clamp(dot(NORMAL, LIGHT) * 0.5 + 0.5, 0.0, 1.0);
 	float stepped = floor(wrap * bands + 1e-4) / max(bands - 1.0, 1.0);
 	float shadeFloor = shade_min * mix(0.35, 1.0, day_light);
