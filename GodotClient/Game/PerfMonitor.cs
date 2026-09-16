@@ -66,6 +66,15 @@ public sealed class PerfMonitor : IDisposable
         var wall = _accum;
         _accum = 0;
         var pacing = _frames.Report();
+        // 位置插值/外推健康度：外推帧占比能直接反映"快照是否跟上"。
+        // 若该比例持续偏高，说明服务端下发间隔不稳定或客户端渲染落后。
+        var extrap = GodotClient.Game.GameRoot.SmootherExtrapolating;
+        var total = GodotClient.Game.GameRoot.SmootherSamples;
+        if (total > 0)
+        {
+            GD.Print($"SMOOTH 外推帧={extrap}/{total} ({(100.0 * extrap / total):F1}%)");
+            GodotClient.Game.GameRoot.ResetSmootherStats();
+        }
         var snap = Sample(wall) with
         {
             FrameMedianMs = pacing.MedianMs,

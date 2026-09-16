@@ -895,11 +895,11 @@ public partial class GameRoot : Node
 			{
 				smoother = new PositionSmoother();
 				_smoothers[id] = smoother;
-				smoother.Update(fx, fy, tick, now);
+				FeedSmoother(smoother, mv, fx, fy, tick, now);
 			}
 			else
 			{
-				smoother.Update(fx, fy, tick, now);
+				FeedSmoother(smoother, mv, fx, fy, tick, now);
 			}
 			if (id != _ownId)
 			{
@@ -911,6 +911,32 @@ public partial class GameRoot : Node
 		NoticeLootPicked(world);
 		_worldRenderer!.SyncEntities(world.Entities);
 		UpdateBagAndCraft(world);
+	}
+
+	// 位置插值健康度（每秒由 PerfMonitor 汇总打印后清零）：
+	// 外推帧 = 该帧没有可用样本、只能按速度推测的帧数。
+	// 服务端每 tick 下发子格偏移后，这个比例应接近 0；偏高即说明下发有缺口。
+	public static long SmootherExtrapolating;
+	public static long SmootherSamples;
+
+	public static void ResetSmootherStats()
+	{
+		SmootherExtrapolating = 0;
+		SmootherSamples = 0;
+	}
+
+	/// <summary>
+	/// 喂一份服务端位置给插值器，并同步权威速度。
+	/// 权威速度（Moveable.VelX/VelY，格/秒）用于样本用尽时的外推：
+	/// 它已含坡度因子与避让结果，比"末段位移"更准。停止时服务端会把它清零，
+	/// 外推因此自动停住，不会出现"停下后还在滑"。
+	/// </summary>
+	private static void FeedSmoother(
+		PositionSmoother smoother, Moveable? mv, float fx, float fy, long tick, long now)
+	{
+		if (mv is not null)
+			smoother.SetServerVelocity((float)mv.VelX, (float)mv.VelY);
+		smoother.Update(fx, fy, tick, now);
 	}
 
 	/// <summary>

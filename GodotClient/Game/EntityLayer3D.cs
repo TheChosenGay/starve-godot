@@ -150,6 +150,9 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             else if (smoothers.TryGetValue(id, out var sm))
             {
                 p = sm.Current(now);
+                // 统计外推帧占比：PerfMonitor 每秒汇总一次并清零。
+                GameRoot.SmootherSamples++;
+                if (sm.Extrapolating) GameRoot.SmootherExtrapolating++;
             }
             else
             {
