@@ -127,10 +127,21 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
         {
             // 投掷与攻击/砍伐/挖矿同族：服务端的投掷也是"起手 → 抛出"的挥动动作，
             // 没有专门的投掷 clip 时复用挥击，避免播 idle 看起来像没生效。
-            ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Throw =>
+            // Boss 投弹同理（服务端在 Commit 时刻实体化炸弹，之后走 Thrown 抛物线复制）。
+            ActionKind.Attack or ActionKind.Chop or ActionKind.Mine
+                or ActionKind.Throw or ActionKind.BossThrow =>
                 FirstClip("punch", "hook", "attack", "proc_attack"),
             ActionKind.Pick =>
                 FirstClip("pickup", "picking", "proc_pick"),
+            // Boss 技能段：**改成你的美术 clip 名只改这里**。
+            // 每个都用 FirstClip 带回退，模型没有专属 clip 时也能播出"最接近的那个"，
+            // 而不是退回 idle 看起来像完全没放招。
+            ActionKind.BossLeap =>
+                FirstClip("leap", "jump", "dash", "attack"),
+            ActionKind.BossSlam =>
+                FirstClip("slam", "smash", "attack"),
+            ActionKind.BossRoar =>
+                FirstClip("roar", "howl", "cast", "idle"),
             _ => FirstClip("idle_loop", "idle", "idle_rest"),
         };
         // 自动攻击会连续换 action_id；同一挥击没播完就从头切，看起来永远挥不完。

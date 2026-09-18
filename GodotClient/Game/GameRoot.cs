@@ -1691,6 +1691,9 @@ public partial class GameRoot : Node
 				CreatureKind.Spider => "蜘蛛",
 				CreatureKind.Fishman => "鱼人",
 				CreatureKind.Lizard => "蜥蜴",
+				// 占位名：与服务端 configs/creatures.json 的 boss 条目保持一致；
+				// 正式名字定下来后两边一起改。这里只影响 HUD/悬浮提示的文案。
+				CreatureKind.Boss => "首领",
 				_ => "生物",
 			};
 			return $"{name} #{id}{hpTxt} [攻击]";
@@ -1863,6 +1866,8 @@ public partial class GameRoot : Node
 				CreatureKind.Spider => "蜘蛛",
 				CreatureKind.Fishman => "鱼人",
 				CreatureKind.Lizard => "蜥蜴",
+				// 与上面同一份占位名，保证两处文案一致（此处还会拼"尸体"后缀）。
+				CreatureKind.Boss => "首领",
 				_ => "生物",
 			};
 			return view.Get("Dead", Dead.Parser) is not null ? name + "尸体" : name;

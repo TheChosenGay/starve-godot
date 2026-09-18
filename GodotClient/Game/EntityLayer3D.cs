@@ -322,6 +322,23 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             case ActionKind.Throw:
                 _sfx?.Play("sfx.player.swing");
                 break;
+            // Boss 技能段。音效目录（asset-starve/assets/audio/catalog.json）里目前
+            // 没有 Boss 专属素材：能对上现有音效的就映射，对不上的**刻意留空**并写明待补，
+            // 不要随便拿一个音效顶上——听感错了比没有更糟。清单见 scripts/README-boss-assets.md。
+            case ActionKind.BossThrow:
+                // 投弹与投掷同族（起手→抛出，炸弹随后走 Thrown 抛物线复制）：复用挥击起手。
+                _sfx?.Play("sfx.player.swing");
+                break;
+            case ActionKind.BossLeap:
+                // 待补 sfx.creature.boss.leap（闪现突进：起手时校验落点、出手时瞬移）。
+                break;
+            case ActionKind.BossSlam:
+                // 待补 sfx.creature.boss.slam。锤地的"画面"已经由 BlastFxLayer3D
+                // 消费服务端广播的 BlastEvent（扩散圈 + 震屏）负责，这里只缺音效。
+                break;
+            case ActionKind.BossRoar:
+                // 待补 sfx.creature.boss.roar（嚎叫：进入阶段，无额外事件）。
+                break;
             case ActionKind.Pick:
                 _sfx?.Play("sfx.gather.pick.berry");
                 break;
