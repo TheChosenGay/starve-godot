@@ -114,9 +114,21 @@ public readonly struct ThrowTrajectory
     /// 按已飞 tick 数取当前水平位置与高度（格）。
     /// 水平匀速 —— 最后一 tick 精确落在 To。
     /// </summary>
-    public (Vector2 Pos, double Height) SampleAt(int elapsedTicks)
+    public (Vector2 Pos, double Height) SampleAt(int elapsedTicks) =>
+        SampleAt((double)elapsedTicks);
+
+    /// <summary>
+    /// 按已飞 tick 数（**double**）取当前水平位置与高度（格）。
+    ///
+    /// 为什么需要 double 版本：权威 <c>elapsed</c> 只有 20Hz，客户端在两次快照之间
+    /// 按帧时间自行推进。若每帧把它截断成 int 再采样，位置就只能按 20Hz 跳 ——
+    /// 正是"炸弹一格一顿"的成因。这里只是把 t 的精度放开，公式与
+    /// <see cref="SampleAt(int)"/> 完全同一份（后者直接转发到本方法），
+    /// 因此整数 tick 的结果逐位不变，落地仍精确落在 To、高度归零。
+    /// </summary>
+    public (Vector2 Pos, double Height) SampleAt(double elapsedTicks)
     {
-        var t = FlightTicks <= 0 ? 1.0 : Math.Clamp((double)elapsedTicks / FlightTicks, 0, 1);
+        var t = FlightTicks <= 0 ? 1.0 : Math.Clamp(elapsedTicks / FlightTicks, 0, 1);
         var pos = Vector2.Lerp(From, To, (float)t);
         return (pos, ThrowPhysics.HeightAt(t, PeakHeight));
     }

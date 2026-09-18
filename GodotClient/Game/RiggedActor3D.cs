@@ -125,7 +125,9 @@ public partial class RiggedActor3D : Node3D, IAnimatedActor3D
         if (_dead) return;
         var clip = kind switch
         {
-            ActionKind.Attack or ActionKind.Chop or ActionKind.Mine =>
+            // 投掷与攻击/砍伐/挖矿同族：服务端的投掷也是"起手 → 抛出"的挥动动作，
+            // 没有专门的投掷 clip 时复用挥击，避免播 idle 看起来像没生效。
+            ActionKind.Attack or ActionKind.Chop or ActionKind.Mine or ActionKind.Throw =>
                 FirstClip("punch", "hook", "attack", "proc_attack"),
             ActionKind.Pick =>
                 FirstClip("pickup", "picking", "proc_pick"),

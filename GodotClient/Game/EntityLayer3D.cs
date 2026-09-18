@@ -27,6 +27,19 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
     private readonly Dictionary<ulong, long> _footstepAt = new();
     private readonly Dictionary<ulong, float> _moveSpeed = new();
     private readonly Dictionary<ulong, (int W, int H)> _blockFootprint = new();
+    // 投掷飞行（带 Thrown 的实体）：位置不走整数格平滑，而是按与服务端同一套抛物线公式采样。
+    //
+    // 这条跟踪器由 **GameRoot 注入**（`SetThrowFlights`），与它画 ghost 用的是**同一个实例**。
+    // 为什么不各自 new 一条：自己的投掷在交接那一刻，ghost 已经飞到 ~1 tick 之后，
+    // 而另一条 tracker 才刚拿到权威 elapsed≈0 ⇒ 画面会向后小跳半格。
+    // 共用一条时 `Observe(ownThrow: true)` 能看见 ghost 并把它的进度接管过来，交接零跳变。
+    //
+    // 随之而来的两条纪律：① 快照喂给 tracker 只由 GameRoot 做一次（这里不 Observe）；
+    // ② 每帧 Tick 也只由 GameRoot 做（重复推进 = 双倍速）。
+    private ThrowFlightTracker? _throwFlights;
+    // 上一份 / 本份快照里"正在飞"的权威实体（复用，避免每份快照分配）。
+    private HashSet<ulong> _flyingSeen = new();
+    private HashSet<ulong> _flyingNow = new();
     private readonly ActionPresentationController _actions;
     private readonly ImpactPresentationController _impacts;
     private SfxService? _sfx;
@@ -48,6 +61,13 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     public void SetSfx(SfxService? sfx) => _sfx = sfx;
     public void SetOwnId(ulong id) => _ownId = id;
+
+    /// <summary>
+    /// 注入投掷飞行跟踪器（与 GameRoot 画 ghost 用的是同一实例）。
+    /// 传 null 表示不渲染投掷轨迹（此时飞行体退回普通整数格平滑）。
+    /// </summary>
+    public void SetThrowFlights(ThrowFlightTracker? tracker) => _throwFlights = tracker;
+
     public void SetNameProvider(Func<EntityView, string?> provider) { }
     public void SetTilemap(TileMap? tm) => _tilemap = tm;
     public void SetViewRotation(float radians) { }
@@ -81,6 +101,18 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
     public void SyncEntities(IReadOnlyDictionary<ulong, EntityView> entities)
     {
+        // 本份快照里"正在飞"的权威实体集合（从共享 tracker 取，不再自己解析 Thrown：
+        // 喂快照只由 GameRoot 做一次，这里只消费结果，避免两份状态不一致）。
+        _flyingNow.Clear();
+        if (_throwFlights is not null)
+        {
+            var flights = _throwFlights.Samples();
+            for (var i = 0; i < flights.Count; i++)
+            {
+                if (!flights[i].IsGhost) _flyingNow.Add(flights[i].EntityId);
+            }
+        }
+
         // 复用缓冲收集待删除项（先收集再改字典，避免迭代中修改）。
         _staleScratch.Clear();
         foreach (var id in _nodes.Keys)
@@ -91,6 +123,13 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
         foreach (var (id, view) in entities)
         {
+            // 上一份还在飞、这一份不在飞了 ⇒ 已落地（或投掷被撤）：把平滑状态重置到落点。
+            // 否则下一帧会拿"飞行前的位置"算位移，表现为落地后往投掷者方向滑回/回跳。
+            if (_flyingSeen.Contains(id) && !_flyingNow.Contains(id))
+            {
+                ResetLandingPose(id, entities);
+            }
+
             var hasPos = view.Get("Position", Starve.Game.V1.Position.Parser) is not null;
             if (!hasPos)
             {
@@ -126,6 +165,9 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 node.Visible = false;
             SyncAction(id, view);
         }
+
+        // 交换缓冲：本份成为"上一份"，旧的那份留到下一帧开头清空复用。
+        (_flyingSeen, _flyingNow) = (_flyingNow, _flyingSeen);
     }
 
     public void UpdatePositions(
@@ -138,6 +180,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _lastNow = now;
         _actions.Tick();
 
+        // 投掷飞行的本地时间由 GameRoot 每帧推一次（共享同一条 tracker，这里再推就是双倍速），
+        // 这里只按实体 id 取样本。飞行体在样本里就直接按抛物线摆放。
         Vector3? playerWorld = null;
         if (ownPos is { } approach)
         {
@@ -148,6 +192,15 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
 
         foreach (var (id, node) in _nodes)
         {
+            // 投掷物：位置/高度完全由抛物线采样决定，跳过整数格平滑与地形高度平滑
+            // （后者会把 60FPS 的连续采样又抹成"跟地形的慢半拍"）。
+            if (_throwFlights is not null &&
+                _throwFlights.TryGet(id, out var flight) && !flight.IsGhost)
+            {
+                ApplyThrowFlight(id, node, flight);
+                continue;
+            }
+
             System.Numerics.Vector2 p;
             var extrap = false;
             var blend = 0f;
@@ -265,6 +318,8 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             case ActionKind.Attack:
             case ActionKind.Chop:
             case ActionKind.Mine:
+            // 投掷在服务端也是"起手→抛出"的挥砍式动作，本地预测沿用同一族动画/音效。
+            case ActionKind.Throw:
                 _sfx?.Play("sfx.player.swing");
                 break;
             case ActionKind.Pick:
@@ -404,9 +459,49 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         _sfx?.Play("sfx.player.footstep.grass");
     }
 
+    /// <summary>
+    /// 按抛投飞行样本摆放节点：水平位置直接取轨迹采样，高度（离地格数）叠加到世界 Y 上。
+    ///
+    /// 为什么不用 <see cref="SmoothHeight"/>：抛物线的 Y 每帧都在连续变化，
+    /// 再过一道地形高度平滑只会让它滞后于代码算出的轨迹（表现成"浮空/穿地"）。
+    /// 这里顺手把 <c>_lastPos</c>/<c>_heightSm</c> 更新到当前采样点，
+    /// 这样落地那一帧的位移/高度差是连续的，不会往投掷者方向滑回。
+    /// </summary>
+    private void ApplyThrowFlight(ulong id, Node3D node, ThrowFlightSample flight)
+    {
+        var ground = _tilemap?.HeightAt(flight.Position.X, flight.Position.Y) ?? 0f;
+        var world = IsoCamera3D.WorldTo3D(flight.Position.X, flight.Position.Y, ground);
+        // Height 是"离地高度"，直接加到世界 Y 上（与 ThrowAimLayer3D 的弧线同一口径）。
+        world.Y += (float)flight.Height * IsoCamera3D.WorldUnit;
+        node.Position = new Vector3(world.X, world.Y, world.Z);
+
+        _lastPos[id] = (flight.Position.X, flight.Position.Y);
+        _heightSm[id] = ground;
+        if (MoveTrace.Enabled)
+            MoveTrace.SampleRendered(id, world.X, world.Y, world.Z, ground);
+
+        // 飞行中的炸弹不该播走路动画（否则会拖着 walk 循环飞）。
+        if (node is IAnimatedActor3D actor) actor.SetLocomotion(false, 0f);
+    }
+
+    /// <summary>
+    /// Thrown 被移除（落地）后把该实体的平滑状态重置到落点。
+    /// 服务端落地时 Position 就是落点，直接拿来当"上一帧位置"，
+    /// 下一帧的位移判定与高度平滑都从这里重新开始。
+    /// </summary>
+    private void ResetLandingPose(ulong id, IReadOnlyDictionary<ulong, EntityView> entities)
+    {
+        if (!entities.TryGetValue(id, out var view)) return;
+        if (view.Get("Position", Starve.Game.V1.Position.Parser) is not { } pos) return;
+        _lastPos[id] = (pos.X, pos.Y);
+        _heightSm[id] = _tilemap?.HeightAt(pos.X, pos.Y) ?? 0f;
+    }
+
     private void Remove(ulong id)
     {
         _actions.Remove(id);
+        // 实体整体消失（例如爆炸物落地即销毁）：幂等，GameRoot 的快照 diff 也会 Forget 一次。
+        _throwFlights?.Forget(id);
         if (_nodes.TryGetValue(id, out var n))
         {
             n.QueueFree();

@@ -44,6 +44,22 @@ public partial class GameRoot : Node
 	// 为什么用"模式"而不是直接点地图就扔：投掷是两段动作（windup → 抛出），
 	// 且落点需要先看清抛物线再确认——直接扔会频繁误触。
 	private ThrowAimLayer3D? _throwAim;
+	/// <summary>本地预测的投掷物（ghost）表现层；权威飞行体由 EntityLayer3D 画。</summary>
+	private ThrowFlightLayer3D? _throwFlight;
+	/// <summary>
+	/// 投掷飞行跟踪器：ghost 起手/飞行 + 权威样本和解。
+	///
+	/// **与 EntityLayer3D 共用同一个实例**（它在创建世界视图时注入）：自己的投掷交接那一刻，
+	/// ghost 已经飞到 ~1 tick 之后，只有同一条 tracker 才看得见 ghost 的进度并接管过来；
+	/// 两条各自 tracker 会让权威从 elapsed≈0 重新开始 ⇒ 画面向后跳半格。
+	/// 纪律：快照只在这里喂一次（ApplyWorld），每帧只在这里 Tick 一次。
+	/// </summary>
+	private readonly ThrowFlightTracker _throwFlights = new();
+	// 上一份 / 本份快照里带 Thrown 的实体（复用，避免每份快照分配）。
+	private HashSet<ulong> _thrownSeen = new();
+	private HashSet<ulong> _thrownNow = new();
+	/// <summary>最近一次自己发起的投掷 request_id：用于把"被拒/取消"的 outcome 对上本地 ghost。</summary>
+	private ulong _throwRequestId;
 	private BlastFxLayer3D? _blastFx;
 	private bool _throwAiming;
 	private System.Numerics.Vector2 _throwTarget;
@@ -203,6 +219,9 @@ public partial class GameRoot : Node
 			_world3D = new World3DView();
 			AddChild(_world3D);
 			_worldRenderer = _world3D.Entities;
+			// 注入同一条投掷跟踪器：ghost 与权威实体必须共用一份进度，
+			// 否则自己投掷交接时权威从 elapsed≈0 起步，画面向后跳半格（见字段注释）。
+			_world3D.Entities.SetThrowFlights(_throwFlights);
 			_worldPivot.Visible = false;
 		}
 		else
@@ -338,6 +357,9 @@ public partial class GameRoot : Node
 		_world.AddChild(_blastFx);
 		_throwAim = new ThrowAimLayer3D { Name = "ThrowAim" };
 		_world.AddChild(_throwAim);
+		// 本地预测的 ghost 炸弹（起手期间服务端还没有可渲染的实体）
+		_throwFlight = new ThrowFlightLayer3D { Name = "ThrowFlight" };
+		_world.AddChild(_throwFlight);
 		if (_showMovementDiagnostics)
 		{
 			_movementDiagnosticsSampler = new MovementDiagnosticsSampler(
@@ -595,6 +617,17 @@ public partial class GameRoot : Node
 		{
 			_worldRenderer?.ApplyActionOutcome(outcome);
 			if (outcome.EntityId != _ownId) continue;
+			// 投掷被拒/取消：撤掉本地预告的 ghost，否则地面会留下一颗"假炸弹"。
+			// 只认自己刚发的那个 request_id；服务端若不给 Throw 的 outcome（匹配不到），
+			// 由跟踪器的落地滞留超时兜底（ThrowFlightTracker.GhostLingerSeconds）。
+			if (outcome.Kind == ActionKind.Throw &&
+				outcome.RequestId != 0 &&
+				outcome.RequestId == _throwRequestId &&
+				outcome.Result is ActionOutcomeResult.Rejected or ActionOutcomeResult.Canceled)
+			{
+				_throwFlights.CancelOwnGhost();
+				_throwFlight?.Clear();
+			}
 			if (outcome.Result == ActionOutcomeResult.Completed &&
 				outcome.Kind == ActionKind.Craft)
 			{
@@ -829,6 +862,12 @@ public partial class GameRoot : Node
 		// 投掷预览每帧跟随玩家（起点会随移动变化）
 		if (_throwAiming) RefreshThrowPreview();
 
+		// 投掷飞行：先按帧推进本地时间（把 20Hz 权威采样补成 60FPS 连续），
+		// 再把样本交给 ghost 层（它只画 IsGhost 的那条）。
+		// 权威飞行体不在这里画：EntityLayer3D 用自己的跟踪器推进并摆放实体节点。
+		_throwFlights.Tick(delta);
+		_throwFlight?.Show(_throwFlights.Samples(), HeightAt);
+
 		_worldRenderer!.UpdatePositions(
 			_smoothers,
 			id => id == _ownId
@@ -1000,8 +1039,30 @@ public partial class GameRoot : Node
 		var tick = world.WorldTick;
 		RebuildBlockers(world.Entities);
 		_debugShapes?.Sync(world.Entities);
+		// 本份快照里带 Thrown 的实体；与上一份对比即可发现"刚落地"的那些。
+		_thrownNow.Clear();
 		foreach (var (id, view) in world.Entities)
 		{
+			// 投掷飞行：服务端每 tick 标脏下发 Thrown，elapsed 是新鲜权威值。
+			// ownThrow 用投掷者字段判断，命中时跟踪器会把本地 ghost 交接给权威（见 ThrowFlightTracker）。
+			if (view.Get("Thrown", Thrown.Parser) is { } thrown)
+			{
+				_thrownNow.Add(id);
+				_throwFlights.Observe(
+					id,
+					new System.Numerics.Vector2(thrown.FromX, thrown.FromY),
+					new System.Numerics.Vector2(thrown.ToX, thrown.ToY),
+					thrown.FlightTicks,
+					thrown.Elapsed,
+					thrown.Gravity,
+					ownThrow: thrown.Thrower == _ownId);
+			}
+			else if (_thrownSeen.Contains(id))
+			{
+				// Thrown 被移除（落地/爆炸销毁）：停止跟踪。爆炸表现由 BlastFxLayer3D 负责，这里不碰。
+				_throwFlights.Forget(id);
+			}
+
 			var pos = view.Get("Position", Starve.Game.V1.Position.Parser);
 			if (pos is null) continue;
 			// M7 连续速度：真实位置 = Position(整格) + sub（sub∈[0,1) 分数偏移，Moveable 携带）
@@ -1086,6 +1147,9 @@ public partial class GameRoot : Node
 					(mv.DirX != 0 || mv.DirY != 0 || mv.Path.Count > 0);
 			}
 		}
+
+		// 交换缓冲：本份成为"上一份"，旧的那份留到下一份快照开头清空复用。
+		(_thrownSeen, _thrownNow) = (_thrownNow, _thrownSeen);
 
 		NoticeLootPicked(world);
 		_worldRenderer!.SyncEntities(world.Entities);
@@ -2332,8 +2396,17 @@ public partial class GameRoot : Node
 			return;
 		}
 		// thrown=0：由服务端从背包取一个炸弹实体化（客户端没有世界实体可指）
-		_client?.Commands.Throw(0, from.X, from.Y, to.X, to.Y);
+		var command = _client?.Commands.Throw(0, from.X, from.Y, to.X, to.Y);
 		var traj = ThrowPhysics.Solve(from, to);
+		if (command is { } cmd)
+		{
+			// 本地即时反馈（服务端 Commit 前 600ms 的起手期，画面上只可能有这两样）：
+			//   1. 投掷动作的起手表现（与 Attack 同族）；
+			//   2. 抛物线 ghost —— 起手结束后才离手，随后由权威实体交接。
+			_throwRequestId = cmd.RequestId;
+			_worldRenderer?.PredictAction(_ownId, ActionKind.Throw, cmd);
+			_throwFlights.PredictOwn(from, to);
+		}
 		_hud?.Log($"投掷 → ({to.X:0},{to.Y:0}) 距离 {dist:0.0} 格 · 飞行 {traj.FlightTicks} tick");
 		CancelThrowAim();
 	}
