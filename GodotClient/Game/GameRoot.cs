@@ -1345,12 +1345,29 @@ public partial class GameRoot : Node
 		return 0;
 	}
 
-	private string EquippedName() => EquippedKind() switch
+	/// <summary>
+	/// 手持物的显示名。
+	///
+	/// 优先按**装备实体**反查（武器与工具都在手持槽，名字来自服务端模板表），
+	/// 只有在拿不到实体时才退回能力推断 —— 否则装了长矛这类没有专属能力组件
+	/// 的手持物会显示成"徒手"，玩家以为没装上。
+	/// </summary>
+	private string EquippedName()
 	{
-		(int)ItemKind.Axe => "斧头",
-		(int)ItemKind.Pickaxe => "镐",
-		_ => "徒手",
-	};
+		if (_client is not null &&
+			_client.World.Entities.TryGetValue(_ownId, out var own) &&
+			own.Get("Equip", Equip.Parser) is { } eq &&
+			ItemFromEquipEntity(eq.Hand) is { } hand)
+		{
+			return hand.Name;
+		}
+		return EquippedKind() switch
+		{
+			(int)ItemKind.Axe => "斧头",
+			(int)ItemKind.Pickaxe => "镐",
+			_ => "徒手",
+		};
+	}
 
 	/// <summary>
 	/// 已穿戴护甲：从 Equip.head/body 反查护甲实体（服务端 Defense 只挂护甲实体，
