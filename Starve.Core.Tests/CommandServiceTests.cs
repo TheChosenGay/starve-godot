@@ -227,4 +227,46 @@ public sealed class CommandServiceTests
         public (string Route, byte[] Data) Notification(string route) =>
             Assert.Single(Notifications, item => item.Route == route);
     }
+
+    /// <summary>
+    /// 上行冗余：每个 tick 把**未确认的窗口**整批重发（丢包不丢输入），
+    /// 序号由组件持有 —— 所以这里是"带显式 seq 的批量发送"，不是协议自己编号。
+    /// </summary>
+    [Fact]
+    public void RedundantMoveOpsCarryExplicitSequenceFromComponent()
+    {
+        var session = new RecordingSession();
+        var commands = new CommandService(session);
+        commands.BeginInputEpoch(11);
+
+        // 第一批发 1..3（组件采样出来的三条操作）
+        commands.SendMoveOps(new[]
+        {
+            new MoveOp(1, 1, 0),
+            new MoveOp(2, 1, 0),
+            new MoveOp(3, -1, 0),
+        });
+        Assert.Equal<ulong>(3, commands.LastSentSeq);
+
+        // 服务端只确认到 1 → 下一批把 1..3 再带上（冗余），再附一条新的 4
+        commands.Acknowledge(11, 1, 0);
+        commands.SendMoveOps(new[]
+        {
+            new MoveOp(1, 1, 0),
+            new MoveOp(2, 1, 0),
+            new MoveOp(3, -1, 0),
+            new MoveOp(4, -1, 0),
+        });
+        Assert.Equal<ulong>(4, commands.LastSentSeq);
+        Assert.Equal<ulong>(3, commands.PendingControlCount); // 未确认：2、3、4
+
+        var moves = session.Notifications
+            .Where(x => x.Route == Routes.Move)
+            .Select(x => PlayerMove.Parser.ParseFrom(x.Data))
+            .ToArray();
+        Assert.Equal(7, moves.Length);
+        Assert.Equal(new ulong[] { 1, 2, 3, 1, 2, 3, 4 }, moves.Select(m => m.Seq));
+        Assert.All(moves, m => Assert.Equal<ulong>(11, m.InputEpoch));
+        Assert.Equal(-1, moves[^1].Dx);
+    }
 }

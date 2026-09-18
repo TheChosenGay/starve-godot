@@ -36,7 +36,7 @@ public sealed class SlopeSpeedTests
         flat.SetIntent(0, 1);
         flat.Tick(50);
 
-        var slope = new OwnMovementSim((_, _) => true) { HeightAt = tm.HeightAt };
+        var slope = new OwnMovementSim((_, _) => true) { HeightAt = tm.LogicalHeightAt };
         slope.SnapTo(0.5f, 0.5f);
         slope.SetSpeed(10);
         slope.SetIntent(0, 1);

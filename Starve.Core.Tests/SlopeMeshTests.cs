@@ -58,6 +58,15 @@ public sealed class SlopeMeshTests
     }
 
     [Fact]
+    public void LogicalHeightAt_IgnoresSmoothSlopesAndMatchesCliffBand()
+    {
+        var tm = Map(1, 1, [0, 0, 2, 2]);
+        tm.SmoothSlopes = true;
+        Assert.Equal(SlopeMesh.SampleHeight(tm, 0.5f, 0.5f), tm.LogicalHeightAt(0.5f, 0.5f), 5);
+        Assert.NotEqual(tm.HeightAt(0.5f, 0.5f), tm.LogicalHeightAt(0.5f, 0.5f), 3);
+    }
+
+    [Fact]
     public void BuildTileSmooth_RampIsSingleNonCliffQuad()
     {
         var tm = Map(1, 1, [2, 2, 1, 1]);
