@@ -8,6 +8,7 @@ using Godot;
 using Google.Protobuf;
 using Starve.Core;
 using Starve.Game.V1;
+using Starve.Netcode;
 using Starve.Protocol;
 using Starve.Protocol.World;
 using Camera = Starve.Core.Camera;
@@ -29,7 +30,11 @@ public partial class GameRoot : Node
 	private readonly Dictionary<ulong, PositionSmoother> _smoothers = new();
 	private readonly ConcurrentQueue<ActionOutcome> _actionOutcomes = new();
 	private readonly ConcurrentQueue<WorldEvent> _worldEvents = new();
-	private OwnMovementSim? _ownSim;
+	private IOwnMovementSim? _ownSim;
+	private NetcodeMetrics? _netcodeMetrics;
+	/// <summary>上行冗余窗口（组件模式：每个 tick 把未确认的操作整批发出去）。</summary>
+	private readonly List<ClientSmoother<OwnMoveState, MoveIntent>.OpRef> _ownUnacked = new();
+	private Starve.Protocol.MoveOp[] _ownUnackedWire = new Starve.Protocol.MoveOp[8];
 	// 占位物形状（树/岩的格心圆 + 建筑/工作站的占格盒）：只喂本地移动预测，不是阻挡网格
 	private readonly List<BlockerShape> _blockers = new();
 	private readonly List<OrcaNeighbor> _orcaNeighbors = new();
@@ -49,6 +54,14 @@ public partial class GameRoot : Node
 	private int _bombMass = 18;
 	private readonly Dictionary<ulong, bool> _locomotionMoving = new();
 	private bool _ownIntentMoving;
+	private long _demoPatrolAt;
+	private int _demoSign = 1;
+
+	/// <summary>STARVE_DEMO_PATROL_MS>0 时自动走变成原地往返（每 N 毫秒反向）。</summary>
+	private static long DemoPatrolMs =>
+		long.TryParse(System.Environment.GetEnvironmentVariable("STARVE_DEMO_PATROL_MS"), out var v) && v > 0
+			? v
+			: 0;
 	private bool _ownPathMoving;
 
 	private StarveClient? _client;
@@ -143,7 +156,14 @@ public partial class GameRoot : Node
 	private static bool Render3DMode =>
 		!OS.GetCmdlineUserArgs().Contains("--render-2d") &&
 		System.Environment.GetEnvironmentVariable("STARVE_RENDER_2D") != "1";
-	/// <summary>演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。</summary>
+	/// <summary>
+	/// 演示/截图辅助：STARVE_DEMO_MOVE="dx,dy" 时按住方向自动走（本地预测 + 服务端命令）。
+	///
+	/// 再加 STARVE_DEMO_PATROL_MS=3000 就变成**原地往返**：每 3 秒把方向取反。
+	/// 为什么需要：直线走会把角色顶到地图边界/障碍上，"贴墙推"那段的位移本来就是 0，
+	/// 会把"走路顺不顺"的逐帧统计污染成一半零帧（实测踩过：边界上 599 帧全 0）。
+	/// 往返则一直留在开阔地里走，同时天然覆盖"反复转向"这个最容易露出抖动的情形。
+	/// </summary>
 	private static (int Dx, int Dy)? DemoMove =>
 		System.Environment.GetEnvironmentVariable("STARVE_DEMO_MOVE") is { } s &&
 		s.Split(',') is { Length: 2 } parts &&
@@ -288,7 +308,28 @@ public partial class GameRoot : Node
 		AddChild(new CameraController { Camera = _camera });
 		var move = new MoveController();
 		_moveController = move;
-		_ownSim = new OwnMovementSim(IsWalkable);
+		// 组件模式（默认）：预测/和解/追步全在组件里（序号锚定）；旧实现保留作回退对照。
+		_ownSim = ComponentOwnMovementSim.Enabled
+			? new ComponentOwnMovementSim(IsWalkable)
+			: new OwnMovementSim(IsWalkable);
+
+		// 指标出口：业务实现 INetcodeMetrics，把每次和解接到自己的日志（逐次因果链，见 NetcodeMetrics）。
+		if (_ownSim is ComponentOwnMovementSim componentSim && componentSim.Smoother is { } smoother)
+		{
+			try
+			{
+				_netcodeMetrics = new NetcodeMetrics(
+					System.IO.Path.Combine(OS.GetUserDataDir(), PerfMonitor.DirName));
+				smoother.Metrics = _netcodeMetrics;
+				// 统一序号：攻击/合成等离散操作也走组件那一条输入流（否则服务端按序号连续消费会卡在缺口上）。
+				if (_client is not null)
+					_client.Commands.SeqSource = () => smoother.ReserveDiscreteOp(NowMs());
+			}
+			catch (Exception ex)
+			{
+				GD.PushWarning("netcode 指标日志未启动: " + ex.Message);
+			}
+		}
 		// 调试：把服务端下发的简化碰撞体画出来（GATE_DEBUG_COLLISION=1 才有数据）
 		_debugShapes = new DebugShapeLayer3D();
 		AddChild(_debugShapes);
@@ -304,7 +345,10 @@ public partial class GameRoot : Node
 		}
 		move.OnMove += dir =>
 		{
-			if (!GameplayLocked()) _client?.Commands.Move(dir.Dx, dir.Dy);
+			// 组件模式：移动上行由"每 tick 发未确认窗口"负责（见 _Process），
+			// 这里的"变化时发一条"会让两套 seq 打架，必须关掉。
+			if (!ComponentOwnMovementSim.Enabled && !GameplayLocked())
+				_client?.Commands.Move(dir.Dx, dir.Dy);
 		};
 		move.OnIntent += dir =>
 		{
@@ -347,6 +391,9 @@ public partial class GameRoot : Node
 		if (vp is not null) vp.SizeChanged -= FitUiRoot;
 		_perf?.Dispose();
 		_perf = null;
+		_netcodeMetrics?.Dispose();
+		_netcodeMetrics = null;
+		OwnLocoTrace.Finish();
 	}
 
 	private void FitUiRoot()
@@ -564,6 +611,12 @@ public partial class GameRoot : Node
 		if (client.World.Revision != _lastRevision)
 		{
 			_lastRevision = client.World.Revision;
+			if (MoveTrace.Enabled)
+			{
+				var wt = client.World.WorldTick;
+				MoveTrace.NoteApply(wt, _lastAppliedTick);
+				_lastAppliedTick = wt;
+			}
 			ApplyWorld(client.World);
 			try
 			{
@@ -608,16 +661,68 @@ public partial class GameRoot : Node
 		if (!_gameplayLocked && DemoMove is { } dm && now >= _demoNextAt)
 		{
 			_demoNextAt = now + 100;
-			_client?.Commands.Move(dm.Dx, dm.Dy);
-			_ownSim?.SetIntent(dm.Dx, dm.Dy);
-			_worldRenderer?.SetOwnMoveDir(dm.Dx, dm.Dy);
-			if (dm.Dx != 0 || dm.Dy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
+			if (DemoPatrolMs > 0 && now >= _demoPatrolAt)
+			{
+				_demoPatrolAt = now + DemoPatrolMs;
+				_demoSign = -_demoSign;
+			}
+			var ddx = dm.Dx * _demoSign;
+			var ddy = dm.Dy * _demoSign;
+			// 组件模式下移动上行只走"每 tick 发未确认窗口"，这里不能再发（两套 seq 会打架）；
+			// 演示模式的意图仍然要设置给本地预测。
+			if (!ComponentOwnMovementSim.Enabled) _client?.Commands.Move(ddx, ddy);
+			_ownSim?.SetIntent(ddx, ddy);
+			_worldRenderer?.SetOwnMoveDir(ddx, ddy);
+			// 与真实按键一致：置位"本地意图在动"。否则 ApplyWorld 每 20Hz 会用
+			// 服务端 Path（演示模式为空）把本地意图覆盖成 (0,0)，表现成一顿一顿。
+			_ownIntentMoving = ddx != 0 || ddy != 0;
+			if (ddx != 0 || ddy != 0) _worldRenderer?.CancelActionForMovement(_ownId);
 		}
-		if (_client is { } predictionClient &&
+		var canPredict = _client is { } predictionClient &&
 			predictionClient.Transport.IsConnected &&
-			predictionClient.Commands.CanPredictMovement)
+			predictionClient.Commands.CanPredictMovement;
+		var ownBefore = _ownSim?.Position ?? default;
+		if (canPredict)
 		{
-			_ownSim?.Tick((float)(delta * 1000));
+			_ownSim?.Tick((float)(delta * 1000), now);
+
+			// 上行：每个 tick 把"未确认的操作窗口"整批发出去（冗余：丢包不丢输入，
+			// 服务端按 seq 去重排序）。组件模式下这是唯一的移动上行通道 ——
+			// 变化事件那条（Commands.Move）要关掉，否则两套序号会打架。
+			if (_ownSim is ComponentOwnMovementSim comp && _client is not null
+				&& _client.Transport.IsConnected)
+			{
+				var n = comp.CollectUnackedOps(_ownUnacked, comp.Config.RedundantOps);
+				if (n > 0)
+				{
+					if (n > _ownUnackedWire.Length)
+						Array.Resize(ref _ownUnackedWire, n);
+					for (var i = 0; i < n; i++)
+						_ownUnackedWire[i] = new Starve.Protocol.MoveOp(
+							_ownUnacked[i].Seq, _ownUnacked[i].Action.Dx, _ownUnacked[i].Action.Dy);
+					_client.Commands.SendMoveOps(_ownUnackedWire.AsSpan(0, n));
+				}
+			}
+		}
+		if (_ownSim is ComponentOwnMovementSim clockSim)
+		{
+			_netcodeMetrics?.NoteStep(clockSim.Smoother.LastStepDistance, clockSim.LastSlope, clockSim.Predictor.EffectiveSpeed);
+			// 渲染时基探针：逐帧记下"这一帧用的是 tick 轴上的哪一点"。
+			// 如果它每帧的增量不等于 dt/50ms，那渲染位置就会跟着一顿一顿 —— 与校正无关。
+			OwnLocoTrace.NoteClock(
+				clockSim.Smoother.Clock.TickAt(now),
+				clockSim.Smoother.RenderOffsetDistance,
+				clockSim.Smoother.CorrectionBlendWeight);
+		}
+		if (MoveTrace.Enabled && _ownSim is { } traceSim)
+		{
+			var intent = traceSim.Intent;
+			MoveTrace.OwnFrame(
+				canPredict,
+				canPredict && traceSim.Position != ownBefore,
+				_client?.Commands.PendingControlCount ?? 0,
+				_client?.Commands.LastAcceptedSeq ?? 0,
+				intent.Dx, intent.Dy, traceSim.LastSlope);
 		}
 		if (_movementDiagnosticsSampler?.TrySample(now, out var diagnostics, out var changed) == true)
 		{
@@ -642,6 +747,7 @@ public partial class GameRoot : Node
 			: null;
 		if (!_freeCamera) _camera.Follow(own?.X, own?.Y);
 		_camera.Tick((float)(delta * 1000));
+		if (MoveTrace.Enabled) MoveTrace.FrameBegin(now, _ownId, _camera.CenterX(), _camera.CenterY());
 		if (_render3D)
 		{
 			var orbit = 0f;
@@ -730,6 +836,24 @@ public partial class GameRoot : Node
 				: _locomotionMoving.GetValueOrDefault(id),
 			now,
 			own);
+		if (OwnLocoTrace.Expired(now))
+		{
+			OwnLocoTrace.Finish();
+			GD.Print("LOCO 采集结束，自动退出（避免测试进程一直挂在 gate 上）");
+			GetTree().Quit();
+			return;
+		}
+		if (MoveTrace.Enabled)
+		{
+			MoveTrace.FrameEnd(now, delta * 1000.0);
+			if (MoveTrace.ShouldQuit(now))
+			{
+				MoveTrace.Finish();
+				OwnLocoTrace.Finish();
+				GetTree().Quit();
+				return;
+			}
+		}
 		_debugShapes?.UpdatePositions(_world3D?.Entities);
 		_worldRenderer.SetDayLight(client.World.DayLight);
 		if (_render3D && _world3D is not null)
@@ -886,28 +1010,44 @@ public partial class GameRoot : Node
 				_world3D?.Entities.SetMoveSpeed(id, (float)mv.EffectiveSpeed);
 			if (id == _ownId)
 			{
-				// 自己的位置走本地预测 + 服务端校正，不进插值缓冲
-				if (mv is not null)
+				// 自己的位置走本地预测 + 服务端校正，不进插值缓冲。
+				//
+				// ⚠️ 这一段必须**原子读**：位置 / 组件 tick / ack 是"同一条快照消息"的三个字段，
+				//    而推送在网络线程上直接改世界（Session.OnPush → World.HandleMessage），
+				//    主线程分几次读就会配出「位置来自消息 m、ack 来自消息 m+1」。和解拿它做
+				//    序号锚定比较时整体偏一个 tick ⇒ 每份快照都误判成需要校正（恒定 0.5 格，
+				//    转向处翻倍），表现就是"走着走着时不时卡一下"。
+				var own = world.ReadAtomic(() => (
+					Pos: view.Get("Position", Starve.Game.V1.Position.Parser),
+					Mv: view.Get("Moveable", Moveable.Parser),
+					Col: view.Get("Collide", Collide.Parser),
+					PosTick: view.ComponentTick("Position"),
+					MvTick: view.ComponentTick("Moveable"),
+					Ack: _client?.Commands.LastAcceptedSeq ?? 0,
+					Epoch: _client?.Commands.InputEpoch ?? 0));
+				var mv2 = own.Mv;
+				var ownFx = own.Pos.X + (float)(mv2?.SubX ?? 0);
+				var ownFy = own.Pos.Y + (float)(mv2?.SubY ?? 0);
+				if (mv2 is not null)
 				{
-					_lastEffectiveSpeed = (float)mv.EffectiveSpeed;
-					foreach (var speed in new[] { 0 }) { _ = speed; }
+					_lastEffectiveSpeed = (float)mv2.EffectiveSpeed;
 					ApplyDebugMoveSpeed();
 					// 服务端权威身体半径：现在来自独立的 Collide 组件（由客户端模型推导）。
 					// 本地预测必须用同一个值，否则贴着树/墙会来回校正。
-					if (view.Get("Collide", Collide.Parser) is { } ownCol)
+					if (own.Col is { } ownCol)
 					{
 						_ownSim?.SetBodyRadius((float)ownCol.Radius);
 						// ORCA 的输入维度：有效速度上限 + 胶囊半长（与服务端一致）
-						_ownSim?.SetSpeedProfile((float)mv.EffectiveSpeed, (float)ownCol.HalfLength);
+						_ownSim?.SetSpeedProfile((float)mv2.EffectiveSpeed, (float)ownCol.HalfLength);
 					}
 				}
 				// 自己的投掷力量（决定可达距离；预览与本地校验都要用）
 			if (view.Get("Thrower", Starve.Game.V1.Thrower.Parser) is { } thr)
 				_ownThrowStrength = thr.Strength;
-			_ownPathMoving = mv is { Path.Count: > 0 };
+			_ownPathMoving = mv2 is { Path.Count: > 0 };
 				if (!_ownIntentMoving && !GameplayLocked())
 				{
-					var pathDir = _ownPathMoving ? mv!.Path[0] : null;
+					var pathDir = _ownPathMoving ? mv2!.Path[0] : null;
 					var pdx = pathDir?.Dx ?? 0;
 					var pdy = pathDir?.Dy ?? 0;
 					_ownSim?.SetIntent(pdx, pdy);
@@ -915,14 +1055,18 @@ public partial class GameRoot : Node
 						_worldRenderer?.SetOwnMoveDir(pdx, pdy);
 				}
 				// 服务端确认停止 = Dir 清空 + 无路径；连续移动保留最终 sub，不吸附整数格。
-				var serverStopped = mv is { DirX: 0, DirY: 0 } &&
-									mv.Path.Count == 0;
+				var serverStopped = mv2 is { DirX: 0, DirY: 0 } &&
+									mv2.Path.Count == 0;
 				// 位置/移动组件最后下发的世界 tick：停下后服务端不再标脏这两个组件，
 				// 快照仍是旧的。把它交给校正逻辑，才能避免拿冻结值反复回拉（停下抖动）。
-				var posTick = view.ComponentTick("Position");
-				var mvTick = view.ComponentTick("Moveable");
-				var freshTick = Math.Max(posTick, mvTick);
-				_ownSim?.Reconcile(fx, fy, serverStopped, freshTick);
+				var freshTick = Math.Max(own.PosTick, own.MvTick);
+				if (mv2 is not null)
+					_ownSim?.FeedServerMotion(
+						(float)mv2.VelX, (float)mv2.VelY, (float)mv2.EffectiveSpeed,
+						mv2.DirX, mv2.DirY, mv2.Path.Count);
+				_ownSim?.Reconcile(ownFx, ownFy, serverStopped, freshTick, own.Ack, own.Epoch, now);
+				if (MoveTrace.Enabled && _ownSim is { } reconSim)
+					MoveTrace.OwnReconcile(reconSim.LastReconcile);
 			}
 			else if (!_smoothers.TryGetValue(id, out var smoother))
 			{
@@ -988,6 +1132,7 @@ public partial class GameRoot : Node
 				var c = view.Get("Collide", Collide.Parser);
 				var p = view.Get("Position", Position.Parser);
 				if (c is null || p is null) continue;
+				if (view.Get("Moveable", Moveable.Parser) is not null) continue;   // 只算静态形状（见下）
 				signature = signature * 31 + view.EntityId.GetHashCode();
 				signature = signature * 31 + p.X;
 				signature = signature * 31 + p.Y;
@@ -1007,6 +1152,17 @@ public partial class GameRoot : Node
 			var c = view.Get("Collide", Collide.Parser);
 			var p = view.Get("Position", Position.Parser);
 			if (c is null || p is null) continue;
+			// ⚠️ **只喂静态形状**：会自己动的实体（有 Moveable）在服务端走**动态层 + ORCA 避让**，
+			//    不在它自己的静态扫掠里。而本地的 MovementSlide 把胶囊当**硬障碍**处理、且不看 Owner：
+			//    只要把玩家**自己的胶囊**喂进去，本地每一步都在"撞自己" ⇒ 步长被截断
+			//    （端上实测 0.073 格 vs 服务端 0.5 格）⇒ 每份快照都要校正。
+			//    端到端 A/B（同一地形、自动行走 16s）：
+			//      · 障碍+邻居全喂        校正占快照 29%，err 中位 0.257
+			//      · 只喂胶囊（移动体）   校正 47%，err 中位 0.399   ← 就是它
+			//      · 只喂圆（树/岩）      校正  6%，err 中位 0.050
+			//      · 不喂任何障碍         校正  6%
+			//    判据与服务端一致：CanSelfMove = 有 Moveable ⇒ 这些实体不进静态层。
+			if (view.Get("Moveable", Moveable.Parser) is not null) continue;
 			switch (c.Shape)
 			{
 				case CollideShape.Circle:
@@ -1017,15 +1173,33 @@ public partial class GameRoot : Node
 					_blockers.Add(BlockerShape.Box(p.X, p.Y, Math.Max(1, c.Width), Math.Max(1, c.Height)));
 					break;
 				case CollideShape.Capsule:
-					// 移动体（玩家/动物）是胶囊：放进动态层，静态滑动不挡它们
-					// （动态之间靠 ORCA 避让，见 OwnMovementSim）。
+					// 静态胶囊（不自己动，但推得动，比如船）：仍然是静态硬碰撞，保留。
 					_blockers.Add(BlockerShape.Capsule(p.X, p.Y, (float)c.Radius, (float)c.HalfLength,
 						c.FaceX, c.FaceZ, view.EntityId));
 					break;
 			}
 		}
-		_ownSim?.SetBlockers(_blockers);
-		SyncOrcaNeighbors(entities);
+		// 诊断对照开关：分别关掉"占位物喂料 / ORCA 邻居喂料"，看残差是不是它们造成的。
+		// STARVE_OWN_NO_BLOCKERS=1 / STARVE_OWN_NO_NEIGHBORS=1
+		var noBlockers = System.Environment.GetEnvironmentVariable("STARVE_OWN_NO_BLOCKERS") == "1";
+		var noNeighbors = System.Environment.GetEnvironmentVariable("STARVE_OWN_NO_NEIGHBORS") == "1";
+		// 细分：只喂圆（树/岩）、只喂盒（建筑/工作站）、只喂胶囊（移动体）
+		var only = System.Environment.GetEnvironmentVariable("STARVE_OWN_ONLY_SHAPE");
+		var fed = _blockers;
+		if (!string.IsNullOrEmpty(only))
+		{
+			fed = new System.Collections.Generic.List<Starve.Core.BlockerShape>();
+			foreach (var b in _blockers)
+			{
+				var k = b.Kind.ToString().ToLowerInvariant();
+				if (k.StartsWith(only)) fed.Add(b);
+			}
+		}
+		_ownSim?.SetBlockers(noBlockers ? System.Array.Empty<Starve.Core.BlockerShape>() : fed);
+		if (noNeighbors)
+			_ownSim?.SetNeighbors(System.Array.Empty<Starve.Core.OrcaNeighbor>());
+		else
+			SyncOrcaNeighbors(entities);
 	}
 
 	/// <summary>
@@ -1046,19 +1220,24 @@ public partial class GameRoot : Node
 			var col = view.Get("Collide", Collide.Parser);
 			var pos = view.Get("Position", Position.Parser);
 			if (col is null || pos is null) continue;
-			// 只有动态体参与 ORCA（静态体已在 _blockers 里做硬碰撞）
-			if (!view.Has("Dynamic")) continue;
+			// 只有会自己动的实体参与 ORCA（静态体已在 _blockers 里做硬碰撞）。
+			//
+			// ⚠️ 判据必须是"有 Moveable"（服务端 CanSelfMove 的唯一判据，见 pushable.go）。
+			//    这里曾经写的是 view.Has("Dynamic")，而服务端早已把 Static/Dynamic 两个 tag
+			//    删掉、换成 Pushable/Moveable 的正交组合 ⇒ 该判据**恒为假**，邻居表永远是空的：
+			//    本地预测完全不做动态避让，贴着别人/动物走就会被反复校正（"靠近别人时发卡"）。
 			var mv = view.Get("Moveable", Moveable.Parser);
-			var wx = pos.X + (float)(mv?.SubX ?? 0);
-			var wy = pos.Y + (float)(mv?.SubY ?? 0);
+			if (mv is null) continue;
+			var wx = pos.X + (float)(mv.SubX);
+			var wy = pos.Y + (float)(mv.SubY);
 			_orcaNeighbors.Add(new OrcaNeighbor
 			{
 				X = wx, Y = wy,
-				VX = (float)(mv?.VelX ?? 0),
-				VY = (float)(mv?.VelY ?? 0),
+				VX = (float)mv.VelX,
+				VY = (float)mv.VelY,
 				Radius = (float)col.Radius,
 				HalfLength = (float)col.HalfLength,
-				MaxSpeed = (float)(mv?.EffectiveSpeed ?? mv?.Speed ?? 10),
+				MaxSpeed = (float)(mv.EffectiveSpeed > 0 ? mv.EffectiveSpeed : mv.Speed),
 			});
 		}
 		// 确定性：按位置排序，与服务端的邻居排序规则一致（LP 对顺序敏感）。
@@ -2176,6 +2355,8 @@ public partial class GameRoot : Node
 		var local = _world.ToLocal(screen);
 		return IsoMath.LocalToWorld(local.X, local.Y, heightAt);
 	}
+
+	private long _lastAppliedTick = -1;
 
 	private static long NowMs() => checked((long)Time.GetTicksMsec());
 }

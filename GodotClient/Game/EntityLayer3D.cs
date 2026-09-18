@@ -143,6 +143,11 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         foreach (var (id, node) in _nodes)
         {
             System.Numerics.Vector2 p;
+            var extrap = false;
+            var blend = 0f;
+            var dt = 0.0;
+            var stk = 0L;
+            var sn = 0;
             if (id == _ownId && ownPos is { } op)
             {
                 p = new System.Numerics.Vector2(op.X, op.Y);
@@ -153,17 +158,26 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 // 统计外推帧占比：PerfMonitor 每秒汇总一次并清零。
                 GameRoot.SmootherSamples++;
                 if (sm.Extrapolating) GameRoot.SmootherExtrapolating++;
+                extrap = sm.Extrapolating;
+                blend = sm.LastBlendDistance;
+                dt = sm.LastVirtualTick;
+                stk = sm.LatestTick;
+                sn = sm.SampleCount;
             }
             else
             {
                 continue;
             }
 
+            if (MoveTrace.Enabled) MoveTrace.Sample(id, p.X, p.Y, extrap, blend, dt, stk, sn);
             var vis = VisualWorld(id, p.X, p.Y);
             var targetHeight = _tilemap?.HeightAt(vis.X, vis.Y) ?? 0;
             var h = id == _ownId ? targetHeight : SmoothHeight(id, targetHeight, deltaMs);
             var world = IsoCamera3D.WorldTo3D(vis.X, vis.Y, h);
             node.Position = new Vector3(world.X, world.Y, world.Z);
+            // 记录真正画出去的位置与该点地形高度：dRendY 是"上下卡"的直接指标。
+            if (MoveTrace.Enabled)
+                MoveTrace.SampleRendered(id, world.X, world.Y, world.Z, targetHeight);
 
             var dx = 0f;
             var dy = 0f;
@@ -173,6 +187,10 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
                 dy = p.Y - last.Y;
             }
             var loco = LocomotionPresentation.FromDisplacement(dx, dy, deltaMs, SpeedOf(id));
+            // 自己的走路表现逐帧落盘（诊断用）：把"这一帧位移 → moving 判定 → 动画速度"
+            // 和 netcode 的校正时间戳对齐，就能分清"是服务器校正导致的卡"还是"动画被打断"。
+            if (id == _ownId)
+                OwnLocoTrace.Sample(now, dx, dy, deltaMs, loco, _ownDx, _ownDy, p.X, p.Y);
             FaceFromIntentOrMotion(id, node, dx, dy, loco.Moving, deltaMs);
             _lastPos[id] = (p.X, p.Y);
 
