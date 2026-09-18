@@ -7,5 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Starve.Protocol/Starve.Protocol.csproj" />
+    <!-- 游戏侧实现组件的 INetModel 接口；组件本身不反向依赖本工程。 -->
+    <ProjectReference Include="../Starve.Netcode/Starve.Netcode.csproj" />
   </ItemGroup>
 </Project>

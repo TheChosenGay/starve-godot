@@ -6,6 +6,8 @@ namespace Starve.Core;
 /// <summary>
 /// 坡度速度：按未旋转等距投影的边长比缩放世界速度。
 /// 与服务端 worldmap.SlopeFactorAt 同一公式；不读相机缩放/旋转。
+/// 3D 视觉高度只有 HeightScale=0.28，但本公式用完整逻辑高，缓坡也会落到 FactorMin。
+/// 客户端不能单独抬速度，否则预测会和服务端拉回。
 /// </summary>
 public static class SlopeSpeed
 {

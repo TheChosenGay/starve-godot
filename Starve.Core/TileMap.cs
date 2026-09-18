@@ -56,6 +56,12 @@ public sealed class TileMap
             ? SlopeMesh.SampleHeightBilinear(this, wx, wy)
             : SlopeMesh.SampleHeight(this, wx, wy);
 
+    /// <summary>
+    /// 移动/坡度用的权威高度：始终崖壁带，与服务端 worldmap.HeightAt 一致。
+    /// 3D 视觉可以双线性，但不能拿去算 SlopeFactor，否则预测会和服务端分叉。
+    /// </summary>
+    public float LogicalHeightAt(float wx, float wy) => SlopeMesh.SampleHeight(this, wx, wy);
+
     /// <summary>画家排序深度：wx + wy + 高度（越高越靠前/靠上）。</summary>
     public float DepthAt(float wx, float wy) => wx + wy + HeightAt(wx, wy);
 }

@@ -95,6 +95,15 @@ public sealed class PositionSmoother
     /// <summary>最近一次由残差触发的平滑过渡强度（格）；0 = 未发生过渡。</summary>
     public float LastBlendDistance { get; private set; }
 
+    /// <summary>诊断：最近一次采样用的虚拟 tick（= 最新样本 tick + 墙钟折算 - 延迟）。</summary>
+    public double LastVirtualTick { get; private set; }
+
+    /// <summary>诊断：当前样本数。</summary>
+    public int SampleCount => _samples.Count;
+
+    /// <summary>诊断：最新样本 tick。</summary>
+    public long LatestTick => _latestTick;
+
     /// <summary>最近一次实际显示位置，用于判断新样本是否与预测脱节。</summary>
     private float _lastOutputX;
     private float _lastOutputY;
@@ -209,9 +218,17 @@ public sealed class PositionSmoother
     /// </summary>
     private Vector2 SampleAt(long now, out bool extrapolating)
     {
-        // 距离上次快照经过的墙钟（ms）按 20Hz 折算成 tick，让插值点帧间连续前进
+        // 距离上次快照经过的墙钟（ms）按 20Hz 折算成 tick，让插值点帧间连续前进。
+        //
+        // ⚠️ 必须用 double：tick 是**服务端累计 tick**（存档会把它带到几十万甚至上百万）。
+        // float 只有 24 bit 有效位，tick ≈ 7.2e5 时 ULP 已经是 0.0625 tick = 3.125ms，
+        // 于是"虚拟 tick"只能取 0.0625 的整数倍，逐帧位移变成阶梯 —— 表现为移动一顿一顿，
+        // 而且**与帧率无关**（帧率越高越明显：120FPS 每帧只前进 0.167 tick，量化误差占比更大），
+        // 并且随服务器运行时间**持续变坏**（tick 越大 ULP 越大）。
+        // 见 Starve.Core.Tests/TickPrecisionProbeTests。
         var sinceUpdate = Math.Max(0, now - _lastUpdateWall);
-        var dt = _latestTick + sinceUpdate / 50f - _delayTicks;
+        var dt = _latestTick + sinceUpdate / 50.0 - _delayTicks;
+        LastVirtualTick = dt;
         return Evaluate(dt, out extrapolating);
     }
 
@@ -221,7 +238,7 @@ public sealed class PositionSmoother
     ///   - 残差判据里把新样本折算成期望延迟位置。
     /// 纯函数，不改状态。
     /// </summary>
-    private Vector2 Evaluate(float targetTick, out bool extrapolating)
+    private Vector2 Evaluate(double targetTick, out bool extrapolating)
     {
         extrapolating = false;
         if (_samples.Count == 0) return Vector2.Zero;
@@ -234,7 +251,7 @@ public sealed class PositionSmoother
             var b = _samples[i];
             var span = b.Tick - a.Tick;
             if (span <= 0) return new Vector2(b.X, b.Y);
-            var t = MathF.Min(1, MathF.Max(0, (targetTick - a.Tick) / (float)span));
+            var t = (float)Math.Clamp((targetTick - a.Tick) / span, 0.0, 1.0);
             return new Vector2(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
         }
 
@@ -274,7 +291,7 @@ public sealed class PositionSmoother
         // beyond 每帧都在增长，而 decay 同时在下降，两者相乘会让结果**先增后减**，
         // 于是画面在外推超限后开始**倒退**（实测倒退 0.79 格，明显橡皮筋）。
         // 正确做法是把外推距离钳在上限处，画面平滑停住、绝不后退。
-        var clamped = MathF.Min(beyond, _maxExtrapTicks);
+        var clamped = (float)Math.Min(beyond, _maxExtrapTicks);
         extrapolating = true;
         return new Vector2(last.X + vx * clamped, last.Y + vy * clamped);
     }
