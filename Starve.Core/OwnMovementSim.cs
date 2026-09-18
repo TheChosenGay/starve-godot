@@ -46,7 +46,6 @@ public interface IOwnMovementSim
     void SetBodyRadius(float radius);
     void SetBlockers(IReadOnlyList<BlockerShape> blockers);
     void SetNeighbors(IReadOnlyList<OrcaNeighbor> neighbors);
-    void SetSelfKey(ulong entityId);
     void SetSpeedProfile(float effectiveSpeed, float halfLength);
 
     /// <summary>推进一帧。<paramref name="nowMs"/> 是**绝对墙钟**（组件用它映射服务端 tick）。</summary>
@@ -149,9 +148,6 @@ public sealed class OwnMovementSim : IOwnMovementSim
 
     /// <summary>本 tick 的实际速度（格/秒）：ORCA 的"当前速度"输入，也是表现层依据。</summary>
     public (float X, float Y) Velocity => (_velX, _velY);
-
-    /// <summary>设置自己的实体 id（ORCA 对称打破用；须与服务端下发的 id 一致）。</summary>
-    public void SetSelfKey(ulong entityId) => _predictor.SetSelfKey(entityId);
 
     /// <summary>同步服务端下发的有效速度与胶囊半长（ORCA 的输入维度）。</summary>
     public void SetSpeedProfile(float effectiveSpeed, float halfLength) =>

@@ -21,7 +21,6 @@ public sealed class OwnMovePredictorContractTests
         var model = new OwnMovePredictor((x, _) => x < 12);
         model.SetBodyRadius(0.3f);
         model.SetSpeedProfile(10f, 0.35f);
-        model.SetSelfKey(7);
         model.SetBlockers([BlockerShape.Circle(11.5f, 10.5f, 0.4f)]);
         model.SetNeighbors(
         [

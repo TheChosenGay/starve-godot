@@ -617,7 +617,6 @@ internal static class SmokeRunner
     {
         blockers.Clear();
         neighbors.Clear();
-        sim.SetSelfKey(ownId);
 
         foreach (var (id, view) in world.Entities)
         {

@@ -11,8 +11,11 @@ namespace Starve.Core.Tests;
 /// 语料的 <c>want_x/want_y</c> 由服务端真实求解路径（MoveSolver + ApplyDisplacement 三阶段）
 /// 产出；本测试用客户端自己那套数学（<see cref="OwnMovePredictor"/>）逐条回放并比对，
 /// 从而在 CI 里堵住"两端不一致"。它比 <see cref="MovementGoldenTests"/> 覆盖面更宽：
-/// 9 类场景（base/diagonal/slope/wall/circle/box/capsule/orca/combo）各 40 条，
-/// 首次把 **ORCA 动态避让** 与 **形状滑掠 + 坡度 + 邻居** 的组合也纳入契约。
+/// 10 类场景（base/diagonal/slope/wall/circle/box/capsule/orca/collinear/combo）各 40 条：
+/// 既覆盖 **ORCA 动态避让** 与 **形状滑掠 + 坡度 + 邻居** 的组合，
+/// 也用 <c>collinear</c> 类（**完全共线**正面对撞、零横向偏移）锁住
+/// **ORCA 对称打破**：那种场景几何上左右完全对称，靠"世界系常量偏置"
+/// 把 leg 的选择定下来；两端偏置符号若不一致，这里会红。
 ///
 /// 与服务端的对齐约定（任何一条改动都等于改契约，需两侧同步）：
 ///   - <c>blocked</c> 是硬墙格（地形水/悬崖），按左上角格判定，客户端 <c>walkable</c> 返回 false；
@@ -199,9 +202,8 @@ public sealed class MovementCorpusTests
         pred.SetSpeed((float)s.Speed);
         pred.SetSpeedProfile((float)s.Speed, 0f);
         pred.SetBodyRadius((float)s.BodyRadius);
-        // 客户端 ORCA 带对称打破（服务端生产 solver 为 false，是已知差异）；
-        // 语料的 ORCA 场景刻意留了 0.05~0.1 的横向偏移以避开完全共线退化，key 取 1。
-        pred.SetSelfKey(1);
+        // ORCA 对称打破是**世界系常量**（两端同值，见 OrcaAvoidance.SideBias），
+        // 不再需要实体 id：按 id 分侧在镜像坐标系里会让双方让到同一侧，等于没分侧。
 
         // 静态形状：语料的 x/y 已经是中心（circle）/左上角锚点（box），
         // 不要再套 RebuildBlockers 的 +0.5 格转换。胶囊只作为邻居出现，绝不进静态形状。
@@ -314,6 +316,7 @@ public sealed class MovementCorpusTests
         [JsonPropertyName("dy")] public int Dy { get; init; }
         [JsonPropertyName("speed")] public double Speed { get; init; }
         [JsonPropertyName("dt_ms")] public int DtMs { get; init; }
+
 
         /// <summary>硬墙格（地形：水/悬崖），按左上角格判定可走性。</summary>
         [JsonPropertyName("blocked")] public int[][] Blocked { get; init; } = [];

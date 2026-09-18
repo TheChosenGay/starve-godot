@@ -1278,7 +1278,6 @@ public partial class GameRoot : Node
 	private void SyncOrcaNeighbors(IReadOnlyDictionary<ulong, EntityView> entities)
 	{
 		if (_ownSim is null) return;
-		_ownSim.SetSelfKey(_ownId);
 		_orcaNeighbors.Clear();
 		foreach (var (id, view) in entities)
 		{

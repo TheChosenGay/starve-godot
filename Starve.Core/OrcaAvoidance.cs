@@ -54,7 +54,7 @@ public struct OrcaOptions
 /// 两边必须**同参数、同顺序、同公式**：
 ///   - 参数来自 <see cref="OrcaOptions.Default"/>（与服务端 DefaultORCAOptions 对齐）；
 ///   - 邻居按 (X, Z, Radius) 排序（LP 是增量式的，顺序影响退化情形的解）；
-///   - 对称打破用实体 id 的奇偶（见 <see cref="BreakSymmetry"/>）。
+///   - 对称打破是**世界系常量**（<see cref="SideBias"/>，与服务端 orcaSideBias 同值）。
 ///
 /// 半平面用 (point, direction) 表示，与 RVO2 同构：
 /// 允许速度集合 = { v | det(direction, point - v) ≤ 0 }。
@@ -69,13 +69,23 @@ public sealed class OrcaAvoidance
         public float DX, DY;   // direction
     }
 
-    public OrcaOptions Options { get; }
-    /// <summary>对称打破：正面对撞时按 id 分侧，避免双方停死。</summary>
-    public bool BreakSymmetry { get; }
-    /// <summary>自己的稳定身份（实体 id），决定往哪一侧让。</summary>
-    public ulong SymmetryKey { get; }
+    /// <summary>
+    /// 完全共线正面对撞（det 恰好为 0）时的**世界系**分侧偏置。
+    ///
+    /// 为什么不能用"实体 id 奇偶"分侧：对撞双方各自解一次，而且坐标系是**镜像的**
+    /// （相对位置互为反向 ⇒ det 反号），给两边不同符号的偏置在镜像坐标系里
+    /// 恰好等价于"让到同一个世界侧" ⇒ 相对横向间距不变、等于没避让。
+    /// 世界系常量才是互惠的：A 的相对位置朝 +x、B 的朝 −x，同一符号在各自
+    /// 局部坐标系里推出相反的世界侧。
+    ///
+    /// 量级 1e-9 远小于正常 det ⇒ 只影响恰好共线的退化情形。
+    /// **必须与服务端 systems/orca.go 的 orcaSideBias 同值同号。**
+    /// </summary>
+    private const float SideBias = 1e-9f;
 
-    public OrcaAvoidance(OrcaOptions options, bool breakSymmetry, ulong symmetryKey)
+    public OrcaOptions Options { get; }
+
+    public OrcaAvoidance(OrcaOptions options)
     {
         Options = options.TimeHorizon > 0 ? options : OrcaOptions.Default;
         if (Options.CollabCoeff <= 0) Options = new OrcaOptions
@@ -84,8 +94,6 @@ public sealed class OrcaAvoidance
             CollabCoeff = OrcaOptions.Default.CollabCoeff,
             SafetyMargin = Options.SafetyMargin,
         };
-        BreakSymmetry = breakSymmetry;
-        SymmetryKey = symmetryKey;
     }
 
     private static float Det(float ax, float ay, float bx, float by) => ax * by - ay * bx;
@@ -153,15 +161,11 @@ public sealed class OrcaAvoidance
             else
             {
                 var leg = MathF.Sqrt(distSq - combinedSq);
-                // 对称打破：正面对撞时 det 恰为 0（完全共线），两人会选同一条 leg
-                // → 往同一侧让 → 仍撞上/停死。按实体 id 奇偶加极小偏置，
-                // 让一方选左腿、另一方选右腿。偏置远小于正常 det，不影响非对称情形。
-                // 与服务端 systems/orca.go 的 side 偏置逐位对应。
-                var side = Det(relX, relZ, wX, wZ);
-                if (BreakSymmetry)
-                {
-                    side += (SymmetryKey % 2 == 0) ? -1e-9f : 1e-9f;
-                }
+                // 对称打破：完全共线正面对撞时 det 恰为 0，双方都会选同一条 leg
+                // → 让到同一侧 → 相对横向间距不变 → 顶住/对穿。
+                // 加一个**世界系常量**偏置定下 leg（互惠性说明见 SideBias）。
+                // 与服务端 systems/orca.go 的 orcaSideBias 逐位对应。
+                var side = Det(relX, relZ, wX, wZ) + SideBias;
                 if (side > 0)
                 {
                     dirX = (relX * leg - relZ * combined) / distSq;

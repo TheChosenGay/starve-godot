@@ -18,7 +18,8 @@ public sealed class OwnMovePredictor : INetModel<OwnMoveState, MoveIntent>
     private readonly Func<int, int, bool> _walkable;
     private IReadOnlyList<BlockerShape> _blockers = Array.Empty<BlockerShape>();
     private IReadOnlyList<OrcaNeighbor> _neighbors = Array.Empty<OrcaNeighbor>();
-    private OrcaAvoidance _orca = new(OrcaOptions.Default, true, 0u);
+    // 对称打破是世界系常量（见 OrcaAvoidance.SideBias），不需要实体 id。
+    private readonly OrcaAvoidance _orca = new(OrcaOptions.Default);
 
     public OwnMovePredictor(Func<int, int, bool> walkable) =>
         _walkable = walkable ?? throw new ArgumentNullException(nameof(walkable));
@@ -63,8 +64,6 @@ public sealed class OwnMovePredictor : INetModel<OwnMoveState, MoveIntent>
     }
 
     /// <summary>自己的实体 id（ORCA 对称打破用；须与服务端一致）。</summary>
-    public void SetSelfKey(ulong entityId) =>
-        _orca = new OrcaAvoidance(OrcaOptions.Default, true, entityId);
 
     /// <summary>
     /// 推进一步。dt 由调用方给：组件按服务端 tick 长（50ms）调用，

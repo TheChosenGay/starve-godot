@@ -19,21 +19,37 @@ public class OrcaParityTests
 
     // 容差 4 位小数：C# 用 float、Go 用 float64，末位会有 ~1e-7 的舍入差；
     // 但公式若改动，偏差会是 1e-2 量级，4 位小数足以抓住真正的分叉。
-    private static void AssertVec(float wantX, float wantY, ulong key, params OrcaBody[] ns)
+    private static void AssertVec(float wantX, float wantY, params OrcaBody[] ns)
     {
-        var solver = new OrcaAvoidance(OrcaOptions.Default, true, key);
+        var solver = new OrcaAvoidance(OrcaOptions.Default);
         solver.Solve(Self(), ns, out var vx, out var vy);
         Assert.Equal(wantX, vx, 4);
         Assert.Equal(wantY, vy, 4);
     }
 
+    // 迎面：偏置是世界系常量 ⇒ 结果与身份无关，恒定向同一个世界侧让。
+    // Go(τ=0.5): head_on = (0.399375, 0.489770)
     [Fact]
-    public void HeadOnSendsSidesOpposite()
+    public void HeadOnTakesFixedWorldSide()
     {
-        // Go(τ=0.5): head_on id1=(0.399375,0.489770) id2=(0.399375,-0.489770)
         var n = new OrcaBody { X = 0.8f, Z = 0, VX = -1, Radius = 0.3f, MaxSpeed = 1 };
-        AssertVec(0.399375f, 0.489770f, 1, n);
-        AssertVec(0.399375f, -0.489770f, 2, n);
+        AssertVec(0.399375f, 0.489770f, n);
+    }
+
+    // **互惠性**：把迎面场景整体镜像（x → −x）后，另一个人必须让到**相反的世界侧**。
+    //
+    // 这条才是"对称打破有没有用"的判据：双方各自解一次、坐标系镜像，
+    // 若两边让到同一世界侧，相对横向间距不变 —— 顶住/对穿。
+    // Go(τ=0.5): mirrored_head_on = (-0.399375, -0.489770)
+    [Fact]
+    public void MirroredHeadOnTakesOppositeWorldSide()
+    {
+        var solver = new OrcaAvoidance(OrcaOptions.Default);
+        var self = new OrcaAgent { VX = -1, VY = 0, PrefVX = -1, PrefVY = 0, X = 0, Z = 0, Radius = 0.3f, MaxSpeed = 1 };
+        var n = new OrcaBody { X = -0.8f, Z = 0, VX = 1, Radius = 0.3f, MaxSpeed = 1 };
+        solver.Solve(self, new[] { n }, out var vx, out var vy);
+        Assert.Equal(-0.399375f, vx, 4);
+        Assert.Equal(-0.489770f, vy, 4);
     }
 
     [Fact]
@@ -41,16 +57,14 @@ public class OrcaParityTests
     {
         // Go(τ=0.5): leg_passing id1=id2=(0.968354,-0.018987)
         var n = new OrcaBody { X = 1.5f, Z = 0.3f, VX = -1, Radius = 0.3f, MaxSpeed = 1 };
-        AssertVec(0.968354f, -0.018987f, 1, n);
-        AssertVec(0.968354f, -0.018987f, 2, n);
+        AssertVec(0.968354f, -0.018987f, n);
     }
 
     [Fact]
     public void ParallelSameSpeedDoesNotAvoid()
     {
         var n = new OrcaBody { X = 0, Z = 1.5f, VX = 1, Radius = 0.3f, MaxSpeed = 1 };
-        AssertVec(1f, 0f, 1, n);
-        AssertVec(1f, 0f, 2, n);
+        AssertVec(1f, 0f, n);
     }
 
     [Fact]
@@ -58,7 +72,7 @@ public class OrcaParityTests
     {
         var agent = Self();
         agent.VX = 0; agent.VY = 0; agent.PrefVX = 0; agent.PrefVY = 0;
-        var solver = new OrcaAvoidance(OrcaOptions.Default, true, 1);
+        var solver = new OrcaAvoidance(OrcaOptions.Default);
         solver.Solve(agent, new[] { new OrcaBody { X = 0.1f, Z = 0, Radius = 0.3f, MaxSpeed = 1 } },
             out var vx, out var vy);
         // Go(τ=0.5): overlap -> (0.620000, 0.000000)
@@ -71,8 +85,8 @@ public class OrcaParityTests
     {
         var a = new OrcaBody { X = 0.8f, Z = 0, VX = -1, Radius = 0.3f, MaxSpeed = 1 };
         var b = new OrcaBody { X = 1.2f, Z = 0.3f, VX = -1, Radius = 0.3f, MaxSpeed = 1 };
-        var s1 = new OrcaAvoidance(OrcaOptions.Default, true, 1);
-        var s2 = new OrcaAvoidance(OrcaOptions.Default, true, 1);
+        var s1 = new OrcaAvoidance(OrcaOptions.Default);
+        var s2 = new OrcaAvoidance(OrcaOptions.Default);
         s1.Solve(Self(), new[] { a, b }, out var x1, out var y1);
         s2.Solve(Self(), new[] { b, a }, out var x2, out var y2);
         Assert.Equal(x1, x2, 6);

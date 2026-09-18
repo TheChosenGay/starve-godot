@@ -141,7 +141,6 @@ public sealed class ComponentOwnMovementSim : IOwnMovementSim
     public void SetBodyRadius(float radius) => _predictor.SetBodyRadius(radius);
     public void SetBlockers(IReadOnlyList<BlockerShape> blockers) => _predictor.SetBlockers(blockers);
     public void SetNeighbors(IReadOnlyList<OrcaNeighbor> neighbors) => _predictor.SetNeighbors(neighbors);
-    public void SetSelfKey(ulong entityId) => _predictor.SetSelfKey(entityId);
     public void SetSpeedProfile(float effectiveSpeed, float halfLength) =>
         _predictor.SetSpeedProfile(effectiveSpeed, halfLength);
 
