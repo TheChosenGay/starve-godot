@@ -110,6 +110,12 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
             {
                 ApplyStyle(id, node, style);
             }
+            // 火焰的"着/不着"由 HeatSource 组件的存在表达：服务端燃尽时**移除**该组件，
+            // 走增量快照的 removed 通道到这里。节点是一次性建好的（ApplyStyle 对火盆节点
+            // 直接 return），所以必须每帧按组件存在与否重同步可见性，不能只在建节点时决定一次。
+            // 用 style.IsFire 先筛一道：只有火盆节点才有 Flame 子节点，
+            // 免得给每帧每个实体都做一次节点路径查找（GC/CPU 都不划算）。
+            if (style.IsFire) SyncFlameLit(node, style);
             node.Visible = !EntityVisual.IsDepletedFlower(view);
             RememberBlockFootprint(id, view);
             if (!_plantsVisible && IsPlant(node))
@@ -353,6 +359,17 @@ public partial class EntityLayer3D : Node3D, IWorldRenderer, IActionPresentation
         var mat = ActorMesh3D.MaterialOf(node);
         if (mat is not null) _mats[id] = mat;
         return node;
+    }
+
+    // 火焰子节点名（FireFlame3D.CreatePit 里挂的就是它）：熄灭只藏它，石头火盆留着，
+    // 因为"冷掉的火堆"仍然是个火堆，整块消失反而像被拆了。
+    private const string FlameNodeName = "Flame";
+
+    /// <summary>火盆火焰可见性 = 该实体是否带 HeatSource；非火盆节点是空操作。</summary>
+    private static void SyncFlameLit(Node3D node, EntityStyle style)
+    {
+        if (node.GetNodeOrNull<FireFlame3D>(FlameNodeName) is not { } flame) return;
+        flame.Visible = style.IsLit;
     }
 
     public void SetPlantsVisible(bool visible)

@@ -12,7 +12,12 @@ public readonly record struct EntityStyle(
     bool IsWorkbench = false,
     bool IsHauntable = false,
     bool IsFlower = false,
-    bool IsShrub = false);
+    bool IsShrub = false,
+    // IsLit 火堆"着没着"。契约：服务端用 **HeatSource 组件的存在/移除**表达，
+    // 移除会走增量快照的 removed 通道，客户端不需要新字段。
+    // IsFire 只说"该用火盆外观"（类型），IsLit 才说"现在在烧"（状态），
+    // 两者分开是因为熄灭的火堆仍然是个火堆——底座还在，只是没火。
+    bool IsLit = true);
 
 /// <summary>实体类型 → 占位色/尺寸；2D 菱形与 3D 立方体共用。</summary>
 public static class EntityVisual
@@ -36,6 +41,7 @@ public static class EntityVisual
 
         var station = view.Get("Workstation", Workstation.Parser);
         if (station is not null)
+            // 地图种子的工作站营火服务端没有 HeatSource（不参与燃料循环），保持常亮。
             return (int)station.Type == 1
                 ? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, true)
                 : new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 10, false, IsWorkbench: true);
@@ -99,8 +105,10 @@ public static class EntityVisual
 
         var building = view.Get("Building", Building.Parser);
         if (building is not null)
+            // 火堆：外观仍由 Kind 决定（放下就一直是火盆），但**火焰只在带 HeatSource
+            // 时显示**——燃料烧完服务端会移除该组件，这里随即变成一堆冷灰。
             return (int)building.Kind == 1
-                ? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, building.Placed)
+                ? new EntityStyle(new Color(1f, 0.55f, 0.26f), 10, building.Placed, IsLit: view.Has("HeatSource"))
                 : new EntityStyle(new Color(0.60f, 0.42f, 0.25f), 8, false);
 
         return new EntityStyle(new Color(1f, 1f, 1f), 8, false);

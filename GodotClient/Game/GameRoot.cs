@@ -867,7 +867,9 @@ public partial class GameRoot : Node
 			var fires = new List<(float X, float Y, float H)>();
 			foreach (var view in client.World.Entities.Values)
 			{
-				if (!EntityVisual.StyleFor(view).IsFire) continue;
+				var style = EntityVisual.StyleFor(view);
+				// 熄灭的火堆不该再往地上打点光：火焰与光照都跟随 HeatSource（IsLit）。
+				if (!style.IsFire || !style.IsLit) continue;
 				var p = view.Get("Position", Starve.Game.V1.Position.Parser);
 				if (p is null) continue;
 				fires.Add((p.X, p.Y, _tilemap?.HeightAt(p.X, p.Y) ?? 0f));

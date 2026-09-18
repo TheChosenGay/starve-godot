@@ -456,7 +456,7 @@ public partial class EntityNode : Node2D
 		QueueRedraw();
 		if (style.IsFire)
 		{
-			EnsureFirePit();
+			EnsureFirePit(style.IsLit);
 		}
 		else if (style.IsWorkbench)
 		{
@@ -481,8 +481,13 @@ public partial class EntityNode : Node2D
 		QueueRedraw();
 	}
 
-	/// <summary>火盆：fire-pit 底座贴图 + 手绘粒子火焰（FirePitFire）。</summary>
-	private void EnsureFirePit()
+	/// <summary>火盆火焰子节点名（熄灭只藏它，底座留着——冷掉的火堆仍然是个火堆）。</summary>
+	private const string FlameNodeName = "Flame";
+
+	/// <summary>火盆：fire-pit 底座贴图 + 手绘粒子火焰（FirePitFire）。
+	/// lit = 该实体是否带 HeatSource：服务端燃料烧完会**移除**该组件
+	/// （走快照 removed 通道），所以每帧都要按组件存在与否重同步火焰可见性。</summary>
+	private void EnsureFirePit(bool lit)
 	{
 		if (_structure is null)
 		{
@@ -495,9 +500,11 @@ public partial class EntityNode : Node2D
 				Centered = true,
 				Scale = Vector2.One * pitScale,
 			});
-			_structure.AddChild(new FirePitFire());
+			_structure.AddChild(new FirePitFire { Name = FlameNodeName });
 			AddChild(_structure);
 		}
+		if (_structure.GetNodeOrNull<FirePitFire>(FlameNodeName) is { } flame)
+			flame.Visible = lit;
 		_structure.Visible = true;
 		_hasStructure = true;
 	}
