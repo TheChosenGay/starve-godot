@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    可复用网络预测组件：引擎无关、协议无关。
+    ⚠️ 本工程**不允许**引用 Godot / protobuf / Starve.Core / Starve.Protocol。
+       预测算法由游戏侧实现 INetModel 注入；世界查询由游戏侧注入模型实例。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Starve.Netcode</RootNamespace>
+    <AssemblyName>Starve.Netcode</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -16,31 +16,62 @@ public readonly record struct MovementDiagnostics(
 /// 它们只提供形状，所以本地预测要拿到 <see cref="SetBlockers"/> 的形状列表。
 /// 服务端快照到达时做误差校正（大误差瞬移、小误差缓合）。纯逻辑，时间由外部注入。
 /// </summary>
-public sealed class OwnMovementSim
+/// <summary>
+/// 本端预测/和解的**调用面**（GameRoot/MoveTrace 用）。
+///
+/// 两个实现：
+/// <list type="bullet">
+/// <item><see cref="OwnMovementSim"/>：旧的字段式实现（保留兼容/对照）；</item>
+/// <item><see cref="ComponentOwnMovementSim"/>：新的组件实现（<c>ClientSmoother</c> +
+///   <c>OwnMovePredictor</c>，序号锚定和解、追步/冗余上行都在组件里）。</item>
+/// </list>
+/// 抽接口是为了让调用方**一行都不用改**就能切换实现。
+/// </summary>
+public interface IOwnMovementSim
+{
+    Func<float, float, float>? HeightAt { get; set; }
+    OwnMovePredictor Predictor { get; }
+    bool Has { get; }
+    bool Moving { get; }
+    (float X, float Y) Position { get; }
+    (float X, float Y) Velocity { get; }
+    MovementDiagnostics Diagnostics { get; }
+    (int Dx, int Dy) Intent { get; }
+    float LastSlope { get; }
+    OwnMovementSim.ReconcileTrace LastReconcile { get; }
+
+    void SnapTo(float x, float y);
+    void SetIntent(int dx, int dy);
+    void SetSpeed(float tilesPerSec);
+    void SetBodyRadius(float radius);
+    void SetBlockers(IReadOnlyList<BlockerShape> blockers);
+    void SetNeighbors(IReadOnlyList<OrcaNeighbor> neighbors);
+    void SetSelfKey(ulong entityId);
+    void SetSpeedProfile(float effectiveSpeed, float halfLength);
+
+    /// <summary>推进一帧。<paramref name="nowMs"/> 是**绝对墙钟**（组件用它映射服务端 tick）。</summary>
+    void Tick(float dtMs, long nowMs);
+
+    /// <summary>收到权威快照：<paramref name="appliedSeq"/> 是服务端"已消费到第几条操作"。</summary>
+    void Reconcile(float x, float y, bool stopped, long tick, ulong appliedSeq, ulong epoch, long nowMs);
+    void FeedServerMotion(float velX, float velY, float effectiveSpeed, int dirX, int dirY, int pathLen);
+}
+
+public sealed class OwnMovementSim : IOwnMovementSim
 {
     /// <summary>默认速度：与服务端一致 10 格/秒（快照 Moveable.speed 会覆盖）。</summary>
     public const float DefaultTilesPerSec = 10f;
 
     /// <summary>缺省移动体碰撞半径（格）：与服务端 systems.BodyRadius 一致（= configs/models.json 里 player 推导值）。</summary>
     public const float DefaultBodyRadius = 0.305f;
-    private float _bodyRadius = DefaultBodyRadius;
-
-    private readonly Func<int, int, bool> _walkable;
-    private IReadOnlyList<BlockerShape> _blockers = Array.Empty<BlockerShape>();
-    private IReadOnlyList<OrcaNeighbor> _neighbors = Array.Empty<OrcaNeighbor>();
-    // 对称打破的 key = 自己的实体 id（与服务端一致：按 id 奇偶决定往哪侧让）。
-    // 0 是占位，SetSelfKey 会在登录拿到 entity id 后设置。
-    private OrcaAvoidance _orca = new(OrcaOptions.Default, true, 0u);
+    private readonly OwnMovePredictor _predictor;
     private float _velX, _velY;
-    private float _bodyHalfLength;
-    private float _effectiveSpeed;
     private int _anchorX;
     private int _anchorY;
     private float _subX;
     private float _subY;
     private int _dirX;
     private int _dirY;
-    private float _speed = DefaultTilesPerSec;
     private bool _has;
     private float _lastReconciliationError;
     private float _maxReconciliationError;
@@ -51,9 +82,21 @@ public sealed class OwnMovementSim
     // 停止是否已经落定：落定之后同 tick/更旧的旧快照不再参与校正。
     private bool _stopSettled;
 
-    public Func<float, float, float>? HeightAt { get; set; }
+    public Func<float, float, float>? HeightAt
+    {
+        get => _predictor.HeightAt;
+        set => _predictor.HeightAt = value;
+    }
 
-    public OwnMovementSim(Func<int, int, bool> walkable) => _walkable = walkable;
+    public OwnMovementSim(Func<int, int, bool> walkable) =>
+        _predictor = new OwnMovePredictor(walkable);
+
+    /// <summary>
+    /// 真正的移动数学（与服务端同构，实现组件的 <c>INetModel</c>）。
+    /// 本类只是**旧 API 的门面**：保留字段式状态以便既有测试与调用方平滑迁移；
+    /// 新代码应当直接用 <see cref="OwnMovePredictor"/> + <c>ClientSmoother</c>。
+    /// </summary>
+    public OwnMovePredictor Predictor => _predictor;
 
     public bool Has => _has;
     public bool Moving => _dirX != 0 || _dirY != 0;
@@ -82,47 +125,37 @@ public sealed class OwnMovementSim
     }
 
     /// <summary>同步服务端效果修正后的权威速度；0 表示被冻结。</summary>
-    public void SetSpeed(float tilesPerSec)
-    {
-        if (tilesPerSec >= 0) _speed = tilesPerSec;
-    }
+    public void SetSpeed(float tilesPerSec) => _predictor.SetSpeed(tilesPerSec);
 
     /// <summary>
     /// 同步服务端下发的实体碰撞半径（Moveable.body_radius，由客户端模型推导）。
     /// 半径不一致就会贴着树/墙来回校正，所以必须用服务端的值，不要用客户端常量。
     /// </summary>
-    public void SetBodyRadius(float radius)
-    {
-        if (radius > 0f) _bodyRadius = radius;
-    }
+    public void SetBodyRadius(float radius) => _predictor.SetBodyRadius(radius);
 
     /// <summary>
     /// 同步占位物形状（快照里的 Block：圆=格心圆，盒=占格矩形）。
     /// 形状变了就调一次；空列表 = 本帧没有已知占位物。
     /// </summary>
     public void SetBlockers(IReadOnlyList<BlockerShape> blockers) =>
-        _blockers = blockers ?? Array.Empty<BlockerShape>();
+        _predictor.SetBlockers(blockers);
 
     /// <summary>
     /// 动态邻居（ORCA 用）：位置/速度/半径。由外部每帧从快照刷新。
     /// 只放**其他**动态实体（玩家/动物），不放静态障碍——静态走硬碰撞（阶段②）。
     /// </summary>
     public void SetNeighbors(IReadOnlyList<OrcaNeighbor> neighbors) =>
-        _neighbors = neighbors ?? Array.Empty<OrcaNeighbor>();
+        _predictor.SetNeighbors(neighbors);
 
     /// <summary>本 tick 的实际速度（格/秒）：ORCA 的"当前速度"输入，也是表现层依据。</summary>
     public (float X, float Y) Velocity => (_velX, _velY);
 
     /// <summary>设置自己的实体 id（ORCA 对称打破用；须与服务端下发的 id 一致）。</summary>
-    public void SetSelfKey(ulong entityId) =>
-        _orca = new OrcaAvoidance(OrcaOptions.Default, true, entityId);
+    public void SetSelfKey(ulong entityId) => _predictor.SetSelfKey(entityId);
 
     /// <summary>同步服务端下发的有效速度与胶囊半长（ORCA 的输入维度）。</summary>
-    public void SetSpeedProfile(float effectiveSpeed, float halfLength)
-    {
-        _effectiveSpeed = effectiveSpeed;
-        _bodyHalfLength = halfLength;
-    }
+    public void SetSpeedProfile(float effectiveSpeed, float halfLength) =>
+        _predictor.SetSpeedProfile(effectiveSpeed, halfLength);
 
     /// <summary>
     /// 推进一帧，与服务端三阶段移动同公式：
@@ -134,7 +167,11 @@ public sealed class OwnMovementSim
     /// 这三步的顺序与服务端 systems/move_solver.go 严格一致；ORCA 也是同一套公式
     /// （Starve.Core/OrcaAvoidance.cs 是 internal/game/systems/orca.go 的移植）。
     /// </summary>
-    public void Tick(float dtMs)
+    /// <summary>旧签名（无绝对时钟）：组件实现必须用带 nowMs 的那个。</summary>
+    public void Tick(float dtMs) => Tick(dtMs, 0);
+
+    /// <summary>推进一帧（<paramref name="nowMs"/> 本实现不用，接口对齐用）。</summary>
+    public void Tick(float dtMs, long nowMs)
     {
         if (!_has || dtMs <= 0) return;
         if (_dirX == 0 && _dirY == 0)
@@ -142,124 +179,47 @@ public sealed class OwnMovementSim
             // 连续移动允许停在任意子格；服务端同样保留 sub，不吸附整数格。
             return;
         }
+
+        var predStartX = Position.X;
+        var predStartY = Position.Y;
+
+        // 数学全部在 OwnMovePredictor（与组件重放共用同一段）；这里只搬状态进出。
+        var state = ToState();
+        var intent = new MoveIntent(_dirX, _dirY);
         // 渲染帧可能卡顿超过一个服务端 tick；按 50ms 分片推进，避免一次跨越多个格子。
         var remainingMs = dtMs;
         while (remainingMs > 0)
         {
             var sliceMs = MathF.Min(remainingMs, 50f);
-            var pos = Position;
-            var factor = SlopeSpeed.Factor(pos.X, pos.Y, _dirX, _dirY, HeightAt);
-            var dist = _speed * factor * sliceMs / 1000f;
-            if (_dirX != 0 && _dirY != 0)
-            {
-                dist /= MathF.Sqrt(2f); // 对角归一化：任意方向同速
-            }
-
-            var stepX = _dirX * dist;
-            var stepY = _dirY * dist;
-            if (_blockers.Count > 0)
-            {
-                // 形状层：滑动后的实际位移，方向可能已经变了
-                var (endX, endY) = MovementSlide.Slide(pos.X, pos.Y, stepX, stepY, _bodyRadius, _blockers);
-                stepX = endX - pos.X;
-                stepY = endY - pos.Y;
-            }
-            // ── 阶段③：ORCA 动态避让（软约束）─────────────────
-            // 把阶段②的结果折算成期望速度，再用 ORCA 求一个既接近它、又不撞邻居的速度。
-            if (_neighbors.Count > 0)
-            {
-                var sliceSec = sliceMs / 1000f;
-                var prefVX = stepX / sliceSec;
-                var prefVY = stepY / sliceSec;
-                var selfVX = _velX != 0f || _velY != 0f ? _velX : prefVX;
-                var selfVY = _velX != 0f || _velY != 0f ? _velY : prefVY;
-
-                var agent = new OrcaAgent
-                {
-                    X = pos.X, Z = pos.Y,
-                    VX = selfVX, VY = selfVY,
-                    PrefVX = prefVX, PrefVY = prefVY,
-                    // 胶囊按外接圆处理（与服务端 collectNeighbors 的半径算法一致）
-                    Radius = _bodyRadius + _bodyHalfLength,
-                    MaxSpeed = _effectiveSpeed > 0 ? _effectiveSpeed : _speed,
-                };
-                var bodies = new List<OrcaBody>(_neighbors.Count);
-                foreach (var n in _neighbors)
-                    bodies.Add(new OrcaBody
-                    {
-                        X = n.X, Z = n.Y, VX = n.VX, VY = n.VY,
-                        Radius = n.Radius + n.HalfLength,
-                        MaxSpeed = n.MaxSpeed,
-                    });
-                _orca.Solve(agent, bodies, out var avx, out var avy);
-                _velX = avx;
-                _velY = avy;
-                stepX = avx * sliceSec;
-                stepY = avy * sliceSec;
-            }
-            else
-            {
-                _velX = sliceMs > 0 ? stepX / (sliceMs / 1000f) : 0f;
-                _velY = sliceMs > 0 ? stepY / (sliceMs / 1000f) : 0f;
-            }
-
-            if (stepX != 0f)
-            {
-                (_anchorX, _subX) = StepAxis(
-                    _anchorX,
-                    _subX,
-                    MathF.Sign(stepX),
-                    MathF.Abs(stepX),
-                    x => _walkable(x, _anchorY));
-            }
-            if (stepY != 0f)
-            {
-                (_anchorY, _subY) = StepAxis(
-                    _anchorY,
-                    _subY,
-                    MathF.Sign(stepY),
-                    MathF.Abs(stepY),
-                    y => _walkable(_anchorX, y));
-            }
+            _predictor.Step(ref state, intent, sliceMs / 1000.0, 0);
             remainingMs -= sliceMs;
         }
+
+        FromState(state);
+
+        // 累计"预测自己走了多少"（不含 Reconcile 的校正），供快照做同跨度比较。
+        _predStepX += Position.X - predStartX;
+        _predStepY += Position.Y - predStartY;
     }
 
-    /// <summary>
-    /// 与服务端 systems.stepAxis 完全相同的锚点/子格推进。
-    /// 子格始终保持 [0,1)，负方向跨 0 时向锚点借位。
-    /// </summary>
-    private static (int Anchor, float Sub) StepAxis(
-        int anchor,
-        float sub,
-        int dir,
-        float dist,
-        Func<int, bool> canWalk)
+    private OwnMoveState ToState() => new()
     {
-        if ((sub <= 0.002f && dir < 0 && !canWalk(anchor - 1)) ||
-            (sub >= 0.998f && dir > 0 && !canWalk(anchor + 1)))
-        {
-            return (anchor, sub);
-        }
+        AnchorX = _anchorX,
+        AnchorY = _anchorY,
+        SubX = _subX,
+        SubY = _subY,
+        VelX = _velX,
+        VelY = _velY,
+    };
 
-        var next = sub + dir * dist;
-        if (next >= 0 && next < 1)
-        {
-            return (anchor, next);
-        }
-
-        var nextAnchor = anchor + dir;
-        if (!canWalk(nextAnchor))
-        {
-            return (anchor, dir > 0 ? 0.999f : 0.001f);
-        }
-
-        if (next < 0)
-        {
-            return (nextAnchor, next + 1);
-        }
-
-        return (nextAnchor, next - 1);
+    private void FromState(in OwnMoveState state)
+    {
+        _anchorX = state.AnchorX;
+        _anchorY = state.AnchorY;
+        _subX = state.SubX;
+        _subY = state.SubY;
+        _velX = state.VelX;
+        _velY = state.VelY;
     }
 
     private void SetRealPosition(float x, float y)
@@ -288,8 +248,111 @@ public sealed class OwnMovementSim
             current.Y + (y - current.Y) * factor);
     }
 
+    /// <summary>本次和解做了什么决定（诊断/日志用）。</summary>
+    public enum ReconcileDecision
+    {
+        /// <summary>还没调用过。</summary>
+        None,
+        /// <summary>首帧/出生：直接贴合。</summary>
+        InitialSnap,
+        /// <summary>陈旧快照（tick 未推进或更旧）：不理会。</summary>
+        Stale,
+        /// <summary>误差在死区内：不校正。</summary>
+        NoError,
+        /// <summary>小步缓合（k&lt;1）。</summary>
+        Soft,
+        /// <summary>大误差瞬移（&gt;4 格）。</summary>
+        HardSnap,
+        /// <summary>服务端确认停止：当前实现用 k=1 一次到位吸附。</summary>
+        StopSnap,
+    }
+
     /// <summary>
-    /// 服务端快照校正：只有真正的瞬移/传送（>4 格）才硬跳。
+    /// 一次和解的完整快照（诊断用，纯数据）。
+    ///
+    /// 关键设计：<b>速度比较必须用"同 tick 跨度的位移"</b>，不能拿"本地现在"比"服务端过去"——
+    /// 后者天然含网络领先量（≈ v×往返延迟），会把延迟误判成失配。
+    /// Step* 字段就是"相邻两次快照之间"服务端走了多少 / 本地走了多少，与延迟无关。
+    /// </summary>
+    public readonly record struct ReconcileTrace(
+        ReconcileDecision Decision,
+        long ServerTick,
+        float ServerX,
+        float ServerY,
+        float ServerVelX,
+        float ServerVelY,
+        float ServerVelSpeed,
+        float ServerEffectiveSpeed,
+        int ServerDirX,
+        int ServerDirY,
+        int ServerPathLen,
+        bool ServerStopped,
+        float LocalX,
+        float LocalY,
+        int LocalDirX,
+        int LocalDirY,
+        float Slope,
+        float ErrX,
+        float ErrY,
+        float Err,
+        float ImpliedLeadMs,
+        bool HasStep,
+        int StepTicks,
+        float ServerStepX,
+        float ServerStepY,
+        float ServerStepSpeed,
+        float LocalStepX,
+        float LocalStepY,
+        float LocalStepSpeed,
+        float DriftX,
+        float DriftY,
+        float DriftSpeed,
+        float K,
+        int SoftCorrections,
+        int HardSnaps,
+        bool StopSettled);
+
+    /// <summary>最近一次和解的完整快照；没调用过时 Decision = None。</summary>
+    public ReconcileTrace LastReconcile { get; private set; }
+
+    /// <summary>当前本地意图（诊断/日志用）。</summary>
+    public (int Dx, int Dy) Intent => (_dirX, _dirY);
+
+    /// <summary>最近一个推进切片实际用的坡度因子（诊断/日志用）。</summary>
+    public float LastSlope => _predictor.LastSlope;
+
+    // 服务端权威"行为"（每个快照刷新一次，仅供诊断与和解参考）。
+    private float _srvVelX, _srvVelY, _srvEffectiveSpeed;
+    private int _srvDirX, _srvDirY, _srvPathLen;
+
+    // 两次快照之间"纯预测"产生的位移（累计于 Tick，Reconcile 时消费并清零）。
+    // 关键：必须把**校正**排除在外，否则测出来的不是"预测速度"而是"净位移速度"，
+    // 校正本身会被误记成预测偏差。见 ReconcileTrace 注释。
+    private float _predStepX;
+    private float _predStepY;
+
+    // 相邻两次快照的对照基线（用于"同跨度位移"比较）。
+    private bool _hasSnapBase;
+    private long _snapBaseTick;
+    private float _snapBaseSrvX, _snapBaseSrvY;
+
+    /// <summary>
+    /// 同步服务端下发的权威运动状态（Moveable）：速度、效果速度、意图方向、路径长度。
+    /// 只用于诊断与和解参考，不影响本地预测公式（预测公式靠 SetSpeed/SetIntent）。
+    /// </summary>
+    public void FeedServerMotion(
+        float velX, float velY, float effectiveSpeed, int dirX, int dirY, int pathLen)
+    {
+        _srvVelX = velX;
+        _srvVelY = velY;
+        _srvEffectiveSpeed = effectiveSpeed;
+        _srvDirX = dirX;
+        _srvDirY = dirY;
+        _srvPathLen = pathLen;
+    }
+
+    /// <summary>
+    /// 服务端快照校正：只有真正的瞬移/传送（&gt;4 格）才硬跳。
     /// serverStopped = 服务端已确认停止（Moveable.Dir=0 且路径为空）。
     /// serverTick = 这份位置是哪一 tick 下发的（-1 = 未知，按"新鲜"处理，兼容旧调用方）。
     ///
@@ -301,26 +364,45 @@ public sealed class OwnMovementSim
     ///   - 位置比上次收敛的更旧 → 同样忽略。
     /// 这样停止只收敛一次，之后完全不干预本地预测。
     /// </summary>
-    public void Reconcile(float serverX, float serverY, bool serverStopped = false, long serverTick = -1)
+    public void Reconcile(
+        float serverX, float serverY, bool serverStopped = false, long serverTick = -1)
+        => Reconcile(serverX, serverY, serverStopped, serverTick, 0, 0, 0);
+
+    /// <summary>接口版本：多出的 <paramref name="appliedSeq"/>/<paramref name="epoch"/>/<paramref name="nowMs"/>
+    /// 本实现不用（旧的字段式和解只吃位置/tick），组件实现才用。</summary>
+    public void Reconcile(
+        float serverX, float serverY, bool serverStopped, long serverTick,
+        ulong appliedSeq, ulong epoch, long nowMs)
     {
+        // 校正前的本地位置：诊断要用它算"本地这一步走了多少"，
+        // 必须在 ReconcileCore 动位置之前取。
+        var localBefore = Position;
+        var r = ReconcileCore(serverX, serverY, serverStopped, serverTick);
+        RecordReconcile(serverX, serverY, serverStopped, serverTick, localBefore, r);
+    }
+
+    private (ReconcileDecision Decision, float K, float ErrX, float ErrY, float Err) ReconcileCore(
+        float serverX, float serverY, bool serverStopped, long serverTick)
+    {
+        var current = Position;
+        var errX = serverX - current.X;
+        var errY = serverY - current.Y;
+        var err = MathF.Sqrt(errX * errX + errY * errY);
+
         if (!_has)
         {
             SnapTo(serverX, serverY);
             _lastReconciledTick = serverTick;
             _stopSettled = serverStopped;
-            return;
+            return (ReconcileDecision.InitialSnap, 0f, errX, errY, err);
         }
         // 陈旧数据：这份位置不包含新信息，收敛它只会把角色往回拉。
         var stale = serverTick >= 0 && _lastReconciledTick >= 0 && serverTick <= _lastReconciledTick;
         if (stale)
         {
-            if (serverStopped && _stopSettled) return; // 停止已落定，旧快照一律不理会
-            if (!serverStopped) return;               // 移动中的旧位置更没有收敛价值
+            if (serverStopped && _stopSettled) return (ReconcileDecision.Stale, 0f, errX, errY, err);
+            if (!serverStopped) return (ReconcileDecision.Stale, 0f, errX, errY, err);
         }
-        var current = Position;
-        var ex = serverX - current.X;
-        var ey = serverY - current.Y;
-        var err = MathF.Sqrt(ex * ex + ey * ey);
         _lastReconciliationError = err;
         _maxReconciliationError = MathF.Max(_maxReconciliationError, err);
         if (err > 4f)
@@ -329,7 +411,7 @@ public sealed class OwnMovementSim
             SnapTo(serverX, serverY);
             _lastReconciledTick = serverTick;
             _stopSettled = serverStopped;
-            return;
+            return (ReconcileDecision.HardSnap, 1f, errX, errY, err);
         }
         var k = 0f;
         if (serverStopped)
@@ -346,7 +428,7 @@ public sealed class OwnMovementSim
         {
             _lastReconciledTick = serverTick;
             _stopSettled = serverStopped;
-            return;
+            return (ReconcileDecision.NoError, 0f, errX, errY, err);
         }
         _softCorrections++;
         // 停止落定用一次到位（k=1）而不是渐进逼近：渐进会把"回拉"摊成好几次
@@ -354,5 +436,63 @@ public sealed class OwnMovementSim
         BlendTo(serverX, serverY, serverStopped ? 1f : k);
         _lastReconciledTick = serverTick;
         _stopSettled = serverStopped;
+        return (
+            serverStopped ? ReconcileDecision.StopSnap : ReconcileDecision.Soft,
+            serverStopped ? 1f : k,
+            errX, errY, err);
+    }
+
+    private void RecordReconcile(
+        float serverX,
+        float serverY,
+        bool serverStopped,
+        long serverTick,
+        (float X, float Y) localBefore,
+        (ReconcileDecision Decision, float K, float ErrX, float ErrY, float Err) r)
+    {
+        var velSpeed = MathF.Sqrt(_srvVelX * _srvVelX + _srvVelY * _srvVelY);
+        float srvStepX = 0f, srvStepY = 0f, locStepX = 0f, locStepY = 0f;
+        float srvStepSpeed = 0f, locStepSpeed = 0f;
+        var stepTicks = 0;
+        var hasStep = _hasSnapBase && serverTick > _snapBaseTick;
+        // 本地这一步用"纯预测"累加器（不含校正），才是可与服务端比较的预测速度。
+        locStepX = _predStepX;
+        locStepY = _predStepY;
+        _predStepX = 0f;
+        _predStepY = 0f;
+        if (hasStep)
+        {
+            stepTicks = (int)(serverTick - _snapBaseTick);
+            srvStepX = serverX - _snapBaseSrvX;
+            srvStepY = serverY - _snapBaseSrvY;
+            // tick 跨度 → 秒：stepTicks 个 tick，每个 50ms（20Hz）。
+            var perSec = 20f / stepTicks;
+            srvStepSpeed = MathF.Sqrt(srvStepX * srvStepX + srvStepY * srvStepY) * perSec;
+            locStepSpeed = MathF.Sqrt(locStepX * locStepX + locStepY * locStepY) * perSec;
+        }
+
+        var driftPerSec = hasStep ? 20f / stepTicks : 0f;
+        var driftX = (locStepX - srvStepX) * driftPerSec;
+        var driftY = (locStepY - srvStepY) * driftPerSec;
+
+        LastReconcile = new ReconcileTrace(
+            r.Decision,
+            serverTick,
+            serverX, serverY,
+            _srvVelX, _srvVelY, velSpeed, _srvEffectiveSpeed,
+            _srvDirX, _srvDirY, _srvPathLen, serverStopped,
+            localBefore.X, localBefore.Y, _dirX, _dirY, LastSlope,
+            r.ErrX, r.ErrY, r.Err,
+            locStepSpeed > 0.05f ? r.Err / locStepSpeed * 1000f : 0f,
+            hasStep, stepTicks,
+            srvStepX, srvStepY, srvStepSpeed,
+            locStepX, locStepY, locStepSpeed,
+            driftX, driftY, locStepSpeed - srvStepSpeed,
+            r.K, _softCorrections, _hardSnaps, _stopSettled);
+
+        _hasSnapBase = true;
+        _snapBaseTick = serverTick;
+        _snapBaseSrvX = serverX;
+        _snapBaseSrvY = serverY;
     }
 }

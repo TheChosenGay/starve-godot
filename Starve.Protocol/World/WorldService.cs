@@ -116,6 +116,27 @@ public sealed class WorldService
     /// <summary>世界版本号：任何快照/增量/配置变化都会 +1（渲染层轮询用）。</summary>
     public int Revision => Volatile.Read(ref _revision);
 
+    /// <summary>
+    /// 以 <see cref="Revision"/> 为序号锁的**原子读**：回调里的多次读取保证不会被
+    /// "应用新消息"打断（期间来了新快照就整体重读）。
+    ///
+    /// 为什么必须有这个 API：推送是在**网络线程**上直接改世界的
+    /// （<see cref="Session.OnPush"/> → <see cref="HandleMessage"/>，不是排队到主线程），
+    /// 而主线程渲染/预测要读"自己的位置 + 组件 tick + ack"。分几次读就会配出
+    /// 「位置来自消息 m、ack 来自消息 m+1」—— 和解拿它做序号锚定比较时整体偏一个 tick，
+    /// 于是**每份快照都要校正一次**（实测恒定 0.5 格 = 1 个 tick 的位移，转向处翻倍到 1.0+），
+    /// 表现就是"走着走着时不时卡一下"。回调必须是**纯读**（无副作用），否则重读会重复副作用。
+    /// </summary>
+    public T ReadAtomic<T>(Func<T> read)
+    {
+        while (true)
+        {
+            var rev = Revision;
+            var value = read();
+            if (Revision == rev) return value;
+        }
+    }
+
     public IReadOnlyDictionary<ulong, EntityView> Entities => _entities;
     public int Count => _entities.Count;
 

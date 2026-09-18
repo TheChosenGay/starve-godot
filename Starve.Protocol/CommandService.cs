@@ -3,6 +3,9 @@ using Starve.Proto.V1;
 
 namespace Starve.Protocol;
 
+/// <summary>一条已编号的移动操作（上行冗余用）。</summary>
+public readonly record struct MoveOp(ulong Seq, int Dx, int Dy);
+
 /// <summary>
 /// 用户操作 service：把玩家意图翻译成 pomelo 消息。
 /// 纯协议层（无渲染依赖），渲染/输入层只调用这里。
@@ -15,6 +18,15 @@ public sealed class CommandService
     private readonly InputSequenceTracker _inputs = new();
 
     public CommandService(ICommandSession session) => _session = session;
+
+    /// <summary>
+    /// 序号来源（可选）：由**组件**持有玩家输入流的自增序号时，这里接它。
+    ///
+    /// 为什么必须统一：服务端按"序号连续"消费（缺口就等补齐）。移动的每 tick 采样和攻击等
+    /// 离散操作如果各自编号，服务端看到的流会缺号/重号 ⇒ 一直等一个永远不来的缺口。
+    /// 组件用 <c>ReserveDiscreteOp</c> 把这些序号也记进同一条流（并标成"不占移动步"）。
+    /// </summary>
+    public Func<ulong>? SeqSource { get; set; }
 
     public ulong InputEpoch => _inputs.Epoch;
     public ulong LastSentSeq => _inputs.LastSent;
@@ -32,6 +44,32 @@ public sealed class CommandService
     public void Acknowledge(ulong epoch, ulong seq, long _)
     {
         _inputs.Acknowledge(epoch, seq);
+    }
+
+    /// <summary>
+    /// 冗余上传一批**已编号**的移动操作（序号来自组件持有的玩家输入流计数器）。
+    ///
+    /// 为什么不是一个 tick 一条：客户端会把**未确认的操作**反复携带（丢包不丢输入），
+    /// 所以同一个 seq 可能发多次；服务端按 seq 去重 + 排序（见服务端
+    /// TestRedundantAndOutOfOrderOpsAreDeduped）。这里只负责把整批发出去并推进发送水位。
+    /// </summary>
+    public void SendMoveOps(ReadOnlySpan<MoveOp> ops)
+    {
+        if (ops.Length == 0) return;
+        var epoch = _inputs.Epoch;
+        if (epoch == 0) throw new InvalidOperationException("input epoch is not initialized");
+        foreach (var op in ops)
+        {
+            if (op.Dx == 0 && op.Dy == 0 && op.Seq == 0) continue;
+            _inputs.NoteSent(op.Seq);
+            Notify(Routes.Move, new PlayerMove
+            {
+                Dx = op.Dx,
+                Dy = op.Dy,
+                Seq = op.Seq,
+                InputEpoch = epoch,
+            });
+        }
     }
 
     public InputCommandRef Move(int dx, int dy)
