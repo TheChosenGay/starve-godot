@@ -47,6 +47,9 @@
     <None Include="..\testdata\slope_speed_golden.json"
           Link="testdata\slope_speed_golden.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\testdata\move_corpus.jsonl"
+          Link="testdata\move_corpus.jsonl"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

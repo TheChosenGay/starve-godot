@@ -1,4 +1,4 @@
-.PHONY: check restore build test contract-check e2e netcode-sweep run run-capture run-smoke
+.PHONY: check restore build test contract-check corpus-align corpus-align-ui e2e netcode-sweep run run-capture run-smoke
 
 STARVE_SERVER_DIR ?= ../starve
 GATE_URL ?= ws://localhost:8081/ws
@@ -30,6 +30,17 @@ test:
 
 contract-check:
 	python3 scripts/check_proto_sync.py --server-dir "$(STARVE_SERVER_DIR)"
+	python3 scripts/check_move_corpus_sync.py --server-dir "$(STARVE_SERVER_DIR)" --client-dir .
+
+# 跨端一致性语料对齐（本地与 CI 同一入口）：两仓语料逐字节一致 + 两端各自回放。
+# CI 里 STARVE_SERVER_DIR=.contract-server，本地默认 ../starve。
+corpus-align:
+	python3 scripts/corpus_align.py --server-dir "$(STARVE_SERVER_DIR)" --client-dir .
+
+# 本地图形控制台（标准库 web UI，只监听 127.0.0.1）：选路径 → 点一下就跑。
+# 它不重写任何对齐逻辑，内部仍然 subprocess 调用上面的 scripts/corpus_align.py。
+corpus-align-ui:
+	python3 scripts/corpus_align_ui.py
 
 # 跑客户端（Godot 引擎）：dotnet build 只编译程序集，不会开窗口
 run: build

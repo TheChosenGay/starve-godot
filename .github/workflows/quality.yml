@@ -40,6 +40,12 @@ jobs:
         env:
           STARVE_SERVER_DIR: .contract-server
         run: make check
+      # 跨端一致性语料：两仓语料逐字节一致 + 两端各自回放（与本地同一条命令，
+      # 只是把服务端 checkout 路径从 ../starve 换成 .contract-server）。
+      - name: Cross-repo movement corpus alignment
+        env:
+          STARVE_SERVER_DIR: .contract-server
+        run: make corpus-align
       - name: Run protocol E2E
         env:
           JWT_SECRET: feeds-dev-secret
