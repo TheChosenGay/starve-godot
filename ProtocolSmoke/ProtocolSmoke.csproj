@@ -7,5 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Starve.Protocol/Starve.Protocol.csproj" />
+    <!-- 组件模式 E2E 要用 GameRoot 那个适配器（ComponentOwnMovementSim），所以引 Core（它引 Netcode）。 -->
+    <ProjectReference Include="../Starve.Core/Starve.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -31,13 +31,21 @@ godot-client/
 
 ## 运行
 
-1. 启动网关：`cd ../starve && go run ./cmd/gate`
-2. 用 **Godot 4.7.1 .NET 版**打开 `GodotClient/project.godot`
-3. 首次打开会提示编译 C#（或手动 `dotnet build GodotClient/GodotClient.csproj`）
-4. 运行（F5）：WASD/方向键移动、Q/E 围绕玩家旋转、滚轮缩放、左键选中；
+1. 启动**网关**（本地开发就这一个进程；`cmd/world` 是集群节点，要配 registry，别单独起）：
+   `cd ../starve && go run ./cmd/gate`（默认 `ws://localhost:8081/ws`）
+2. 用 **Godot 4.7.1 .NET 版**打开 `GodotClient/project.godot`，或直接命令行跑：
+   `make run`（本机 `godot` 不在 PATH 时用 `GODOT=/path/to/Godot make run`）
+3. 首次打开会提示编译 C#（或手动 `dotnet build GodotClient/GodotClient.csproj`）。
+   **`dotnet build` 只编译程序集，不会开窗口**——Godot 工程必须由 Godot 引擎启动。
+4. 运行：WASD/方向键移动、Q/E 围绕玩家旋转、滚轮缩放、左键选中；
    空格自动执行最近行为，F 自动寻找 AOI 内最近可攻击角色（超距自动寻路，按住持续攻击）
 
+服务端地址默认 `ws://localhost:8081/ws`，可用 `STARVE_GATE_URL` 覆盖（例如把客户端指向
+开了碰撞体调试的网关：服务端 `GATE_DEBUG_COLLISION=1 go run ./cmd/gate`）。
+
 调试参数（`--` 后传）：`--smoke` 连接后打印地图/实体数并退出；`--capture <path>` 3 秒后截图退出。
+便捷目标：`make run`（开窗口）、`make run-capture`（截图到 /tmp/starve-client.png）、
+`make run-smoke`（连服冒烟）。
 
 工程验收：
 
@@ -55,6 +63,8 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 质量门禁、协议同步和移动校正指标见 [P0.2 客户端质量门禁](P0.2-QUALITY-GATES.md)。
 低频诊断采样、可靠协议 E2E 和 CI 临时 gate 见 [P0.3 客户端 E2E](P0.3-CLIENT-E2E.md)。
 输入 epoch/seq、服务端 tick、ACK 与预测领先保护见 [P1.1 客户端预测契约](P1.1-PREDICTION-CONTRACT.md)。
+**序号锚定的命令流 / 和解 / 多步追赶 / 渲染插值与踩坑清单**见
+[P1.7 序号锚定网络层](P1.7-序号锚定-命令流-追赶-渲染.md)（服务端侧见 [P1.3 输入流：序号消费与多步追赶](../starve/docs/P1.3-输入流-序号消费与多步追赶.md)）。
 
 ## P1.2 权威动作契约
 
@@ -112,6 +122,7 @@ STARVE_GATE_URL=ws://127.0.0.1:8081/ws make e2e
 | M7 交互 | Choppable/Minable/Pickable、装备/防御、点击操作；空格 ANY 自动行为与 F ATTACK_ONLY 最近目标持续攻击/寻路 | ✅ 冒烟+实测通过 |
 | P1.2 动作 | ActionState 权威时间轴 + ActionOutcome + WorldEvent/CombatImpact + 500ms 本地表现预测 | ✅ 单测覆盖 |
 | P1.2 玩家反馈 | 权威 HIT 红屏 + 死亡魂魄 + 独立生命条/灵魂交互状态 | ✅ 纯模型单测覆盖 |
+| P1.7 网络层 | 一条操作/一 tick 采样 + 冗余窗口（头部 ack+1）+ 同序号和解 + 多步追赶 + tick 间插值渲染 | ✅ 161 单测 + 8 档端到端扫描 + 真客户端逐帧实测 |
 
 > 睡眠：服务端暂无 world.sleep 接口，客户端已留按钮与提示，待服务端接入后接通。
 
